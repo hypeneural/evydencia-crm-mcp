@@ -13,3 +13,8 @@ Este repositório é um **intermediário** entre ChatGPT e `hypeneural/evydencia
 2. Executar a skill `/crm-mcp-preflight` e então `/crm-mcp-proposal-design` quando autorizado.
 3. Fazer patch focal com teste correlato e rever superfície de ferramentas.
 4. Classificar GO_LOCAL, GO_PROD ou BLOCKED com evidências.
+
+## Mocks e testes de integração
+- Executar `npm run smoke` com `EVYD_MOCK_MODE=1` internamente; o teste inicia um cliente MCP stdio e invoca ferramentas reais.
+- Não conectar mocks ao ChatGPT de produção: respostas sintéticas têm `mock:true` e `source:'fixture'`.
+- Dados de fixtures são fictícios e não representam pessoas reais.

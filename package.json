@@ -1,6 +1,6 @@
 {
   "name": "evydencia-crm-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Servidor MCP intermediário privado para API do Evydência CRM",
@@ -10,10 +10,14 @@
   "scripts": {
     "start": "node --env-file=.env src/server.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/core.mjs && node --check src/server.mjs"
+    "check": "node --check src/core.mjs && node --check src/mock.mjs && node --check src/server.mjs && node --check scripts/smoke.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0"
   }
 }
