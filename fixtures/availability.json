@@ -1,0 +1,48 @@
+{
+  "data": {
+    "campaign": {
+      "slug": "natal",
+      "name": "Campanha de Natal — EXEMPLO FICTÍCIO",
+      "timezone": "America/Sao_Paulo"
+    },
+    "product": {
+      "slug": "ho-ho-ho",
+      "code": "HOHOHO",
+      "name": "Pacote Ho-Ho-Ho — MOCK",
+      "durationMinutes": 15
+    },
+    "slotsByDate": [
+      {
+        "date": "2026-10-25",
+        "slots": [
+          {
+            "time": "09:00",
+            "startsAt": "2026-10-25T09:00:00-03:00"
+          },
+          {
+            "time": "10:00",
+            "startsAt": "2026-10-25T10:00:00-03:00"
+          }
+        ]
+      }
+    ],
+    "googleCalendar": {
+      "checked": true,
+      "hasError": false
+    },
+    "pagination": {
+      "currentPage": 1,
+      "perPage": 14,
+      "totalDays": 1,
+      "totalPages": 1,
+      "hasNextPage": false
+    }
+  },
+  "meta": {
+    "apiVersion": "1.0.0",
+    "googleCalendar": {
+      "checked": true,
+      "hasError": false
+    }
+  }
+}

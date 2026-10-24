@@ -1,0 +1,67 @@
+{
+  "data": {
+    "lookup": {
+      "status": "matched",
+      "match_count": 1
+    },
+    "customer": {
+      "uuid": "11111111-1111-4111-8111-111111111111",
+      "display_name": "Cliente Fictícia",
+      "first_name": "Cliente",
+      "name": "Cliente Fictícia",
+      "whatsapp_e164": "+5548999990001"
+    },
+    "kpis": {
+      "lifecycle_stage": "recurring",
+      "orders_count": 2,
+      "completed_sessions_count": 1,
+      "lifetime_value": 750,
+      "average_ticket": 375,
+      "years_attended": [
+        2025
+      ]
+    },
+    "natal_2026": {
+      "purchased": false,
+      "mode": "sales",
+      "recommended_action": "SEND_VIP_PROPOSAL"
+    },
+    "orders": [
+      {
+        "uuid": "22222222-2222-4222-8222-222222222222",
+        "package_name": "Natal MOCK",
+        "status_label": "Agendado",
+        "total_amount": 450,
+        "balance_pending": 150,
+        "session_date": "2026-11-15T10:00:00-03:00",
+        "payment_status": "partial",
+        "participants": [
+          {
+            "name": "PARTICIPANTE-FICTICIO-NAO-EXIBIR",
+            "birth": "2018-01-01",
+            "relationship": {
+              "label": "Filho"
+            }
+          }
+        ]
+      },
+      {
+        "uuid": "44444444-4444-4444-8444-444444444444",
+        "package_name": "Natal anterior MOCK",
+        "status_label": "Concluído",
+        "total_amount": 300,
+        "balance_pending": 0,
+        "session_date": "2025-11-20T10:00:00-03:00",
+        "payment_status": "paid",
+        "participants": []
+      }
+    ],
+    "history": {
+      "page": 1,
+      "per_page": 5,
+      "total": 2,
+      "has_more": false
+    }
+  },
+  "schema_version": "1.0"
+}
