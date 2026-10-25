@@ -75,3 +75,16 @@ test('mock não é executado quando NODE_ENV é produção ou indefinido',async(
    assert.match(p.stderr,/mock_requires_development_or_test/);
  }
 });
+
+
+test('MCP stdio sem OAuth bloqueia ativação de consultas privadas em live',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const env={...process.env,NODE_ENV:'production',EVYD_MOCK_MODE:'0',
+  EVYD_PRIVATE_TOOLS:'1',CRM_READ_TOKEN:'SYNTHETIC_TEST_TOKEN',
+  CRM_BASE_URL:'https://crm.example.invalid'};
+ const result=spawnSync(process.execPath,['src/server.mjs'],{
+  cwd:process.cwd(),env,encoding:'utf8',timeout:5000});
+ assert.notEqual(result.status,0);
+ assert.match(result.stderr,/crm_private_requires_authenticated_gateway/);
+ assert.ok(!result.stderr.includes('SYNTHETIC_TEST_TOKEN'));
+});
