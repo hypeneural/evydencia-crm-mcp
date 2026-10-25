@@ -18,7 +18,7 @@ if(errors.length===0){
    'no_privileged':!/^\s*privileged:\s*true\s*$/m.test(y),
    'no_host_network':!/network_mode:\s*host/.test(y),
    'cpu_limit':/cpus:\s*["']?0\.25/.test(y),
-   'ram_limit':/memory:\s*256M/.test(y),
+   'ram_limit':/mem_limit:\s*256m/.test(y),
    'entrypoint_in_context':/COPY.*deploy\/vps\/entrypoint\.sh/.test(docker),
    'mock_credentials_empty':/^CRM_READ_TOKEN=\s*$/m.test(env),
    'mock_mode':/^EVYD_MOCK_MODE=1\s*$/m.test(env),
