@@ -27,30 +27,3 @@ export function evaluateTunnel(health,mcp){
  }
  return {ok:errors.length===0,errors,count:Array.isArray(names)?names.length:0,expected:MOCK_TOOL_NAMES.length};
 }
-async function run(){
- const flag=process.argv.find(x=>x.startsWith('--port='));
- const port=flag?Number(flag.slice(7)):8080;
- if(!Number.isInteger(port)||port<1||port>65535){
-  console.error('TUNNEL_MOCK_BLOCKED invalid_port');process.exitCode=1;return;
- }
- const base='http://127.0.0.1:'+port;
- const get=async path=>{
-  const response=await fetch(base+path,{signal:AbortSignal.timeout(2500),redirect:'error'});
-  if(!response.ok)throw Error('health_unavailable');
-  return response.json();
- };
- try{
-  const [health,mcp]=await Promise.all([get('/health?details=true'),get('/health/mcp')]);
-  const result=evaluateTunnel(health,mcp);
-  if(!result.ok){
-   console.error('TUNNEL_MOCK_BLOCKED '+result.errors.join(',')+' tools='+result.count);
-   process.exitCode=1;return;
-  }
-  console.log('TUNNEL_MOCK_PASS local_health_ready tools='+result.count+'/'+result.expected+
-   ' — observacao pontual; voz e estado remoto exigem teste separado');
- }catch{
-  console.error('TUNNEL_MOCK_BLOCKED health unavailable on 127.0.0.1; check tunnel-client doctor and run');
-  process.exitCode=1;
- }
-}
-if(process.argv[1]&&new URL('file://'+process.argv[1].replaceAll('\\','/')).href===import.meta.url)await run();
