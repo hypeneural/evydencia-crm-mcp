@@ -28,16 +28,58 @@ $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 $refYear = (int) config('natal.reference_year', 2026);
 $ctx = App\Services\Reports\NatalAnalyticsContext::forYear($refYear);
 $svc = app(App\Services\Reports\NatalForensicStatisticsService::class);
-$ov = $svc->getOverviewData(false, $ctx);
 
-$cutoffMmDd = $targetMmDd !== ''
-    ? $targetMmDd
-    : (string) ($ov['ytd_comparison']['as_of_mmdd'] ?? $ctx->asOf->format('m-d'));
+$immutable = $svc->getHistoricalImmutableData();
+$kpis = $svc->getDynamic2026Data(false, $ctx);
+$pacingForecast = $svc->getRealtimePacingForecastData(null, false, $ctx);
 
-$kpis = $ov['kpis_2026'] ?? [];
-$calendarMatrix = $ov['calendar_matrix'] ?? [];
+$cutoffMmDd = $targetMmDd !== '' ? $targetMmDd : $ctx->asOf->format('m-d');
+$calendarMatrix = $immutable['calendar_matrix'] ?? [];
 $dailyTimeline2026 = $kpis['daily_timeline'] ?? [];
-$evolution = $ov['evolution'] ?? [];
+
+$actualExtrasCents = (int) ($kpis['actual_photo_extras_cents'] ?? 0);
+$promotionalExtrasCents = (int) ($kpis['promotional_photo_extras_collected_cents'] ?? 0);
+$unallocatedCouponExtrasCents = (int) ($kpis['photo_extra_coupon_unallocated_collected_cents'] ?? 0);
+$contractedCents = (int) ($kpis['contracted_cents'] ?? 0);
+$basePackagesCents = max(0, $contractedCents - $actualExtrasCents - $promotionalExtrasCents - $unallocatedCouponExtrasCents);
+
+$evolution = array_values(array_filter($immutable['evolution'] ?? [], static fn ($item) => (int) ($item['year'] ?? 0) !== 2026));
+$evolution[] = [
+    'year' => 2026,
+    'orders' => (int) ($kpis['total_orders'] ?? 0),
+    'unique_customers' => (int) ($kpis['total_customers'] ?? 0),
+    'base_packages_revenue' => round($basePackagesCents / 100, 2),
+    'extras_revenue' => round($actualExtrasCents / 100, 2),
+    'promotional_photo_extras_revenue' => round($promotionalExtrasCents / 100, 2),
+    'unallocated_coupon_photo_extras_revenue' => round($unallocatedCouponExtrasCents / 100, 2),
+    'extras_projected_revenue' => (float) ($kpis['projected_extras_revenue'] ?? 0),
+    'contracted_revenue' => (float) ($kpis['contracted_revenue'] ?? 0),
+    'total_projected_revenue' => (float) ($kpis['total_projected_revenue'] ?? 0),
+    'paid_revenue' => (float) ($kpis['paid_revenue'] ?? 0),
+    'balance_due' => (float) ($kpis['balance_due'] ?? 0),
+    'ticket_medio' => (float) ($kpis['ticket_medio_order'] ?? 0),
+    'ticket_medio_customer' => (float) ($kpis['ticket_medio_customer'] ?? 0),
+    'scheduled_sessions' => (int) ($kpis['scheduled_sessions'] ?? 0),
+];
+
+$orders2026 = max(1, (int) ($kpis['total_orders'] ?? 0));
+$rev2026 = max(1.0, (float) ($kpis['contracted_revenue'] ?? 0));
+$pkg2026 = ['year' => 2026, 'total_orders' => (int) ($kpis['total_orders'] ?? 0), 'total_revenue' => (float) ($kpis['contracted_revenue'] ?? 0)];
+foreach (['entao_e_natal', 'ho_ho_ho', 'boas_festas'] as $pkgKey) {
+    $po = (int) ($kpis['packages'][$pkgKey]['orders'] ?? 0);
+    $pr = (float) ($kpis['packages'][$pkgKey]['revenue'] ?? 0.0);
+    $pkg2026[$pkgKey] = [
+        'orders' => $po,
+        'revenue' => $pr,
+        'paid' => (float) ($kpis['packages'][$pkgKey]['paid'] ?? 0.0),
+        'balance' => (float) ($kpis['packages'][$pkgKey]['balance'] ?? 0.0),
+        'ticket_medio' => $po > 0 ? round($pr / $po, 2) : 0.0,
+        'pct_orders' => round(($po / $orders2026) * 100, 1),
+        'pct_revenue' => round(($pr / $rev2026) * 100, 1),
+    ];
+}
+$packagesMatrix = array_values(array_filter($immutable['packages_matrix'] ?? [], static fn ($p) => (int) ($p['year'] ?? 0) !== 2026));
+$packagesMatrix[] = $pkg2026;
 
 $metaByYear = [
     2026 => [
@@ -185,7 +227,7 @@ foreach (array_slice($kpis['recent_orders'] ?? [], 0, 15) as $ro) {
 $out = [
     'source' => 'CRM_CANONICAL_NATAL_STATISTICS',
     'canonical_dashboard_url' => 'https://evydencia.com/gestao/natal/estatisticas',
-    'as_of' => $ov['as_of'] ?? null,
+    'as_of' => $ctx->asOf->toIso8601String(),
     'reference_year' => $refYear,
     'cutoff_mmdd' => $cutoffMmDd,
     'cutoff_formatted' => $cutoffFmt,
@@ -214,8 +256,8 @@ $out = [
     'ytd_comparison_at_cutoff' => $ytdByYear,
     'monthly_cumulative_to_cutoff' => $monthlyCumulative,
     'annual_evolution_full_season' => $evolution,
-    'packages_matrix_by_year' => $ov['packages_matrix'] ?? [],
-    'pacing_forecast' => $ov['pacing_forecast'] ?? null,
+    'packages_matrix_by_year' => $packagesMatrix,
+    'pacing_forecast' => $pacingForecast,
     'conversion_funnel_2026' => $kpis['conversion_funnel'] ?? null,
     'recent_valid_natal_orders_2026' => $recentOrders,
     'methodology_note' => 'Fonte oficial da Central de Inteligência Comercial (/gestao/natal/estatisticas). Conta exclusivamente pedidos de Natal válidos (NatalValidOrdersQuery / evidência comercial confirmada), eliminando duplicidades de itens ou pedidos cancelados/aguardando pagamento. Para 2021–2025, packages_matrix_by_year exibe o fechamento da temporada completa daquele ano, enquanto ytd_comparison_at_cutoff e monthly_cumulative_to_cutoff exibem o acumulado exato até a data de corte (ex.: 25/10: 101 em 2026, 142 em 2025, 124 em 2024, 67 em 2023, 80 em 2022, 128 em 2021).',
