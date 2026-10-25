@@ -12,3 +12,7 @@ dist/
 /snapshots/
 *.live.json
 natal-2026-digest*.json
+
+# Dados agregados históricos privados (não versionar em repositório público)
+legacy-history-*.json
+natal-history-archive*.json

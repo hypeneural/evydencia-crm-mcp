@@ -81,3 +81,6 @@ O Laravel existente implementa POST `/api/v1/extension/proposals/preview` (pode 
 - **GO_SEND:** bloqueado; confirmação e journal não implementados.
 
 Fontes: documentação oficial OpenAI Plugins/OAuth e Secure MCP Tunnel; docs Laravel 10 console; MySQL 8.4 permissões SELECT; Antigravity regras e hooks. Consulte `docs/MVP_PRODUCAO_SEM_ALTERAR_CRM_20261025.md` para a auditoria cruzada anterior.
+
+## 7. Camada histórica congelável 2021–2025
+O novo módulo `src/legacy-historical.mjs` e o CLI `scripts/import-legacy-history.mjs` validam somente os agregados dos calendários 366 dias/ano de `fotosdenatal-dados` privado. O processo normaliza valores para centavos, calcula janela 01/08 até MM-DD, registra SHA-256 do arquivo e marca `canonical_comparison_allowed:false` e `LEGACY_UNVERIFIED`. O histórico nunca é conectado automaticamente ao MCP anônimo. Ver `docs/FORENSE_LEGADO_NATAL_20261025.md`.

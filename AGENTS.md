@@ -34,3 +34,10 @@ Leia docs/AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md apenas quando a tarefa env
 - O exportador `tools/export-natal-digest.php` e o leitor `src/natal-digest-snapshot.mjs` **não** são ferramentas MCP públicas. O Plugin MOCK anônimo deve continuar com 17 tools fictícias.
 - Proibido rodar exportador contra CRM de produção ou criar usuário MySQL durante validação local; precisa de autorização operacional explícita e teste de carga.
 - Regras do negócio: comparação YTD somente janelas 01/08 equivalentes; `data_status_2025=UNCONFIRMED` não autoriza delta certificado; RECORDED_GROSS não equivale a caixa líquido; status 10 é aguardando retirar, 11 é entregue.
+
+## Dados históricos legados de Natal (2021–2025)
+- Fonte privada para auditoria: `hypeneural/fotosdenatal-dados/data/natal_historical_calendar_immutable.json`.
+- Executar apenas `npm run history:import -- --source=CAMINHO_ABSOLUTO_PRIVADO --output=ARQUIVO_ABSOLUTO_PRIVADO --cutoff=MM-DD` em ambiente autorizado. Saída fora de TODOS os repositórios, com ACL privada.
+- Nunca importar `data/natal_master_customers.json`, buyers, non-buyers ou `customer_last_participants.json` para o repo MCP: contêm dados pessoais.
+- Histórico congelado é `LEGACY_UNVERIFIED`, não receita recebida ou vendas canônicas do CRM. Não comparar automaticamente com YTD 2026 sem paridade com `NatalValidOrdersQuery`.
+- Leia `docs/FORENSE_LEGADO_NATAL_20261025.md` para invariantes, status e prioridade dinâmica. Não criar scripts/commits no repositório legado.
