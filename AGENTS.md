@@ -1,26 +1,45 @@
-# Evydência CRM MCP — instruções para Antigravity
-Este repositório é um **intermediário** entre ChatGPT e `hypeneural/evydencia-crm`. Não modificar o CRM Laravel.
-## Invariantes obrigatórios
-- Rota do CRM somente de allowlist; HTTPS; sem token em logs, commits ou respostas.
-- Não utilizar API legada gerencial nem Z-API diretamente; reutilizar a Extension API Sanctum do CRM.
-- O servidor é **somente leitura** nesta fase. `POST proposals/preview` é uma prévia de negócios, mas pode enfileirar sonda técnica de saúde; sem agendar destinatário.
-- NUNCA adicionar `proposals/schedule` a uma ferramenta pública ou ao cliente sem armazenamento durável, confirmação humana por intenção e autenticação individual. Reenvio fica proibido na primeira versão.
-- Bloqueios do CRM prevalecem: operador, Gold Rule, contato ambíguo, supressões, saúde do fluxo e limites.
-- Respostas de Cliente 360 sem dados individuais de crianças, CPF ou contato bruto.
-- Desenvolvimento local: verificar Node.js, gerar package-lock.json (pendente), depois `npm ci`, `npm run check`, `npm test` e `npm run smoke`. Não afirmar conectividade real sem evidência.
-## Fluxo do agente
-1. Ler `docs/AUDITORIA_BASES_GITHUB.md` e `docs/CONTRATOS_CRM.md`.
-2. Executar `/crm-mcp-preflight`, `/crm-mcp-security-audit` e `/crm-mcp-contract-parity`; usar `/crm-mcp-proposal-design` somente para planejamento de envio futuro.
-3. Fazer patch focal com teste correlato e rever superfície de ferramentas.
-4. Classificar GO_LOCAL, GO_PROD ou BLOCKED com evidências.
+# Evydência CRM MCP — contrato operacional do agente (Antigravity)
 
-## Mocks e testes de integração
-- Executar `npm run smoke` com `EVYD_MOCK_MODE=1` internamente; o teste inicia um cliente MCP stdio e invoca ferramentas reais.
-- Não conectar mocks ao ChatGPT de produção: respostas sintéticas têm `mock:true` e `source:'fixture'`.
-- Dados de fixtures são fictícios e não representam pessoas reais.
+**Workspace permitido:** apenas hypeneural/evydencia-crm-mcp.
+**Workspace proibido:** hypeneural/evydencia-crm (somente leitura para conferir API).
+**Modo atual:** MOCK + consultas GET e POST preview estritamente permitidos. Nenhum envio real.
+**Modelo local:** Gemini 3.8 Flash; use esforço High para auditorias de segurança/contrato e Medium apenas para correções isoladas.
 
-## Fonte oficial e continuidade
-- Leia `docs/OFFICIAL_DOCS_AUDIT.md` e `PROMPT_ANTIGRAVITY_START.md` antes de modificar transporte, autenticação ou contratos.
-- Não publicar HTTP sem OAuth/validação de audiência e autorização individual; Sanctum de serviço não autentica o usuário ChatGPT.
-- O mock exige NODE_ENV=development/test; não desativar a proteção. Nunca registrar payload de clientes.
-- Sempre versionar testes negativos de contrato, erros HTTP e proteção de PII junto com o patch.
+## Ordem de verdade (sem inferência)
+1. Implementação e testes do CRM Laravel no HEAD comprovado; rotas e scopes autorizados.
+2. Contratos OpenAPI em contracts/ e fixtures auditadas.
+3. Código deste MCP e testes.
+4. Docs. Se faltar fonte: marcar UNVERIFIED, não criar endpoint/tool live.
+
+## Ciclo obrigatório (uma hipótese e um patch pequeno)
+1. git status --short; git rev-parse HEAD; ler somente arquivos relevantes.
+2. Consultar docs/CAPABILITY_MATRIX.md; identificar estado LIVE_PUBLIC, LIVE_EXTENSION, MOCK_ONLY, WRITE_GATED ou BLOCKED.
+3. Executar node scripts/doctor.mjs e testes atuais para obter baseline.
+4. Alterar no máximo 3 arquivos por ciclo de correção com testes negativos. Não remover assert para ficar verde.
+5. npm run validate:local (doctor, syntax, unit, stdio smoke e conversation smoke).
+6. Anotar comando, exit code, evidência, diff e risco. Nada de 'funcionou' sem logs.
+7. Publicação, edição de .env, CRM ou mudança de autorização exigem aprovação humana. Verificar hooks via /hooks.
+
+## Nunca
+- Chamar Z-API, /proposals/schedule, /abort, API manager SingleAuthentication ou SQL.
+- Registrar dados reais (o repositório GitHub é público).
+- Assumir que sessão de voz significa autorização para enviar.
+- Converter OpenAPI para expor endpoints indiscriminadamente.
+- Declarar MOCK de estatística/agenda/busca por nome como dados reais.
+- Instalar plataforma alternativa MCP sem comparar SDK oficial e aprovar PR.
+- Publicar Streamable HTTP sem OAuth individual e proteção de secrets.
+
+## Primeiro teste seguro
+PowerShell: .\scripts\bootstrap-mock.ps1; .\scripts\validate.ps1.
+Depois npm run conversation:smoke, inspecionar docs/CONVERSATION_PLAYBOOK.md.
+Voz/Textos são ambas entradas MCP; qualquer pedido de enviar por voz vai APENAS simular em desenvolvimento.
+
+## Skills (invoque a necessária, uma de cada vez)
+- /crm-mcp-preflight
+- /crm-mcp-security-audit
+- /crm-mcp-contract-parity
+- /crm-mcp-conversation-harness
+- /crm-mcp-capability-audit
+- /crm-mcp-chatgpt-connect
+- /crm-mcp-proposal-design (somente planejamento)
+Leia docs/ANTIGRAVITY_LOCAL.md, docs/CAPABILITY_MATRIX.md e docs/CONVERSATION_PLAYBOOK.md antes da execução.

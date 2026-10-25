@@ -11,7 +11,7 @@ const enabled=mock || process.env.EVYD_PRIVATE_TOOLS==='1';
 const crm=mock ? mockCrmClient() : crmClient({baseUrl:process.env.CRM_BASE_URL||'https://invalid.example',token:process.env.CRM_READ_TOKEN||'',privateEnabled:enabled,timeoutMs:Number(process.env.CRM_REQUEST_TIMEOUT_MS||7000)});
 const read={readOnlyHint:true,destructiveHint:false,openWorldHint:false};
 const previewAnnotation={readOnlyHint:false,destructiveHint:false,openWorldHint:false};
-const safe=fn=>async input=>{try{const result=await fn(input);return {content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result}}catch(e){return {isError:true,content:[{type:'text',text:JSON.stringify({error:/^(crm_|invalid_)/.test(e.message)?e.message:'crm_unavailable'})}]}}};
+const safe=fn=>async input=>{try{const result=await fn(input);return {content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result}}catch(e){return {isError:true,content:[{type:'text',text:JSON.stringify({error:/^(crm_|invalid_|confirmation_required)/.test(e.message)?e.message:'crm_unavailable'})}]}}};
 serveStdio(()=>{
  const m=new McpServer({name:'evydencia-crm-mcp',version:'0.4.0'});
  m.registerTool('crm_capacidades',{description:'Declara quais ações existem de verdade e quais são apenas MOCK ou WRITE_GATED; consulte antes de prometer dados.',inputSchema:z.object({}),annotations:read},safe(()=>capabilityManifest({mock,privateEnabled:enabled})));

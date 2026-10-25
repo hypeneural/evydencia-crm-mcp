@@ -22,7 +22,9 @@ jobs:
           else
             npm install --ignore-scripts --no-audit --no-fund
           fi
+      - run: npm run doctor
       - run: npm run check
       - run: npm test
       - run: npm run smoke
+      - run: npm run conversation:smoke
       - run: test ! -f .env
