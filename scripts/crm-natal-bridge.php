@@ -872,7 +872,7 @@ $wantSec = static fn (string $sec): bool => $detailLevel === 'completo' || in_ar
 $responseProfile = (string) ($opts['response_profile'] ?? 'default');
 if ($responseProfile === 'kpi_minimal') {
     $requestedSections = (array) ($opts['sections'] ?? []);
-    if (($requestedSections !== [] && array_diff($requestedSections, ['resumo']) !== []) || $selectedYear !== 2026) {
+    if (($requestedSections !== [] && array_diff($requestedSections, ['resumo']) !== []) || $selectedYear !== 2026 || $targetMmDd !== '') {
         echo json_encode(['error' => 'invalid_natal_kpi_scope']);
         exit(3);
     }
