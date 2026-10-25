@@ -38,3 +38,13 @@ O GitHub contém **servidor MCP em stdio + ferramentas MOCK**. O repositório **
 - https://developers.openai.com/plugins/deploy/connect-chatgpt
 - https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 - https://github.com/openai/tunnel-client
+
+
+## Comando correto do Tunnel em modo MOCK
+Com tunnel_id e credenciais reais obtidos na OpenAI Platform, configure o perfil stdio com diretório de trabalho na raiz do clone. Não execute usando um ID inventado.
+
+    tunnel-client init --sample sample_mcp_stdio_local --profile local-stdio --tunnel-id SEU_ID_REAL --mcp-command "node --env-file=.env scripts/start-mock.mjs"
+    tunnel-client doctor --profile local-stdio --explain
+    tunnel-client run --profile local-stdio
+
+O entrypoint start-mock.mjs valida .env e o ambiente e reserva stdout ao protocolo MCP. NUNCA passar scripts/go.ps1 como comando stdio: ele imprime logs dos testes. O marcador SEU_ID_REAL deve ser substituído somente pelo ID do painel oficial. Não guardar chaves no Git ou nesta documentação.
