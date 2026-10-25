@@ -210,6 +210,10 @@ const OUT_NATAL_STATS=z.looseObject({
  reference_year:z.number().nullish(),
  cutoff_mmdd:z.string().nullish(),
  detail_level:z.string().nullish(),
+ response_profile:z.string().nullish(),
+ data_status:z.string().nullish(),
+ integrity_checks:z.looseObject({contracted_equals_paid_plus_balance:z.boolean().nullish()}).nullish(),
+ warnings:z.array(z.string()).nullish(),
  loaded_sections:z.array(z.string()).nullish(),
  sections_loaded:z.array(z.string()).nullish(),
  kpis_2026:z.looseObject({
@@ -491,17 +495,19 @@ function liveServer(auth,{cfg,fetchFn,operators,log}){
   },WRITE_IDEMPOTENT);
  }
  if(direct){
-  reg('crm_estatisticas_natal','Central de Inteligência — Estatísticas e Operação de Natal','Retorna os dados canônicos oficiais de /gestao/natal/estatisticas (2021–2026) de forma proporcional à pergunta. Por padrão (nivel_detalhe="resumo"), traz cockpit executivo enxuto: KPIs 2026 (pedidos válidos, clientes únicos, receita contratada/recebida/aberta em centavos e reais), metas (R$ 300k base vs R$ 400k ampliada / 500 contratos), estágios operacionais (Aguardando Retirada, sem participantes, próxima sessão), sessões confirmadas/realizadas vs horário passado e comparativo histórico YTD + fechamento anual (com invariantes de conciliação 2022 e 2024). Use secoes para aprofundar sob demanda: simulador_previsao, financeiro_caixa (aging, meios efetivos, conciliação Pagar.me/Stone/Moderninha), clientes_recompra_campanhas (recompra safra 2025->2026, fiéis 2+ anos, cidades, canais, cupons, melhor dia/horário de venda), agenda_demanda (heatmap, ocupação, antecedência), pacotes_produtos_bonus (reajustes, elasticidade, extras comprados vs bônus) ou operacional_listas (paginada). Para perfil demográfico de crianças/bebês/famílias, use crm_natal_participantes_estatisticas.',z.object({
+  reg('crm_estatisticas_natal','Central de Inteligência — Estatísticas e Operação de Natal','Retorna os dados canônicos oficiais de /gestao/natal/estatisticas (2021–2026) de forma proporcional à pergunta. Por padrão (nivel_detalhe="resumo"), traz cockpit executivo enxuto: KPIs 2026 (pedidos válidos, clientes únicos, receita contratada/recebida/aberta em centavos e reais), metas (R$ 300k base vs R$ 400k ampliada / 500 contratos), estágios operacionais (Aguardando Retirada, sem participantes, próxima sessão), sessões confirmadas/realizadas vs horário passado e comparativo histórico YTD + fechamento anual (com invariantes de conciliação 2022 e 2024). Use secoes para aprofundar sob demanda: simulador_previsao, financeiro_caixa (aging, meios efetivos, conciliação Pagar.me/Stone/Moderninha), clientes_recompra_campanhas (recompra safra 2025->2026, fiéis 2+ anos, cidades, canais, cupons, melhor dia/horário de venda), agenda_demanda (heatmap, ocupação, antecedência), pacotes_produtos_bonus (reajustes, elasticidade, extras comprados vs bônus) ou operacional_listas (paginada). Para perfil demográfico de crianças/bebês/famílias, use crm_natal_participantes_estatisticas. Para perguntas somente de vendas/recebidos atuais, use perfil_resposta=kpi_minimal (2026, seção resumo, sem detalhe completo): evita gerar séries e listas históricas.',z.object({
    data_corte_mm_dd:z.string().regex(/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/).optional(),
    secoes:z.array(z.enum(['resumo','historico','simulador_previsao','financeiro_caixa','clientes_recompra_campanhas','agenda_demanda','pacotes_produtos_bonus','operacional_listas'])).max(8).optional(),
    nivel_detalhe:z.enum(['resumo','padrao','completo']).default('resumo'),
+   perfil_resposta:z.enum(['default','kpi_minimal']).default('default'),
    ano:z.number().int().min(2021).max(2026).optional(),
    pagina:z.number().int().min(1).max(50).default(1),
    limite:z.number().int().min(1).max(50).default(15)
-  }),OUT_NATAL_STATS,({data_corte_mm_dd,secoes,nivel_detalhe,ano,pagina,limite})=>direct.natalStatistics({
+  }),OUT_NATAL_STATS,({data_corte_mm_dd,secoes,nivel_detalhe,perfil_resposta,ano,pagina,limite})=>direct.natalStatistics({
    cutoffMmDd:data_corte_mm_dd,
    secoes,
    nivelDetalhe:nivel_detalhe,
+   perfilResposta:perfil_resposta,
    ano,
    pagina,
    limite
