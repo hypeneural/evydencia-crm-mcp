@@ -51,3 +51,10 @@ test('schema never exposes dynamic object keys that may contain a customer name'
  assert.ok(!result.includes('48999990001'));
  assert.equal(model.fields.data.redacted_dynamic_keys,1);
 });
+
+test('calendário público não consulta data inventada',async()=>{
+ let called=0;
+ await assert.rejects(()=>auditExtension({baseUrl:'https://crm.example',token:'TEST',action:'availability',
+  fetchFn:async()=>{called++;return response({data:{}})}}),/date_required/);
+ assert.equal(called,0);
+});
