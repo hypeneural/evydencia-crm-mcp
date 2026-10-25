@@ -7,7 +7,7 @@ Leia AGENTS.md, docs/CAPABILITY_MATRIX.md e docs/CONVERSATION_PLAYBOOK.md. Inspe
 ## Etapa 2 — bootstrap MOCK
 Execute .\scripts\bootstrap-mock.ps1 (cria .env somente se ausente).
 Variáveis: NODE_ENV=development, EVYD_MOCK_MODE=1, EVYD_PRIVATE_TOOLS=0, CRM_READ_TOKEN vazio.
-Execute .\scripts\validate.ps1. Em seguida npm run conversation:smoke. Para Inspector, use MCP stdio em processo próprio; não digite comandos no stdout do servidor.
+Execute .\scripts\validate.ps1. Em seguida npm run conversation:smoke. Para Inspector, use npm start (entrypoint com validação de ambiente) em processo próprio; não digite comandos no stdout do servidor.
 
 ## Gate P0 do lockfile — CONCLUÍDO NO GITHUB
 package-lock.json já é versionado. Execute npm ci --ignore-scripts --no-audit --no-fund e node scripts/doctor.mjs --strict-lock.
