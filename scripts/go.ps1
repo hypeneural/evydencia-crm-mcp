@@ -16,4 +16,4 @@ if ($SkipInstall) {
 }
 Write-Host '[EVYD] FASE 3/3 — pronto para inspecao manual'
 Write-Host 'GO_LOCAL_MOCK: runtime, fixtures e MCP stdio validados; CRM real e ChatGPT AINDA NAO conectados.'
-Write-Host 'Proximo comando (somente em terminal separado para Inspector/Tunnel): node --env-file=.env src/server.mjs'
+Write-Host 'Proximo comando (somente em terminal separado para Inspector/Tunnel): node --env-file=.env scripts/start-mock.mjs'
