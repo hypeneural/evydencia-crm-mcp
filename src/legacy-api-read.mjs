@@ -1058,7 +1058,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const sections=Array.isArray(secoes)?secoes.filter(s=>typeof s==='string'):[];
    const detail=['resumo','padrao','completo'].includes(nivelDetalhe)?nivelDetalhe:'resumo';
    const profile=['default','kpi_minimal'].includes(perfilResposta)?perfilResposta:'default';
-   if(profile==='kpi_minimal'&&(detail==='completo'||sections.some(x=>x!=='resumo')||(ano!==undefined&&ano!==2026)))fail('invalid_natal_kpi_scope');
+   if(profile==='kpi_minimal'&&(mmdd!==''||detail==='completo'||sections.some(x=>x!=='resumo')||(ano!==undefined&&ano!==2026)))fail('invalid_natal_kpi_scope');
    if(profile==='kpi_minimal'&&!canUseNatalBridge())fail('natal_kpi_requires_readonly_bridge');
    const page=Math.min(50,Math.max(1,Number(pagina)||1));
    const limit=Math.min(50,Math.max(1,Number(limite)||15));
