@@ -47,7 +47,7 @@ test('hook de seguranca Antigravity interrompe chamadas reais e pede confirmacao
 });
 test('antigravity modular security rule has required frontmatter',async()=>{
  const rule=await readFile(new URL('../.agents/rules/security.md',import.meta.url),'utf8');
- assert.match(rule,/^---\ntrigger:\s*always_on/m);
+ assert.match(rule,/^---\r?\ntrigger:\s*always_on/m);
  const hooks=JSON.parse(await readFile(new URL('../.agents/hooks.json',import.meta.url),'utf8'));
  assert.ok(Object.values(hooks).some(v=>v.PreToolUse));
 });
