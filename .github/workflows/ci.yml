@@ -43,6 +43,12 @@ jobs:
             echo "Exporter unexpectedly allowed output inside Git"; exit 1
           fi
           test ! -e "$PWD/unsafe-digest.json"
+      - name: Offline real-API JSON schema and local-secret exclusion
+        run: |
+          node scripts/live-api-inspect.mjs > "$RUNNER_TEMP/crm-shape-offline.json"
+          grep -q 'CRM_JSON_STRUCTURE_PASS' "$RUNNER_TEMP/crm-shape-offline.json"
+          git check-ignore -q .env.live.local
+          test ! -e .env.live.local
       - run: npm run doctor
       - run: npm run check
       - run: npm test
