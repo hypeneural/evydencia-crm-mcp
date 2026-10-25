@@ -97,6 +97,50 @@ function reaisOfCents(int $cents): float
     return round($cents / 100, 2);
 }
 
+function enumInt(mixed $v): ?int
+{
+    if ($v === null) {
+        return null;
+    }
+    if (is_int($v)) {
+        return $v;
+    }
+    if (is_object($v) && isset($v->value) && is_numeric($v->value)) {
+        return (int) $v->value;
+    }
+    if (is_numeric($v)) {
+        return (int) $v;
+    }
+    return null;
+}
+
+function enumProp(mixed $v, string $prop): ?string
+{
+    if (is_object($v) && isset($v->{$prop}) && is_string($v->{$prop}) && $v->{$prop} !== '') {
+        return $v->{$prop};
+    }
+    return null;
+}
+
+function scalarOrEnumString(mixed $v): ?string
+{
+    if ($v === null || $v === '') {
+        return null;
+    }
+    if (is_string($v) || is_int($v) || is_float($v)) {
+        return trim((string) $v) ?: null;
+    }
+    if (is_object($v)) {
+        if (isset($v->key) && is_string($v->key)) {
+            return $v->key;
+        }
+        if (isset($v->value) && is_scalar($v->value)) {
+            return (string) $v->value;
+        }
+    }
+    return null;
+}
+
 function customerInitials(?string $name): string
 {
     $parts = preg_split('/\s+/u', trim((string) $name), -1, PREG_SPLIT_NO_EMPTY);
@@ -198,8 +242,9 @@ function projectCustomer(?Customer $c, bool $fullProfile, PagarmeCardProfileServ
                 ? CarbonImmutable::instance($c->birth)->format('Y-m-d')
                 : substr((string) $c->birth, 0, 10);
         }
+        $docTypeStr = scalarOrEnumString($c->document_type);
         $base['email'] = $c->email ?: null;
-        $base['document_type'] = $c->document_type ? strtoupper(trim((string) $c->document_type)) : null;
+        $base['document_type'] = $docTypeStr ? strtoupper($docTypeStr) : null;
         $base['document'] = $c->document ?: null;
         $base['whatsapp'] = $c->whatsapp ?: null;
         $base['whatsapp_e164'] = $c->whatsapp_e164 ?: null;
@@ -400,27 +445,29 @@ function projectOrdersBatch(
 
                 $txOut = $inst->transactions->sortBy('id')->values()->map(static fn ($tx): array => [
                     'transaction_id' => (int) $tx->id,
-                    'status_code' => $tx->status !== null ? (int) $tx->status : null,
-                    'message' => $tx->message ?: null,
-                    'gateway_order_or_tx_id' => $tx->original_id ?: null,
-                    'gateway_status' => $tx->original_status ?: null,
-                    'gateway_reference' => $tx->original_message ?: null,
+                    'status_code' => enumInt($tx->status),
+                    'status_key' => enumProp($tx->status, 'key'),
+                    'status_label' => enumProp($tx->status, 'description'),
+                    'message' => scalarOrEnumString($tx->message),
+                    'gateway_order_or_tx_id' => scalarOrEnumString($tx->original_id),
+                    'gateway_status' => scalarOrEnumString($tx->original_status),
+                    'gateway_reference' => scalarOrEnumString($tx->original_message),
                     'recorded_at_brt' => formatBrt($tx->created_at),
                 ])->all();
 
                 $billsOut = $inst->bills->sortBy('id')->values()->map(static fn ($b): array => [
                     'bill_id' => (int) $b->id,
-                    'installment' => $b->installment !== null ? (int) $b->installment : null,
-                    'status_key' => $b->status?->key ?? null,
-                    'status_label' => $b->status?->description ?? null,
-                    'type_key' => $b->type?->key ?? null,
-                    'type_label' => $b->type?->description ?? null,
+                    'installment' => enumInt($b->installment),
+                    'status_key' => enumProp($b->status, 'key') ?? scalarOrEnumString($b->status),
+                    'status_label' => enumProp($b->status, 'description'),
+                    'type_key' => enumProp($b->type, 'key') ?? scalarOrEnumString($b->type),
+                    'type_label' => enumProp($b->type, 'description'),
                     'amount_reais' => reaisOfCents(centsOf($b->amount)),
                     'paid_reais' => reaisOfCents(centsOf($b->payment_total)),
                     'expiry_at_brt' => formatBrt($b->expiry_at),
                     'closed_at_brt' => formatBrt($b->closed_at),
                     'aborted_at_brt' => formatBrt($b->aborted_at),
-                    'note' => $b->note ?: null,
+                    'note' => scalarOrEnumString($b->note),
                 ])->all();
 
                 return [
