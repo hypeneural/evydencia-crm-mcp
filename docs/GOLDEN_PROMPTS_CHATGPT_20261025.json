@@ -113,10 +113,10 @@
     },
     {
       "id": "order-avatar",
-      "prompt": "Mostre o pedido #5127 e a foto da cliente, se renderizar.",
+      "prompt": "Mostre o pedido sintético #9999 e a foto da cliente, se renderizar.",
       "expected_tool": "crm_pedido_detalhe",
       "expected_args": {
-        "order_id": 5127
+        "order_id": 9999
       },
       "classification": "read",
       "should_send_external_message": false
