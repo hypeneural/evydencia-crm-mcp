@@ -8,3 +8,15 @@ test('histórico não expõe nomes e nascimentos',()=>{const d=historyProjection
 test('prévia remove dados externos inesperados',()=>{const r=proposalProjection({data:{ready:true,message_preview:'Mensagem',raw_token:'segredo'}});assert.equal(r.message_preview,'Mensagem');assert.ok(!JSON.stringify(r).includes('segredo'))});
 test('não agenda envios com cliente HTTP',async()=>{const fetchFn=async(url,opt)=>{assert.equal(opt.method,'POST');assert.ok(url.pathname.endsWith('/preview'));return {ok:true,headers:new Headers(),text:async()=>JSON.stringify({data:{ready:true,message_preview:'Ola'}})}};const c=crmClient({baseUrl:'https://crm.example',token:'mock',privateEnabled:true,fetchFn});assert.equal((await c.preview('48999990000')).ready,true)});
 test('token sem opt-in não pode consultar privado',async()=>{const c=crmClient({baseUrl:'https://crm.example'});await assert.rejects(()=>c.preview('48999990000'))});
+
+test('strictEnvelope in operator mode enforces schema version and generated timestamp',async()=>{
+ const original={data:{operator:{id:1},server:{timezone:'America/Sao_Paulo'},token:{abilities:['extension:bootstrap']}},schema_version:'1.0',generated_at:'2026-10-25T03:30:00-03:00'};
+ let mock=original;
+ const fetchFn=async()=>new Response(JSON.stringify(mock),{headers:{'Content-Type':'application/json'}});
+ const c=crmClient({baseUrl:'https://crm.example',token:'TEST_SANCTUM_KEY',privateEnabled:true,strictEnvelope:true,fetchFn});
+ assert.equal((await c.bootstrap()).operator.id,1);
+ mock={...original};delete mock.generated_at;
+ await assert.rejects(()=>c.bootstrap(),/crm_extension_envelope_invalid/);
+ mock={...original,schema_version:'2.0'};
+ await assert.rejects(()=>c.bootstrap(),/crm_extension_envelope_invalid/);
+});
