@@ -40,9 +40,11 @@ before(async()=>{
   if(u.pathname==='/health/live')return send(200,JSON.stringify({status:'ok'}));
   if(u.pathname.startsWith('/api/orders/')||u.pathname.startsWith('/api/reports/')){
    if(auth!==INTERNAL_TOK)return send(401,JSON.stringify({message:'Unauthorized'}));
-   const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01',schedule_1:'2026-11-10 10:00:00',items:[{id:1}],participants:[{name:'Crianca Ficticia'}],summary:{total:450,received:200,remaining:250}};
-   if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder]}));
+   const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01T17:33:09.000000Z',schedule_1:'2026-11-10 10:00:00',items:[{id:1,quantity:'1.000',total:'450.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'200.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'Crianca Ficticia'}],summary:{total:450,received:200,remaining:250}};
+   const newerOrder={id:5127,uuid:'22222222-bbbb-4222-8222-000000000202',status:{id:6,name:'Sessão Agendada'},customer:{name:'Larissa Exemplo',whatsapp:'48988881775'},created_at:'2026-10-23T17:33:09.000000Z',schedule_1:'2026-11-02 09:00:00',items:[{id:2,quantity:'1.000',total:'480.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'120.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'Crianca Ficticia'}],summary:{total:480,received:120,remaining:360}};
+   if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder,newerOrder]}));
    if(u.pathname==='/api/orders/11111111-aaaa-4111-8111-000000000101/detail')return send(200,JSON.stringify({data:sampleOrder}));
+   if(u.pathname==='/api/reports/natal-statistics')return send(200,JSON.stringify({source:'CRM_CANONICAL_NATAL_STATISTICS',reference_year:2026,cutoff_mmdd:u.searchParams.get('date')||'10-25',kpis_2026:{valid_orders:101,unique_customers:100,scheduled_sessions:91,contracted_revenue_reais:54776},ytd_comparison_at_cutoff:{'2026':{year:2026,accum_orders:101},'2025':{year:2025,accum_orders:142,diff_orders_2026_vs_year:-41},'2024':{year:2024,accum_orders:124,diff_orders_2026_vs_year:-23}}}));
    if(u.pathname==='/api/reports/sold-items'){if(!u.searchParams.get('order[created-start]')&&!u.searchParams.get('order[created-end]'))return send(422,JSON.stringify({message:'The given data was invalid.'}));return send(200,JSON.stringify({data:[{item:'Mini Sessao Natal',reference:'8008',year:2026,month:10,solds:12}]}))}
    if(u.pathname==='/api/reports/christmas-orders-without-participants')return send(200,JSON.stringify([{order_uuid:'11111111-aaaa-4111-8111-000000000101',customer_name:'Cliente Ficticia 7',customer_whatsapp:'48999990001',current_status:'payment_confirmed',participants:0}]));
    if(u.pathname==='/api/reports/customers-with-christmas-orders')return send(200,JSON.stringify([{name:'Cliente Ficticia 7',whatsapp:'48999990001',email:'ficticia@example.test'}]));
@@ -203,11 +205,23 @@ test('direct CRM read integration (replaces api.evydencia.com.br): orders and Na
  try{
   const {tools}=await client.listTools();
   assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES].sort());
-  const s=await client.callTool({name:'crm_pedidos_buscar',arguments:{product_slug:'natal',order_status:'waiting_product_retrieve'}});
+  const s=await client.callTool({name:'crm_pedidos_buscar',arguments:{}});
   assert.equal(s.isError,undefined);
-  assert.equal(s.structuredContent.orders.length,1);
-  assert.equal(s.structuredContent.orders[0].remaining_cents,25000);
-  assert.ok(!JSON.stringify(s).includes('Crianca'));
+  assert.equal(s.structuredContent.orders.length,2);
+  assert.equal(s.structuredContent.orders[0].order_id,5127,'most recent order returned first');
+  assert.equal(s.structuredContent.orders[0].created_at_brt,'2026-10-23 14:33:09');
+  assert.equal(s.structuredContent.orders[0].package_name,'Experiência Então é Natal');
+  assert.deepEqual(s.structuredContent.orders[0].payment_methods,['Pix']);
+  assert.equal(s.structuredContent.orders[1].remaining_cents,25000);
+  assert.ok(!JSON.stringify(s).includes('Crianca')&&!JSON.stringify(s).includes('48988881775'));
+  const ns=await client.callTool({name:'crm_estatisticas_natal',arguments:{data_corte_mm_dd:'10-25'}});
+  assert.equal(ns.structuredContent.kpis_2026.valid_orders,101);
+  assert.equal(ns.structuredContent.ytd_comparison_at_cutoff['2025'].accum_orders,142);
+  assert.equal(ns.structuredContent.ytd_comparison_at_cutoff['2024'].accum_orders,124);
+  const byName=await client.callTool({name:'crm_cliente_360',arguments:{nome_cliente:'Larissa Exemplo'}});
+  assert.equal(byName.isError,undefined);
+  assert.equal(byName.structuredContent.customer.uuid,'cust-op7');
+  assert.equal(byName.structuredContent.orders.length,1);
   const d=await client.callTool({name:'crm_pedido_detalhe',arguments:{uuid:'11111111-aaaa-4111-8111-000000000101'}});
   assert.equal(d.structuredContent.order.order_id,5001);
   const si=await client.callTool({name:'crm_relatorio_itens_vendidos',arguments:{inicio:'2026-10-01',fim:'2026-10-25',slug:'natal'}});
