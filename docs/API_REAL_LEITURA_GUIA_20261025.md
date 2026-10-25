@@ -62,7 +62,7 @@ Se a chave Sanctum retorna 401/403/503, verifique validade, abilities e `EXTENSI
 ## 4. Estatísticas e histórico
 A tela `manager/natal/estatisticas` tem 11 abas:
 - Evolução e comparativo YTD, Financeiro, Projeção, Aquisição, Agenda, Pacotes, Resgate, Fidelizados, Master, Participantes e Reajuste.
-- JSON `GET /manager/natal/estatisticas/overview` é protegido por `auth:manager` e sessão; chave Sanctum ou SingleAuthentication NÃO dá acesso. Não armazenar cookie do painel no MCP.
+- JSON `GET /gestao/natal/estatisticas/overview` é protegido por `auth:manager` e sessão; chave Sanctum ou SingleAuthentication NÃO dá acesso. Não armazenar cookie do painel no MCP.
 - `NatalValidOrdersQuery::getSeasonDigestMetrics()` é a referência *canônica* para 2026 e comparação na mesma janela 01/08 → ponto de corte entre temporadas, usando `effective_at`, não apenas created_at.
 - `tools/export-natal-digest.php` já está pronto fora do Laravel, mas execução em produção requer aprovação, performance e pasta privada. `src/natal-digest-snapshot.mjs` valida origem, data, status históricos e centavos.
 - A camada legada 2021–2025 pode ser importada uma vez por `scripts/import-legacy-history.mjs` para arquivo privado; tem origem `LEGACY_UNVERIFIED` e não deve ser misturada com vendas canônicas de 2026 sem conciliação.
