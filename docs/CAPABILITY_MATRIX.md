@@ -1,4 +1,4 @@
-# Matriz de Capacidades — Fonte de Verdade (`v0.10.0`)
+# Matriz de Capacidades — Fonte de Verdade (`v0.10.1`)
 
 Este documento separa explicitamente o **Catálogo LIVE Streamable HTTP** (`src/live-gateway.mjs`, autenticado via OAuth 2.1 + Sanctum por operador) do **Catálogo MOCK Local** (`src/server.mjs`, 100% sintético com `mock: true` e `source: "fixture"`). No modo LIVE, `crm_capacidades` publica exclusivamente as ferramentas reais do gateway Live — sem misturar ferramentas `MOCK_ONLY`.
 
@@ -25,7 +25,7 @@ Este documento separa explicitamente o **Catálogo LIVE Streamable HTTP** (`src/
 
 ---
 
-## 2. Garantias Semânticas e Contratos (`v0.10.0`)
+## 2. Garantias Semânticas e Contratos (`v0.10.1`)
 
 1. **Economia de Contexto e `outputSchema`:** Todas as ferramentas Live declaram `outputSchema` válido (JSON Schema 2020-12), entregam dados estruturados em `structuredContent` e resumo executivo conciso sem PII em `content[0].text` (eliminando duplicação de JSON).
 2. **Valores Monetários Canônicos:** Montantes são expostos simultaneamente em centavos inteiros (`*_cents`) e reais numéricos (`*_reais`), distinguindo `method_name` efetivo da parcela (ex.: `Permuta`) de `method_category_label` contábil (ex.: `Dinheiro`).
@@ -43,3 +43,9 @@ Este documento separa explicitamente o **Catálogo LIVE Streamable HTTP** (`src/
 ## 3. Catálogo MOCK Demonstrativo (`src/server.mjs` / `src/capabilities.mjs`)
 
 Mantido intacto para desenvolvimento offline e `npm run conversation:smoke` (`EVYD_MOCK_MODE=1`), onde todas as respostas carregam `mock: true` e `source: "fixture"` e nenhuma chamada de rede ou escrita real existe.
+
+## v0.10.1 — Correção de contrato (outputSchema)
+
+- Blocos analíticos aninhados aceitam objeto **ou** array (`FLEX`), pois o `json_encode` do PHP emite listas e mapas vazios como arrays JSON (ex.: `annual_evolution_full_season`, `packages_matrix_by_year`). Antes, o SDK rejeitava a saída de `crm_estatisticas_natal` em produção e o ChatGPT recorria a dezenas de chamadas `crm_pedidos_buscar`.
+- `OUTPUT_SCHEMAS` exportado para testes de contrato; regressão coberta pelo cenário 7b.
+

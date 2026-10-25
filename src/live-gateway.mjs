@@ -13,7 +13,7 @@ import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE} from './oauth-gateway.mjs';
 
-export const GATEWAY_VERSION='0.10.0';
+export const GATEWAY_VERSION='0.10.1';
 const REPO_ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const resolveBuildInfo=()=>{
  try{
@@ -102,7 +102,7 @@ function summarizeToolResult(tool,res){
   case 'crm_cliente_360':
    return `OK [crm_cliente_360]: status=${res.lookup?.status||'matched'}, pedidos_retornados=${Array.isArray(res.orders)?res.orders.length:0}. Consulte structuredContent.`;
   case 'crm_estatisticas_natal':
-   return `OK [crm_estatisticas_natal]: corte=${res.cutoff_mmdd||'atual'}, nivel=${res.detail_level||'resumo'}, pedidos_validos_2026=${res.kpis_2026?.valid_orders??'n/d'}, sessoes_confirmadas_2026=${res.kpis_2026?.confirmed_realized_sessions??res.kpis_2026?.realized_sessions_to_date??'n/d'}. Consulte structuredContent.`;
+   return `OK [crm_estatisticas_natal]: corte=${res.cutoff_mmdd||'atual'}, nivel=${res.detail_level||'resumo'}, pedidos_validos_2026=${res.kpis_2026?.valid_orders??'n/d'}, sessoes_confirmadas_2026=${res.kpis_2026?.confirmed_realized_sessions??res.kpis_2026?.confirmed_realized_sessions_to_date??res.kpis_2026?.realized_sessions_to_date??'n/d'}. Consulte structuredContent.`;
   case 'crm_natal_participantes_estatisticas':
    return `OK [crm_natal_participantes_estatisticas]: escopo=${res.year_scope||'2026'}, total_participantes=${res.population_reconciliation?.total_participants_count??'n/d'}, reconciliado=${Boolean(res.population_reconciliation?.reconciled)}. Consulte structuredContent.`;
   case 'crm_pedidos_buscar':
@@ -146,15 +146,17 @@ const OUT_CAPACIDADES=z.looseObject({
   supports_history:z.boolean()
  }))
 });
+// PHP json_encode emits lists (and empty associative arrays) as JSON arrays: nested analytic blocks accept object OR array.
+const FLEX=z.union([z.looseObject({}),z.array(z.unknown())]).nullish();
 const OUT_GENERIC=z.looseObject({source:z.string().nullish()});
 const OUT_CUSTOMER=z.looseObject({
  source:z.string().nullish(),
  lookup:z.looseObject({status:z.string().nullish(),match_count:z.number().nullish()}).nullish(),
  customer:z.looseObject({uuid:z.string().nullish(),crm_customer_url:z.string().nullish()}).nullish(),
- kpis:z.looseObject({}).nullish(),
- financial_audit_summary:z.looseObject({}).nullish(),
- participants_cross_order_audit:z.looseObject({}).nullish(),
- current_order:z.looseObject({}).nullish(),
+ kpis:FLEX,
+ financial_audit_summary:FLEX,
+ participants_cross_order_audit:FLEX,
+ current_order:FLEX,
  orders:z.array(z.looseObject({})).nullish()
 });
 const OUT_ORDER_DETAIL=z.looseObject({
@@ -171,13 +173,13 @@ const OUT_ORDER_DETAIL=z.looseObject({
   received_reais:z.number().nullish(),
   remaining_cents:z.number().nullish(),
   remaining_reais:z.number().nullish(),
-  payment_summary:z.looseObject({}).nullish(),
+  payment_summary:FLEX,
   installments:z.array(z.looseObject({})).nullish(),
   items:z.array(z.looseObject({})).nullish(),
   status_history:z.array(z.looseObject({})).nullish(),
-  schedule_details:z.looseObject({}).nullish(),
-  personalization:z.looseObject({}).nullish(),
-  participants_registration:z.looseObject({}).nullish()
+  schedule_details:FLEX,
+  personalization:FLEX,
+  participants_registration:FLEX
  }).nullish()
 });
 const OUT_ORDERS_SEARCH=z.looseObject({
@@ -221,15 +223,23 @@ const OUT_NATAL_STATS=z.looseObject({
   received_revenue_cents:z.number().nullish(),
   received_revenue_reais:z.number().nullish(),
   open_receivable_cents:z.number().nullish(),
-  open_receivable_reais:z.number().nullish()
+  open_receivable_reais:z.number().nullish(),
+  confirmed_realized_sessions_to_date:z.number().nullish(),
+  past_scheduled_sessions_to_date:z.number().nullish(),
+  paid_revenue_cents:z.number().nullish(),
+  paid_revenue_reais:z.number().nullish(),
+  balance_due_cents:z.number().nullish(),
+  balance_due_reais:z.number().nullish(),
+  waiting_product_retrieve_orders:z.number().nullish(),
+  active_orders_without_participants:z.number().nullish()
  }).nullish(),
- goal_cockpit_2026:z.looseObject({}).nullish(),
- ytd_comparison_at_cutoff:z.looseObject({}).nullish(),
- realized_sessions_comparison_at_cutoff:z.looseObject({}).nullish(),
- annual_evolution_full_season:z.looseObject({}).nullish(),
- packages_matrix_by_year:z.looseObject({}).nullish(),
- historical_reconciliation_invariants:z.looseObject({}).nullish(),
- sections:z.looseObject({}).nullish()
+ goal_cockpit_2026:FLEX,
+ ytd_comparison_at_cutoff:FLEX,
+ realized_sessions_comparison_at_cutoff:FLEX,
+ annual_evolution_full_season:FLEX,
+ packages_matrix_by_year:FLEX,
+ historical_reconciliation_invariants:FLEX,
+ sections:FLEX
 });
 const OUT_NATAL_PARTICIPANTS=z.looseObject({
  source:z.string().nullish(),
@@ -245,12 +255,12 @@ const OUT_NATAL_PARTICIPANTS=z.looseObject({
   humans_without_birth_date_count:z.number().nullish(),
   reconciled:z.boolean().nullish()
  }).nullish(),
- age_distribution:z.looseObject({}).nullish(),
+ age_distribution:FLEX,
  kinship_distribution:z.array(z.looseObject({})).nullish(),
- family_children_composition:z.looseObject({}).nullish(),
+ family_children_composition:FLEX,
  packages_by_child_age_profile:z.array(z.looseObject({})).nullish(),
- historical_2024_2026:z.looseObject({}).nullish(),
- data_quality_anomalies:z.looseObject({}).nullish()
+ historical_2024_2026:FLEX,
+ data_quality_anomalies:FLEX
 });
 const OUT_PROPOSAL_PREVIEW=z.looseObject({
  ready:z.boolean(),
@@ -269,6 +279,9 @@ const OUT_PROPOSAL_DISPATCH=z.looseObject({
  error_code:z.string().nullish(),
  message:z.string().nullish()
 });
+
+// Exported for contract tests against real (PHP-encoded) CRM payload shapes.
+export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH});
 
 function liveServer(auth,{cfg,fetchFn,operators,log}){
  const ex=auth?.extra||{};
