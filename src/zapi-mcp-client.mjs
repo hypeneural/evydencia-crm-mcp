@@ -12,6 +12,7 @@ import {
  UnauthorizedError
 } from '@modelcontextprotocol/client';
 import {operatorTagger} from './oauth-gateway.mjs';
+import {createZapiInstanceDiagnostics} from './zapi-instance-diagnostics.mjs';
 import {createZapiAuthManager} from './zapi-mcp-auth.mjs';
 import {
  canonicalJson,
@@ -58,11 +59,12 @@ function sanitizeContentBlocks(content){
  });
 }
 
-export function createZapiBridge(cfg,{operators,fetchFn=fetch,now=()=>Date.now(),log=()=>{},reservedToolNames=[],gatewayVersion='0.11.0',onToolsUpdated=()=>{}}={}){
+export function createZapiBridge(cfg,{operators,fetchFn=fetch,now=()=>Date.now(),log=()=>{},reservedToolNames=[],gatewayVersion='0.12.0',onToolsUpdated=()=>{},diagnostics=null}={}){
  const tag=operatorTagger(cfg.key);
  const sessions=new Map();
  const dedupMap=new Map();
  const reservedSet=new Set([...reservedToolNames,ZAPI_STATUS_TOOL_NAME]);
+ const restDiag=diagnostics||createZapiInstanceDiagnostics(cfg,{fetchFn,now,log});
 
  const auth=createZapiAuthManager(cfg,{
   operators,
@@ -245,53 +247,9 @@ export function createZapiBridge(cfg,{operators,fetchFn=fetch,now=()=>Date.now()
     }
    }catch{}
   }
-  // 2. Optional complementary GET /instances/{instanceId}/token/{token}/status strictly bound to THIS operatorId.
-  if(cfg.zapiRestStatus&&cfg.zapiRestStatus.operatorId===op){
-   const {baseUrl,instanceId,token,clientToken}=cfg.zapiRestStatus;
-   const ac=new AbortController();
-   const timer=setTimeout(()=>ac.abort(),Math.min(cfg.zapiTimeoutMs,6000));
-   const sig=signal?AbortSignal.any([signal,ac.signal]):ac.signal;
-   try{
-    const res=await fetchFn(`${baseUrl}/instances/${encodeURIComponent(instanceId)}/token/${encodeURIComponent(token)}/status`,{
-     method:'GET',
-     redirect:'error',
-     signal:sig,
-     headers:{Accept:'application/json','Client-Token':clientToken}
-    });
-    if(!res.ok){
-     return {
-      verifiable:true,
-      source:'zapi_rest_status_adapter',
-      status:'unavailable',
-      http_status:res.status,
-      instance_id_masked:maskDispatchId(instanceId),
-      detail:`Adaptador REST de status retornou HTTP ${res.status}.`
-     };
-    }
-    const body=await res.json();
-    const connected=Boolean(body?.connected);
-    const smartphoneConnected=body?.smartphoneConnected!==undefined?Boolean(body.smartphoneConnected):null;
-    return {
-     verifiable:true,
-     source:'zapi_rest_status_adapter',
-     status:connected?'connected':'disconnected',
-     connected,
-     smartphoneConnected,
-     instance_id_masked:maskDispatchId(instanceId),
-     detail:connected?'Instância WhatsApp conectada na Z-API.':'Instância WhatsApp desconectada (verifique QR Code no painel Z-API).'
-    };
-   }catch{
-    return {
-     verifiable:true,
-     source:'zapi_rest_status_adapter',
-     status:'unavailable',
-     instance_id_masked:maskDispatchId(instanceId),
-     detail:'Adaptador REST de status indisponível no momento.'
-    };
-   }finally{
-    clearTimeout(timer);
-   }
-  }
+  // 2. Optional complementary GET /instances/{instanceId}/token/{token}/status via shared diagnostics adapter.
+  const quick=await restDiag.checkQuickStatus(op,{signal});
+  if(quick)return quick;
   // 3. No shared/unverified REST access: report faithfully without inventing health.
   return {
    verifiable:false,

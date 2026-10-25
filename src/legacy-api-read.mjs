@@ -1156,6 +1156,18 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      name:typeof r?.name==='string'?r.name.slice(0,100):null,
      phone_masked:maskPhone(r?.whatsapp)
     }))};
+  },
+  async zapiConnectionHistory({instanceId,limit=25}={}){
+   if(typeof instanceId!=='string'||!/^[A-Za-z0-9_-]{4,80}$/.test(instanceId.trim()))fail('invalid_zapi_instance_id');
+   const max=Math.min(100,Math.max(1,Number(limit)||25));
+   if(!canUseForensicBridge()){
+    return {available:false,reason:'crm_forensic_bridge_unavailable'};
+   }
+   try{
+    return await runForensicBridge({action:'zapi_connection_history',instance_id:instanceId.trim(),limit:max});
+   }catch{
+    return {available:false,reason:'crm_webhook_history_query_failed'};
+   }
   }
  };
 }

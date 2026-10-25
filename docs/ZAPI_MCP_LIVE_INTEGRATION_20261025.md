@@ -57,6 +57,23 @@
 
 ---
 
-## 3. Catálogo Real Descoberto Pós-OAuth (`tools/list`)
+## 3. Catálogo Real Descoberto Pós-OAuth (`tools/list`) e Diagnóstico Complementar (`v0.12.0`)
 
-> Inicialmente `AUTH_REQUIRED` antes do vínculo OAuth em produção; atualizado na homologação real (FASE 7/8) com os nomes JSON-RPC exatos retornados pelo servidor oficial `https://mcp.z-api.io/mcp`.
+Servidor upstream autenticado via OAuth 2.1: `irrah-mcp-server` `1.0.0` (`protocolVersion: "2025-06-18"`), `unexposed_tools = []`.
+
+| Ferramenta no Gateway | Ferramenta Oficial Upstream (`mcp.z-api.io`) | Parâmetros Obrigatórios (`required`) | `readOnlyHint` |
+|---|---|---|---|
+| `zapi_send_text` | `send-text` | `phone`, `message` | `false` |
+| `zapi_send_image` | `send-image` | `phone`, `image` | `false` |
+| `zapi_send_video` | `send-video` | `phone`, `video` | `false` |
+| `zapi_group_create` | `group-create` | `autoInvite`, `groupName`, `phones` | `false` |
+| `zapi_group_metadata` | `group-metadata` | `groupId` | `true` |
+| `zapi_group_add_participant` | `group-add-participant` | `autoInvite`, `groupId`, `phones` | `false` |
+| `zapi_group_remove_participant` | `group-remove-participant` | `groupId`, `phones` | `false` |
+| `zapi_group_add_admin` | `group-add-admin` | `groupId`, `phones` | `false` |
+| `zapi_group_remove_admin` | `group-remove-admin` | `groupId`, `phones` | `false` |
+
+### Ferramentas Complementares Somente-Leitura (`GET` / `SELECT READ ONLY`)
+- `zapi_status_conexao`: estado OAuth 2.1 do operador na Z-API, contagem das 9 ferramentas descobertas, link assinado de vínculo/desvínculo e checagem rápida `/status`.
+- `zapi_instancia_diagnostico` (`src/zapi-instance-diagnostics.mjs`): consolida `GET /status`, `GET /device` e `GET /me` em `https://api.z-api.io` com projeção explícita sanitizada (excluindo `token`, `proxyUrl` e paths secretos de webhooks), execução seletiva por `escopo` (`status_rapido`, `perfil_dispositivo`, `assinatura_configuracoes`, `completo`) e prontidão de envio cruzada com o OAuth MCP.
+- `zapi_instancia_historico` (`src/zapi-instance-diagnostics.mjs` + `scripts/crm-forensic-bridge.php`): lê em modo `READ ONLY` os eventos `ConnectedCallback` e `DisconnectedCallback` persistidos em `provider_webhook_events` (separando `occurred_at_brt` do `momment` da Z-API de `webhook_received_at_brt`) e observações deduplicadas de sondagem do gateway (`poll_detected_at_brt`).

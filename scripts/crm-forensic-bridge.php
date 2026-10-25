@@ -1401,5 +1401,122 @@ if ($action === 'customers.forensic360') {
     exit(0);
 }
 
+if ($action === 'zapi_connection_history') {
+    $instanceId = isset($payload['instance_id']) ? trim((string) $payload['instance_id']) : '';
+    if ($instanceId === '' || !preg_match('/^[A-Za-z0-9_-]{4,80}$/', $instanceId)) {
+        echo json_encode(['error' => 'invalid_zapi_instance_id']);
+        exit(0);
+    }
+    if (!class_exists(\App\Models\ProviderWebhookEvent::class)) {
+        echo json_encode([
+            'available' => false,
+            'reason' => 'provider_webhook_event_model_missing',
+        ]);
+        exit(0);
+    }
+
+    $limit = min(100, max(1, (int) ($payload['limit'] ?? 25)));
+    $maskedInstanceId = strlen($instanceId) > 7
+        ? substr($instanceId, 0, 3) . '***' . substr($instanceId, -4)
+        : '***';
+
+    $rows = \App\Models\ProviderWebhookEvent::query()
+        ->where('provider', 'zapi')
+        ->whereIn('event_type', ['ConnectedCallback', 'DisconnectedCallback'])
+        ->orderByDesc('occurred_at')
+        ->orderByDesc('id')
+        ->limit(500)
+        ->get([
+            'id',
+            'integration_account_id',
+            'event_type',
+            'processing_status',
+            'occurred_at',
+            'received_at',
+            'error_code',
+            'error_message',
+            'payload_redacted',
+        ]);
+
+    $matched = [];
+    $accountIds = [];
+    foreach ($rows as $row) {
+        $pr = is_array($row->payload_redacted) ? $row->payload_redacted : [];
+        $rowInstance = isset($pr['instanceId']) ? (string) $pr['instanceId'] : '';
+        if (!hash_equals($instanceId, $rowInstance)) {
+            continue;
+        }
+        if ($row->integration_account_id) {
+            $accountIds[(int) $row->integration_account_id] = true;
+        }
+        $occBrt = toCarbonBrt($row->occurred_at, $tz);
+        $recBrt = toCarbonBrt($row->received_at, $tz);
+        $matched[] = [
+            'event_id' => (int) $row->id,
+            'event_source' => 'zapi_webhook_crm',
+            'event_type' => (string) $row->event_type,
+            'state' => $row->event_type === 'ConnectedCallback' ? 'connected' : 'disconnected',
+            'processing_status' => $row->processing_status ? (string) $row->processing_status : null,
+            'occurred_at_brt' => $occBrt ? $occBrt->format('Y-m-d\TH:i:sP') : null,
+            'occurred_at_utc' => $occBrt ? $occBrt->setTimezone('UTC')->format('Y-m-d\TH:i:s\Z') : null,
+            'occurred_at_origin' => 'zapi_webhook_momment',
+            'webhook_received_at_brt' => $recBrt ? $recBrt->format('Y-m-d\TH:i:sP') : null,
+            'webhook_received_at_utc' => $recBrt ? $recBrt->setTimezone('UTC')->format('Y-m-d\TH:i:s\Z') : null,
+            'webhook_received_at_origin' => 'crm_webhook_received_at',
+            'provider_momment_ms' => isset($pr['momment']) && is_numeric($pr['momment']) ? (int) $pr['momment'] : null,
+            'phone_masked' => isset($pr['phone_masked']) && is_string($pr['phone_masked']) && $pr['phone_masked'] !== '' ? $pr['phone_masked'] : null,
+            'disconnect_reason' => $row->error_message ? trim((string) $row->error_message) : null,
+            'error_code' => $row->error_code ? trim((string) $row->error_code) : null,
+            'instance_id_masked' => $maskedInstanceId,
+        ];
+    }
+
+    $lastConnected = null;
+    $lastDisconnected = null;
+    foreach ($matched as $ev) {
+        if ($lastConnected === null && $ev['state'] === 'connected') {
+            $lastConnected = $ev;
+        }
+        if ($lastDisconnected === null && $ev['state'] === 'disconnected') {
+            $lastDisconnected = $ev;
+        }
+        if ($lastConnected !== null && $lastDisconnected !== null) {
+            break;
+        }
+    }
+
+    $integrationAccountSummary = null;
+    if ($accountIds !== [] && class_exists(\App\Models\IntegrationAccount::class)) {
+        $acc = \App\Models\IntegrationAccount::query()
+            ->whereIn('id', array_keys($accountIds))
+            ->first(['id', 'name', 'status', 'last_health_check_at', 'last_health_status']);
+        if ($acc) {
+            $hcBrt = toCarbonBrt($acc->last_health_check_at, $tz);
+            $integrationAccountSummary = [
+                'account_id' => (int) $acc->id,
+                'name' => $acc->name ? (string) $acc->name : null,
+                'status' => $acc->status ? (string) $acc->status : null,
+                'last_health_status' => $acc->last_health_status ? (string) $acc->last_health_status : null,
+                'last_health_check_at_brt' => $hcBrt ? $hcBrt->format('Y-m-d\TH:i:sP') : null,
+            ];
+        }
+    }
+
+    echo json_encode([
+        'available' => true,
+        'source' => 'CRM_PROVIDER_WEBHOOK_EVENTS_READ_ONLY',
+        'timezone' => $tz,
+        'instance_id_masked' => $maskedInstanceId,
+        'total_matching_events' => count($matched),
+        'returned_count' => min(count($matched), $limit),
+        'has_more' => count($matched) > $limit,
+        'last_connected' => $lastConnected,
+        'last_disconnected' => $lastDisconnected,
+        'integration_account' => $integrationAccountSummary,
+        'events' => array_slice($matched, 0, $limit),
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit(0);
+}
+
 fwrite(STDERR, json_encode(['error' => 'unknown_forensic_action']) . "\n");
 exit(4);
