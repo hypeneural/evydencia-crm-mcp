@@ -41,3 +41,10 @@ Leia docs/AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md apenas quando a tarefa env
 - Nunca importar `data/natal_master_customers.json`, buyers, non-buyers ou `customer_last_participants.json` para o repo MCP: contêm dados pessoais.
 - Histórico congelado é `LEGACY_UNVERIFIED`, não receita recebida ou vendas canônicas do CRM. Não comparar automaticamente com YTD 2026 sem paridade com `NatalValidOrdersQuery`.
 - Leia `docs/FORENSE_LEGADO_NATAL_20261025.md` para invariantes, status e prioridade dinâmica. Não criar scripts/commits no repositório legado.
+
+## API REAL — preparação local, não usar no Plugin anônimo
+- Para tarefas sobre chave real leia `docs/API_REAL_LEITURA_GUIA_20261025.md`, rode `.\\scripts\\validate-crm-key.ps1` e não desenvolva endpoints novos.
+- Use `.env.live.local` na raiz (gitignored), NÃO `.env` mock; nunca envie chaves no chat/log. Host exato `CRM_EXPECTED_HOST` e consentimento de rede obrigatórios.
+- `extension` usa Sanctum; `legacy` usa token global com poderes de escrita em outras rotas e requer consentimento de risco. As consultas locais não tornam o token read-only no servidor Laravel.
+- Contrato JSON real = somente estrutura de campos/tipos, sem valores pessoais no terminal. Preview exige consentimento extra por poder sondar worker.
+- A interface do ChatGPT pode desenhar gráficos dos dados agregados autorizados; UI própria MCP Apps é opcional e só deve ser considerada depois de OAuth por operador. Não adicionar tool live no stdio anônimo.

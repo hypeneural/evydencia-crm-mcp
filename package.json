@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node --env-file=.env scripts/start-mock.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/core.mjs && node --check src/mock.mjs && node --check src/server.mjs && node --check scripts/smoke.mjs && node --check src/capabilities.mjs && node --check src/mock-business.mjs && node --check scripts/antigravity-hook.mjs && node --check scripts/session-start.mjs && node --check scripts/doctor.mjs && node --check scripts/conversation-smoke.mjs && node --check src/mock-safety.mjs && node --check scripts/check-mock-env.mjs && node --check scripts/start-mock.mjs && node --check scripts/startup-smoke.mjs && node --check src/mock-orders.mjs && node --check src/natal-digest-snapshot.mjs && node --check src/order-readiness.mjs && node --check scripts/check-private-snapshot.mjs && node --check src/legacy-historical.mjs && node --check scripts/import-legacy-history.mjs",
+    "check": "node --check src/core.mjs && node --check src/mock.mjs && node --check src/server.mjs && node --check scripts/smoke.mjs && node --check src/capabilities.mjs && node --check src/mock-business.mjs && node --check scripts/antigravity-hook.mjs && node --check scripts/session-start.mjs && node --check scripts/doctor.mjs && node --check scripts/conversation-smoke.mjs && node --check src/mock-safety.mjs && node --check scripts/check-mock-env.mjs && node --check scripts/start-mock.mjs && node --check scripts/startup-smoke.mjs && node --check src/mock-orders.mjs && node --check src/natal-digest-snapshot.mjs && node --check src/order-readiness.mjs && node --check scripts/check-private-snapshot.mjs && node --check src/legacy-historical.mjs && node --check scripts/import-legacy-history.mjs && node --check src/live-api-audit.mjs && node --check scripts/live-api-inspect.mjs && node --check src/chart-ready.mjs && node --check src/operational-summary.mjs",
     "smoke": "node scripts/smoke.mjs",
     "conversation:smoke": "node scripts/conversation-smoke.mjs",
     "doctor": "node scripts/doctor.mjs",
@@ -18,7 +18,8 @@
     "env:check": "node scripts/check-mock-env.mjs --require",
     "startup:smoke": "node scripts/startup-smoke.mjs",
     "snapshot:inspect": "node scripts/check-private-snapshot.mjs",
-    "history:import": "node scripts/import-legacy-history.mjs"
+    "history:import": "node scripts/import-legacy-history.mjs",
+    "crm:json:inspect": "node scripts/live-api-inspect.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",

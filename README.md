@@ -6,6 +6,8 @@
 
 **Histórico 2021–2025:** o importador novo valida agregados de calendários legados privados, congela a fonte por SHA-256 e NÃO os apresenta como números certificados. Veja [auditoria do legado](docs/FORENSE_LEGADO_NATAL_20261025.md) e [prompt pronto](PROMPT_ANTIGRAVITY_LEGADO_NATAL_20261025.md). Importação opcional: `npm run history:import`, apenas com fonte/destino privados.
 
+**API real — diagnóstico com chave local:** `.\\scripts\\validate-crm-key.ps1` + `.env.live.local` (consultas explícitas e schemas sem valores pessoais). [Instruções completas](docs/API_REAL_LEITURA_GUIA_20261025.md) e [prompt Antigravity](PROMPT_ANTIGRAVITY_VALIDAR_API_REAL_20261025.md). O programa não adiciona as consultas ao Plugin anônimo.
+
 **Produção comercial:** não habilitada. Snapshots agregados só podem ser exportados no ambiente Laravel autorizado, após avaliar custo e credenciais; dados privados exigem OAuth 2.1 individual em conexão separada do Plugin MOCK. O envio WhatsApp permanece WRITE_GATED.
 
 ---
