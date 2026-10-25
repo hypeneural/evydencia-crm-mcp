@@ -82,7 +82,7 @@ async function readJsonBounded(r){
  }
  try{return JSON.parse(text)}catch{throw Error('crm_invalid_json')}
 }
-export function crmClient({baseUrl,token='',privateEnabled=false,timeoutMs=7000,fetchFn=fetch}){
+export function crmClient({baseUrl,token='',privateEnabled=false,timeoutMs=7000,fetchFn=fetch,strictEnvelope=false}){
  const base=baseURL(baseUrl);
  if(!Number.isInteger(timeoutMs)||timeoutMs<100||timeoutMs>60000)throw Error('crm_timeout_invalid');
  if(privateEnabled&&!token)throw Error('crm_missing_token');
@@ -97,7 +97,12 @@ export function crmClient({baseUrl,token='',privateEnabled=false,timeoutMs=7000,
      const r=await fetchFn(u,{method,redirect:'error',signal:controller.signal,headers:{Accept:'application/json',...(auth?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
      if(r.redirected)throw Error('crm_redirect_forbidden');
      if(!r.ok)throw Error('crm_http_'+r.status);
-     return await readJsonBounded(r);
+     const json=await readJsonBounded(r);
+     if(strictEnvelope&&path.startsWith('/api/v1/extension/')&&
+       (!json||typeof json!=='object'||!json.data||typeof json.data!=='object'||
+        json.schema_version!=='1.0'||typeof json.generated_at!=='string'||Number.isNaN(Date.parse(json.generated_at))))
+       throw Error('crm_extension_envelope_invalid');
+     return json;
    }finally{clearTimeout(timeout)}
  }
  return {
