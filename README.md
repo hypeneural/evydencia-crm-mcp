@@ -60,7 +60,7 @@ Repositório atualmente **público**: não adicionar qualquer dado real de clien
 
 Ações reais (POST proposals/schedule e abort), reenvio e Z-API direta NÃO são implementadas. Para futuro envio: identidade OAuth por operador, restrições de ability Sanctum, confirmação humana independente, journal durável de UUID/idempotência, reconciliação de timeout e revisão de segurança.
 
-As APIs internas do CRM protegidas por SingleAuthentication NÃO devem ser consumidas pelo MCP. Para estatísticas, agenda privada e busca nominal, propor endpoints read-only escopados no CRM em trabalho separado — não modificar Laravel a partir deste repositório.
+As APIs internas do CRM protegidas por SingleAuthentication NÃO devem ser consumidas pelo MCP. Para estatísticas, priorizar o exportador canônico e os históricos privados já preparados neste MCP. A busca nominal e a agenda privada podem ser diagnosticadas pela API legada apenas no terminal autorizado, mas seu token amplo não deve chegar ao Plugin anônimo. Uma conexão LIVE exige OAuth por operador; não modificar o Laravel a partir deste repositório.
 
 Documentação detalhada: [ANTIGRAVITY_LOCAL.md](docs/ANTIGRAVITY_LOCAL.md), [CONTRATOS_CRM.md](docs/CONTRATOS_CRM.md), [OFFICIAL_DOCS_AUDIT.md](docs/OFFICIAL_DOCS_AUDIT.md).
 
