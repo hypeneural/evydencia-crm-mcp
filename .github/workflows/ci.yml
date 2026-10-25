@@ -32,6 +32,17 @@ jobs:
           command -v php
           php -l tools/export-natal-digest.php
           php tools/export-natal-digest.php --help
+          # Guard must reject a missing CRM root and never create a JSON output.
+          if php tools/export-natal-digest.php --crm-root=/definitely-no-crm --output="$RUNNER_TEMP/digest.json" > "$RUNNER_TEMP/export-out.log" 2>&1; then
+            echo "Exporter unexpectedly accepted nonexistent CRM"; exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/digest.json"
+          mkdir -p "$RUNNER_TEMP/fake-crm/bootstrap" "$RUNNER_TEMP/fake-crm/vendor"
+          touch "$RUNNER_TEMP/fake-crm/bootstrap/app.php" "$RUNNER_TEMP/fake-crm/vendor/autoload.php"
+          if php tools/export-natal-digest.php --crm-root="$RUNNER_TEMP/fake-crm" --output="$PWD/unsafe-digest.json" > "$RUNNER_TEMP/export-out.log" 2>&1; then
+            echo "Exporter unexpectedly allowed output inside Git"; exit 1
+          fi
+          test ! -e "$PWD/unsafe-digest.json"
       - run: npm run doctor
       - run: npm run check
       - run: npm test
