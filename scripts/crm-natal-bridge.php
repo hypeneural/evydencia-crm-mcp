@@ -1819,6 +1819,7 @@ if ($wantSec('clientes_recompra_campanhas')) {
         'geographic_distribution' => $svc->getGeographicAnalytics($selectedYear, false, $ctx),
         'sales_channels' => $svc->getSalesChannelAnalytics($selectedYear, false, $ctx),
         'coupons_attribution' => $couponsData,
+        'purchase_timing_semantics' => ['basis' => 'order_created_at', 'confirmed_sale_time_available' => false, 'ads_roas_available' => false, 'warning' => 'Histogram uses orders.created_at, not payment confirmation or ad attribution.'],
         'online_purchase_timing_historical_all_years' => $svc->getOnlinePurchaseTimingData(null, false, $ctx),
         'online_purchase_timing_2026' => $svc->getOnlinePurchaseTimingData(2026, false, $ctx),
     ];
