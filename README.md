@@ -1,3 +1,9 @@
+## Integração de leitura real — diagnóstico protegido (novo)
+
+O repositório inclui `scripts/verify-live-read.mjs`, `src/live-contracts.mjs` e testes de envelope da API Sanctum. A chave é configurada somente no computador do operador. O diagnóstico nunca imprime respostas brutas. **O Plugin ChatGPT atual continua MOCK anônimo**, não deve receber esta chave. [Inventário e plano local](docs/CRM_LIVE_API_INVENTORY_20261025.md).
+
+---
+
 # Evydência CRM MCP
 
 **Estado:** Plugin ChatGPT demonstrativo com 17 ferramentas MOCK. Novo adaptador OFFLINE do digest Natal canônico preparado, sem alterar o Laravel e sem expor dados reais pelo túnel anônimo.

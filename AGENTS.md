@@ -48,3 +48,9 @@ Leia docs/AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md apenas quando a tarefa env
 - `extension` usa Sanctum; `legacy` usa token global com poderes de escrita em outras rotas e requer consentimento de risco. As consultas locais não tornam o token read-only no servidor Laravel.
 - Contrato JSON real = somente estrutura de campos/tipos, sem valores pessoais no terminal. Preview exige consentimento extra por poder sondar worker.
 - A interface do ChatGPT pode desenhar gráficos dos dados agregados autorizados; UI própria MCP Apps é opcional e só deve ser considerada depois de OAuth por operador. Não adicionar tool live no stdio anônimo.
+
+## Diagnóstico API real read-only, SEM conectar Plugin anônimo
+- Leia `docs/CRM_LIVE_API_INVENTORY_20261025.md`. O teste real isolado roda via `npm run live:read:check -- --mode=bootstrap` com `CRM_BASE_URL` e `CRM_READ_TOKEN` definidos SOMENTE no terminal/ambiente seguro do operador.
+- `--mode=customer-context` e `--mode=customer-360` exigem `--phone=DDD...` para contato de teste autorizado. A ferramenta imprime só estado/contagens, NÃO dados pessoais.
+- Nunca copiar token, payload, HTML de manager, dumps SQL ou JSON bruto ao Git. `proposals/preview` é POST de diagnóstico e requer opt-in separado. `proposals/schedule` NUNCA é invocado.
+- O Plugin MOCK atual permanece 17 tools fictícias. Só habilitar LIVE em conexão separada autenticada por operador.
