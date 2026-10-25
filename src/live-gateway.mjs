@@ -210,6 +210,7 @@ const OUT_NATAL_STATS=z.looseObject({
  reference_year:z.number().nullish(),
  cutoff_mmdd:z.string().nullish(),
  detail_level:z.string().nullish(),
+ loaded_sections:z.array(z.string()).nullish(),
  sections_loaded:z.array(z.string()).nullish(),
  kpis_2026:z.looseObject({
   valid_orders:z.number().nullish(),
