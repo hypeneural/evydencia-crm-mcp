@@ -1,153 +1,224 @@
 <?php
 declare(strict_types=1);
 
-// Read-only CLI bridge for canonical Natal statistics (NatalForensicStatisticsService).
-// Executed via execFile('php', ...) with no shell and read-only filesystem protection.
+/**
+ * Read-only CLI bridge for the canonical Natal statistics engine on the CRM host.
+ * Invokes App\Services\Reports\NatalForensicStatisticsService (same service backing
+ * /gestao/natal/estatisticas) and emits a compact, PII-free JSON payload.
+ * Never performs any write or mutation.
+ */
 
-$appPath = getenv('EVYD_CRM_APP_PATH') ?: '/var/www/evydencia/current';
-$mmdd = isset($argv[1]) && preg_match('/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/', (string) $argv[1])
+$appBase = getenv('EVYD_CRM_APP_PATH') ?: '/var/www/evydencia/current';
+$autoload = rtrim($appBase, '/\\') . '/vendor/autoload.php';
+$bootstrap = rtrim($appBase, '/\\') . '/bootstrap/app.php';
+
+if (!is_file($autoload) || !is_file($bootstrap)) {
+    fwrite(STDERR, json_encode(['error' => 'crm_natal_bridge_unavailable']) . "\n");
+    exit(2);
+}
+
+$targetMmDd = isset($argv[1]) && preg_match('/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/', (string) $argv[1])
     ? (string) $argv[1]
     : '';
 
-require $appPath . '/vendor/autoload.php';
-$app = require $appPath . '/bootstrap/app.php';
+require $autoload;
+$app = require $bootstrap;
 $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 
 $refYear = (int) config('natal.reference_year', 2026);
-$svc = app(App\Services\Reports\NatalForensicStatisticsService::class);
 $ctx = App\Services\Reports\NatalAnalyticsContext::forYear($refYear);
+$svc = app(App\Services\Reports\NatalForensicStatisticsService::class);
 $ov = $svc->getOverviewData(false, $ctx);
 
-$targetMmDd = $mmdd !== '' ? $mmdd : (string) ($ov['ytd_comparison']['as_of_mmdd'] ?? date('m-d'));
-$sim = $svc->getSalesSimulatorData($targetMmDd, $ctx);
-$k26 = $ov['kpis_2026'] ?? [];
-$im = $svc->getHistoricalImmutableData();
-$cal = $im['calendar_matrix'] ?? [];
+$cutoffMmDd = $targetMmDd !== ''
+    ? $targetMmDd
+    : (string) ($ov['ytd_comparison']['as_of_mmdd'] ?? $ctx->asOf->format('m-d'));
 
-// Build monthly cumulative series up to targetMmDd for 2021-2026 from canonical calendar_matrix & 2026 daily_timeline
-$monthEnds = [
-    '01' => '01-31', '02' => '02-28', '03' => '03-31', '04' => '04-30',
-    '05' => '05-31', '06' => '06-30', '07' => '07-31', '08' => '08-31',
-    '09' => '09-30', '10' => '10-31', '11' => '11-30', '12' => '12-31',
+$kpis = $ov['kpis_2026'] ?? [];
+$calendarMatrix = $ov['calendar_matrix'] ?? [];
+$dailyTimeline2026 = $kpis['daily_timeline'] ?? [];
+$evolution = $ov['evolution'] ?? [];
+
+$metaByYear = [
+    2026 => [
+        'open_note' => 'Primeira venda efetiva registrada no CRM',
+        'total_year_orders' => (int) ($kpis['total_orders'] ?? 0),
+        'total_year_rev' => (float) ($kpis['contracted_revenue'] ?? 0),
+    ],
 ];
-$targetMonth = substr($targetMmDd, 0, 2);
-$monthlyAccumByYear = [];
-foreach ([2021, 2022, 2023, 2024, 2025] as $y) {
-    $yrStr = (string) $y;
-    $series = [];
-    foreach ($monthEnds as $m => $endKey) {
-        if ($m > $targetMonth) {
-            break;
-        }
-        $key = ($m === $targetMonth) ? $targetMmDd : $endKey;
-        $series[$key] = (int) ($cal[$yrStr][$key]['accum_orders'] ?? 0);
+foreach ($evolution as $evoRow) {
+    $yr = (int) ($evoRow['year'] ?? 0);
+    if ($yr < 2021 || $yr > 2025) {
+        continue;
     }
-    $monthlyAccumByYear[$yrStr] = $series;
-}
-
-// Compute 2026 cumulative from kpis_2026.daily_timeline
-$timeline2026 = is_array($k26['daily_timeline'] ?? null) ? $k26['daily_timeline'] : [];
-ksort($timeline2026);
-$series2026 = [];
-foreach ($monthEnds as $m => $endKey) {
-    if ($m > $targetMonth) {
-        break;
-    }
-    $cutoffKey = ($m === $targetMonth) ? $targetMmDd : $endKey;
-    $sum = 0;
-    foreach ($timeline2026 as $dayKey => $info) {
-        if ((string) $dayKey <= $cutoffKey) {
-            $sum += (int) ($info['orders'] ?? 0);
+    $firstSale = null;
+    foreach ($calendarMatrix[(string) $yr] ?? [] as $d => $day) {
+        if ((int) ($day['day_orders'] ?? 0) > 0 && ($firstSale === null || (string) $d < $firstSale)) {
+            $firstSale = (string) $d;
         }
     }
-    $series2026[$cutoffKey] = $sum;
-}
-$monthlyAccumByYear['2026'] = $series2026;
-
-// Build YTD comparison table combining ytd_comparison & simulator totals
-$orders2026AtCutoff = (int) ($sim['totals']['2026']['accum_orders'] ?? $k26['total_orders'] ?? 0);
-$rev2026AtCutoff = (float) ($sim['totals']['2026']['accum_revenue'] ?? $k26['contracted_revenue'] ?? 0);
-$ytdByYear = [];
-foreach ([2026, 2025, 2024, 2023, 2022, 2021] as $y) {
-    $yrStr = (string) $y;
-    $s = $sim['totals'][$yrStr] ?? $sim['totals'][$y] ?? [];
-    $accumOrders = (int) ($s['accum_orders'] ?? 0);
-    $accumRev = (float) ($s['accum_revenue'] ?? 0);
-    $diffOrders = $y === 2026 ? 0 : ($orders2026AtCutoff - $accumOrders);
-    $diffPct = ($y !== 2026 && $accumOrders > 0) ? round(($diffOrders / $accumOrders) * 100, 2) : null;
-    $ytdByYear[$yrStr] = [
-        'year' => $y,
-        'accum_orders' => $accumOrders,
-        'accum_revenue_reais' => $accumRev,
-        'day_orders' => (int) ($s['day_orders'] ?? 0),
-        'day_revenue_reais' => (float) ($s['day_revenue'] ?? 0),
-        'ticket_medio_reais' => $accumOrders > 0 ? round($accumRev / $accumOrders, 2) : 0.0,
-        'diff_orders_2026_vs_year' => $diffOrders,
-        'diff_pct_2026_vs_year' => $diffPct,
-        'full_year_orders' => (int) ($s['total_year_orders'] ?? 0),
-        'full_year_revenue_reais' => (float) ($s['total_year_rev'] ?? 0),
+    $metaByYear[$yr] = [
+        'open_note' => $firstSale !== null
+            ? 'Primeira venda registrada: ' . substr($firstSale, 3, 2) . '/' . substr($firstSale, 0, 2)
+            : 'Primeira venda não informada',
+        'total_year_orders' => isset($evoRow['orders']) ? (int) $evoRow['orders'] : null,
+        'total_year_rev' => isset($evoRow['contracted_revenue']) ? (float) $evoRow['contracted_revenue'] : null,
     ];
 }
 
-// Sanitize recent 2026 Natal orders (top 10 most recent)
-$rawOrders2026 = is_array($k26['raw_orders'] ?? null) ? $k26['raw_orders'] : [];
-usort($rawOrders2026, static fn (array $a, array $b): int => ((int) ($b['order_id'] ?? 0)) <=> ((int) ($a['order_id'] ?? 0)));
-$recent2026 = array_map(static function (array $r): array {
-    return [
-        'order_id' => (int) ($r['order_id'] ?? 0),
-        'order_uuid' => (string) ($r['order_uuid'] ?? ''),
-        'customer_name' => (string) ($r['customer_name'] ?? ''),
-        'customer_phone_masked' => (string) ($r['customer_whatsapp'] ?? ''),
-        'package_name' => (string) ($r['package_name'] ?? ''),
-        'order_total_reais' => (float) ($r['order_total'] ?? 0),
-        'order_received_reais' => (float) ($r['order_received'] ?? 0),
-        'order_status' => (string) ($r['order_status'] ?? ''),
-        'order_created_at' => (string) ($r['order_created_at'] ?? ''),
-        'session_scheduled_date' => $r['session_scheduled_date'] ?? null,
+$computeAtMmDd = static function (string $mmdd) use ($calendarMatrix, $dailyTimeline2026, $metaByYear): array {
+    $totals = [];
+    foreach ([2026, 2025, 2024, 2023, 2022, 2021] as $yr) {
+        $yrStr = (string) $yr;
+        if ($yr === 2026) {
+            $accumOrders = 0;
+            $accumRev = 0.0;
+            $dayOrders = 0;
+            $dayRev = 0.0;
+            foreach ($dailyTimeline2026 as $d => $info) {
+                if ((string) $d <= $mmdd) {
+                    $accumOrders += (int) ($info['orders'] ?? 0);
+                    $accumRev += (float) ($info['revenue'] ?? 0.0);
+                }
+                if ((string) $d === $mmdd) {
+                    $dayOrders = (int) ($info['orders'] ?? 0);
+                    $dayRev = (float) ($info['revenue'] ?? 0.0);
+                }
+            }
+            $accumRev = round($accumRev, 2);
+            $dayRev = round($dayRev, 2);
+        } else {
+            $dayData = $calendarMatrix[$yrStr][$mmdd] ?? [];
+            $dayOrders = (int) ($dayData['day_orders'] ?? 0);
+            $dayRev = (float) ($dayData['day_revenue'] ?? $dayData['day_revenue_total'] ?? 0.0);
+            $accumOrders = (int) ($dayData['accum_orders'] ?? 0);
+            $accumRev = (float) ($dayData['accum_revenue'] ?? $dayData['accum_revenue_total'] ?? 0.0);
+        }
+        $meta = $metaByYear[$yr] ?? [];
+        $totals[$yrStr] = [
+            'year' => $yr,
+            'is_current' => $yr === 2026,
+            'day_orders' => $dayOrders,
+            'day_revenue' => $dayRev,
+            'accum_orders' => $accumOrders,
+            'accum_revenue' => $accumRev,
+            'open_note' => $meta['open_note'] ?? '',
+            'total_year_orders' => $meta['total_year_orders'] ?? null,
+            'total_year_rev' => $meta['total_year_rev'] ?? null,
+        ];
+    }
+    $c2026 = $totals['2026'] ?? ['accum_orders' => 0, 'accum_revenue' => 0.0];
+    foreach ($totals as $yrStr => &$row) {
+        $o = (int) ($row['accum_orders'] ?? 0);
+        $r = (float) ($row['accum_revenue'] ?? 0.0);
+        $row['ticket_medio'] = $o > 0 ? round($r / $o, 2) : 0.0;
+        if ((int) $yrStr !== 2026) {
+            $row['diff_orders_2026_vs_year'] = (int) $c2026['accum_orders'] - $o;
+            $row['diff_revenue_2026_vs_year'] = round((float) $c2026['accum_revenue'] - $r, 2);
+            $row['pct_orders_2026_vs_year'] = $o > 0
+                ? round((((int) $c2026['accum_orders'] - $o) / $o) * 100, 1)
+                : null;
+        }
+    }
+    unset($row);
+    return $totals;
+};
+
+$ytdByYear = $computeAtMmDd($cutoffMmDd);
+
+$monthCheckpoints = [
+    '01-31' => 'Jan',
+    '02-28' => 'Fev',
+    '03-31' => 'Mar',
+    '04-30' => 'Abr',
+    '05-31' => 'Mai',
+    '06-30' => 'Jun',
+    '07-31' => 'Jul',
+    '08-31' => 'Ago',
+    '09-30' => 'Set',
+    '10-31' => 'Out',
+    '11-30' => 'Nov',
+    '12-31' => 'Dez',
+];
+$monthlyCumulative = [];
+foreach ($monthCheckpoints as $mEnd => $label) {
+    if ($mEnd < $cutoffMmDd) {
+        $mSim = $computeAtMmDd($mEnd);
+        $point = ['mmdd' => $mEnd, 'label' => $label, 'by_year' => []];
+        foreach (['2021', '2022', '2023', '2024', '2025', '2026'] as $y) {
+            $point['by_year'][$y] = [
+                'accum_orders' => (int) ($mSim[$y]['accum_orders'] ?? 0),
+                'accum_revenue' => (float) ($mSim[$y]['accum_revenue'] ?? 0),
+            ];
+        }
+        $monthlyCumulative[] = $point;
+    }
+}
+$cutoffFmt = substr($cutoffMmDd, 3, 2) . '/' . substr($cutoffMmDd, 0, 2);
+$cutoffPoint = ['mmdd' => $cutoffMmDd, 'label' => $cutoffFmt, 'by_year' => []];
+foreach (['2021', '2022', '2023', '2024', '2025', '2026'] as $y) {
+    $cutoffPoint['by_year'][$y] = [
+        'accum_orders' => (int) ($ytdByYear[$y]['accum_orders'] ?? 0),
+        'accum_revenue' => (float) ($ytdByYear[$y]['accum_revenue'] ?? 0),
     ];
-}, array_slice($rawOrders2026, 0, 10));
+}
+$monthlyCumulative[] = $cutoffPoint;
+
+$recentOrders = [];
+foreach (array_slice($kpis['recent_orders'] ?? [], 0, 15) as $ro) {
+    $recentOrders[] = [
+        'order_id' => (int) ($ro['id'] ?? 0),
+        'uuid' => (string) ($ro['uuid'] ?? ''),
+        'customer_name' => (string) ($ro['customer_name'] ?? ''),
+        'package' => (string) ($ro['package'] ?? ''),
+        'total_reais' => (float) ($ro['total'] ?? 0),
+        'paid_reais' => (float) ($ro['paid'] ?? 0),
+        'balance_reais' => (float) ($ro['balance'] ?? 0),
+        'status_key' => (string) ($ro['status'] ?? ''),
+        'status_label' => (string) ($ro['status_label'] ?? ''),
+        'is_scheduled' => (bool) ($ro['is_scheduled'] ?? false),
+        'session_date' => $ro['session_date'] ?? null,
+        'created_at_brt' => (string) ($ro['created_at'] ?? ''),
+    ];
+}
 
 $out = [
     'source' => 'CRM_CANONICAL_NATAL_STATISTICS',
     'canonical_dashboard_url' => 'https://evydencia.com/gestao/natal/estatisticas',
     'as_of' => $ov['as_of'] ?? null,
     'reference_year' => $refYear,
-    'cutoff_mmdd' => $targetMmDd,
-    'cutoff_formatted' => $sim['target_date_formatted'] ?? ($ov['ytd_comparison']['as_of_date'] ?? $targetMmDd),
+    'cutoff_mmdd' => $cutoffMmDd,
+    'cutoff_formatted' => $cutoffFmt,
     'kpis_2026' => [
-        'valid_orders' => (int) ($k26['total_orders'] ?? 0),
-        'unique_customers' => (int) ($k26['total_customers'] ?? 0),
-        'new_customers' => (int) ($k26['new_customers'] ?? 0),
-        'recurring_customers' => (int) ($k26['recurring_customers'] ?? 0),
-        'fidelity_rate_pct' => (float) ($k26['fidelity_rate_pct'] ?? 0),
-        'scheduled_sessions' => (int) ($k26['scheduled_sessions'] ?? 0),
-        'unscheduled_sessions' => (int) ($k26['unscheduled_sessions'] ?? 0),
-        'scheduled_pct' => (float) ($k26['scheduled_pct'] ?? 0),
-        'contracted_revenue_reais' => (float) ($k26['contracted_revenue'] ?? 0),
-        'paid_revenue_reais' => (float) ($k26['paid_revenue'] ?? 0),
-        'balance_due_reais' => (float) ($k26['balance_due'] ?? 0),
-        'projected_extras_revenue_reais' => (float) ($k26['projected_extras_revenue'] ?? 0),
-        'total_projected_revenue_reais' => (float) ($k26['total_projected_revenue'] ?? 0),
-        'ticket_medio_order_reais' => (float) ($k26['ticket_medio_order'] ?? 0),
-        'ticket_medio_customer_reais' => (float) ($k26['ticket_medio_customer'] ?? 0),
-        'goal_orders' => (int) ($k26['goal_orders'] ?? 500),
-        'goal_revenue_reais' => (float) ($ov['pacing_forecast']['target_revenue'] ?? 400000),
-        'goal_orders_progress_pct' => (float) ($k26['goal_orders_progress_pct'] ?? 0),
-        'goal_revenue_progress_pct' => (float) ($k26['goal_revenue_progress_pct'] ?? 0),
-        'packages_2026' => $k26['packages'] ?? [],
+        'valid_orders' => (int) ($kpis['total_orders'] ?? 0),
+        'unique_customers' => (int) ($kpis['total_customers'] ?? 0),
+        'new_customers' => (int) ($kpis['new_customers'] ?? 0),
+        'recurring_customers' => (int) ($kpis['recurring_customers'] ?? 0),
+        'fidelity_rate_pct' => (float) ($kpis['fidelity_rate_pct'] ?? 0),
+        'scheduled_sessions' => (int) ($kpis['scheduled_sessions'] ?? 0),
+        'unscheduled_sessions' => (int) ($kpis['unscheduled_sessions'] ?? 0),
+        'scheduled_pct' => (float) ($kpis['scheduled_pct'] ?? 0),
+        'contracted_revenue_reais' => (float) ($kpis['contracted_revenue'] ?? 0),
+        'paid_revenue_reais' => (float) ($kpis['paid_revenue'] ?? 0),
+        'balance_due_reais' => (float) ($kpis['balance_due'] ?? 0),
+        'projected_extras_revenue_reais' => (float) ($kpis['projected_extras_revenue'] ?? 0),
+        'total_projected_revenue_reais' => (float) ($kpis['total_projected_revenue'] ?? 0),
+        'ticket_medio_order_reais' => (float) ($kpis['ticket_medio_order'] ?? 0),
+        'ticket_medio_customer_reais' => (float) ($kpis['ticket_medio_customer'] ?? 0),
+        'goal_orders' => (int) ($kpis['goal_orders'] ?? 500),
+        'goal_revenue_reais' => (float) ($kpis['goal_revenue'] ?? 400000),
+        'goal_orders_progress_pct' => (float) ($kpis['goal_orders_progress_pct'] ?? 0),
+        'goal_revenue_progress_pct' => (float) ($kpis['goal_revenue_progress_pct'] ?? 0),
+        'packages_2026' => $kpis['packages'] ?? [],
     ],
     'ytd_comparison_at_cutoff' => $ytdByYear,
-    'monthly_cumulative_orders_up_to_cutoff' => $monthlyAccumByYear,
-    'annual_evolution_2021_2026' => $ov['evolution'] ?? [],
-    'packages_matrix_2021_2026' => $ov['packages_matrix'] ?? [],
-    'pacing_forecast' => $ov['pacing_forecast'] ?? [],
-    'conversion_funnel' => [
-        'funnel_steps_2026' => $ov['lead_times']['funnel_steps'] ?? [],
-        'historical_conversion_2021_2026' => $ov['lead_times']['evolution'] ?? [],
-        'summary' => $ov['lead_times']['summary'] ?? [],
-    ],
-    'recent_natal_2026_orders' => $recent2026,
-    'note' => 'Fonte canônica oficial da Central de Inteligência Comercial — Natal 2026 (/gestao/natal/estatisticas). Expurga cancelados, chargebacks e abortados.',
+    'monthly_cumulative_to_cutoff' => $monthlyCumulative,
+    'annual_evolution_full_season' => $evolution,
+    'packages_matrix_by_year' => $ov['packages_matrix'] ?? [],
+    'pacing_forecast' => $ov['pacing_forecast'] ?? null,
+    'conversion_funnel_2026' => $kpis['conversion_funnel'] ?? null,
+    'recent_valid_natal_orders_2026' => $recentOrders,
+    'methodology_note' => 'Fonte oficial da Central de Inteligência Comercial (/gestao/natal/estatisticas). Conta exclusivamente pedidos de Natal válidos (NatalValidOrdersQuery / evidência comercial confirmada), eliminando duplicidades de itens ou pedidos cancelados/aguardando pagamento. Para 2021–2025, packages_matrix_by_year exibe o fechamento da temporada completa daquele ano, enquanto ytd_comparison_at_cutoff e monthly_cumulative_to_cutoff exibem o acumulado exato até a data de corte (ex.: 25/10: 101 em 2026, 142 em 2025, 124 em 2024, 67 em 2023, 80 em 2022, 128 em 2021).',
 ];
 
 echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
