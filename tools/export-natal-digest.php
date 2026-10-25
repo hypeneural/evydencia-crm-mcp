@@ -118,7 +118,15 @@ try {
     if (file_put_contents($tmp, $bytes, LOCK_EX) !== strlen($bytes)) {
         throw new \RuntimeException('snapshot_write_failed');
     }
-    @chmod($tmp, 0600);
+    if (PHP_OS_FAMILY !== 'Windows') {
+        if (!@chmod($tmp, 0600) || ((fileperms($tmp) & 0077) !== 0)) {
+            @unlink($tmp);
+            throw new \\RuntimeException('snapshot_permissions_failed');
+        }
+    } else {
+        // On Windows, configure private NTFS ACL on the parent directory before use.
+        @chmod($tmp, 0600);
+    }
     if (!rename($tmp, $output)) {
         @unlink($tmp);
         throw new \RuntimeException('snapshot_publish_failed');
