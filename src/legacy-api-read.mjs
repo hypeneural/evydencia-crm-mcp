@@ -88,9 +88,9 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000}){
   async soldItems({start,end,slug:itemSlug,search}={}){
    if(!start&&!end)fail('missing_period');
    const params=new URLSearchParams();
-   if(start)params.set('order.created-start',day(start));
-   if(end)params.set('order.created-end',day(end));
-   if(itemSlug){if(typeof itemSlug!=='string'||!/^[a-z0-9-]{1,60}$/.test(itemSlug))fail('invalid_slug');params.set('item.slug',itemSlug)}
+   if(start)params.set('order[created-start]',day(start));
+   if(end)params.set('order[created-end]',day(end));
+   if(itemSlug){if(typeof itemSlug!=='string'||!/^[a-z0-9-]{1,60}$/.test(itemSlug))fail('invalid_slug');params.set('item[slug]',itemSlug)}
    if(search)params.set('buscar',name(search));
    const raw=await get('/api/reports/sold-items',params);
    const rows=Array.isArray(raw)?raw:Array.isArray(raw?.data)?raw.data:null;

@@ -43,7 +43,7 @@ before(async()=>{
    const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01',schedule_1:'2026-11-10 10:00:00',items:[{id:1}],participants:[{name:'Crianca Ficticia'}],summary:{total:450,received:200,remaining:250}};
    if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder]}));
    if(u.pathname==='/api/orders/11111111-aaaa-4111-8111-000000000101/detail')return send(200,JSON.stringify({data:sampleOrder}));
-   if(u.pathname==='/api/reports/sold-items')return send(200,JSON.stringify({data:[{item:'Mini Sessao Natal',reference:'8008',year:2026,month:10,solds:12}]}));
+   if(u.pathname==='/api/reports/sold-items'){if(!u.searchParams.get('order[created-start]')&&!u.searchParams.get('order[created-end]'))return send(422,JSON.stringify({message:'The given data was invalid.'}));return send(200,JSON.stringify({data:[{item:'Mini Sessao Natal',reference:'8008',year:2026,month:10,solds:12}]}))}
    if(u.pathname==='/api/reports/christmas-orders-without-participants')return send(200,JSON.stringify([{order_uuid:'11111111-aaaa-4111-8111-000000000101',customer_name:'Cliente Ficticia 7',customer_whatsapp:'48999990001',current_status:'payment_confirmed',participants:0}]));
    if(u.pathname==='/api/reports/customers-with-christmas-orders')return send(200,JSON.stringify([{name:'Cliente Ficticia 7',whatsapp:'48999990001',email:'ficticia@example.test'}]));
    if(u.pathname==='/api/reports/customers-without-christmas-orders')return send(200,JSON.stringify([{name:'Cliente Ficticia 9',whatsapp:'48999990002',email:'ficticia9@example.test'}]));
