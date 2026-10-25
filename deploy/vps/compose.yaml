@@ -13,11 +13,15 @@ services:
       EVYD_MOCK_MODE: "1"
       EVYD_PRIVATE_TOOLS: "0"
       XDG_CONFIG_HOME: /config
+      # read_only rootfs: writable HOME on tmpfs for tunnel-client/node.
+      HOME: /tmp
     env_file:
       - /srv/secrets/evydencia-crm-mcp/tunnel.env
     volumes:
       - /srv/runtime/evydencia-crm-mcp/config:/config:ro
       - /srv/runtime/evydencia-crm-mcp/bin/tunnel-client:/usr/local/bin/tunnel-client:ro
+    # Docker publishes to the container interface, not its loopback: generate the profile with
+    # `--health-listen-addr 0.0.0.0:8080`, otherwise 127.0.0.1:18090 on the host will not answer.
     ports:
       - "127.0.0.1:18090:8080"
     tmpfs:
