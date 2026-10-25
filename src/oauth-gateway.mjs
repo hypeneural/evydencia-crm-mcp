@@ -46,6 +46,28 @@ export function gatewayConfig(env){
  const internalReadToken=typeof env.EVYD_INTERNAL_READ_TOKEN==='string'&&env.EVYD_INTERNAL_READ_TOKEN.trim().length>=12?env.EVYD_INTERNAL_READ_TOKEN.trim():null;
  const zapiEnabled=env.EVYD_ZAPI_MCP_ENABLED==='1';
  let zapiMcpUrl=DEFAULT_ZAPI_MCP_URL,zapiIssuer='https://mcp.z-api.io',zapiStorePath=null,zapiRestStatus=null;
+ const zapiDiagInstances=[];
+ const parseRestBase=raw=>{
+  const u=parseSecureEndpoint(raw||'https://api.z-api.io','zapi_rest_base_url');
+  if(!['/',''].includes(u.pathname))fail('zapi_rest_base_url');
+  const localAllowed=pub.protocol==='http:'&&isLocal(pub.hostname)&&isLocal(u.hostname);
+  if(u.origin!=='https://api.z-api.io'&&!localAllowed)fail('zapi_rest_base_url');
+  return u.origin;
+ };
+ const zapiRestBaseUrl=parseRestBase(env.EVYD_ZAPI_DIAG_BASE_URL||env.EVYD_ZAPI_REST_BASE_URL||'https://api.z-api.io');
+ const pushDiagInstance=(rawEntry,sourceCode)=>{
+  const restOp=String(rawEntry?.operatorId||'').trim();
+  const alias=String(rawEntry?.alias||'principal').trim();
+  const inst=String(rawEntry?.instanceId||'').trim();
+  const tok=String(rawEntry?.token||'').trim();
+  const ctok=String(rawEntry?.clientToken||'').trim();
+  const label=typeof rawEntry?.label==='string'&&rawEntry.label.trim()?rawEntry.label.trim().slice(0,80):null;
+  if(!restOp||!allowedOperators.has(restOp)||!/^[a-zA-Z0-9_-]{1,40}$/.test(alias)||!inst||!tok||!ctok||/\s/.test(inst)||/\s/.test(tok)||/\s/.test(ctok))fail(sourceCode);
+  if(zapiDiagInstances.some(x=>x.operatorId===restOp&&x.alias===alias))fail(sourceCode);
+  const frozen=Object.freeze({alias,label,operatorId:restOp,baseUrl:zapiRestBaseUrl,instanceId:inst,token:tok,clientToken:ctok});
+  zapiDiagInstances.push(frozen);
+  if(!zapiRestStatus)zapiRestStatus=frozen;
+ };
  if(zapiEnabled){
   const mcpU=parseSecureEndpoint(env.EVYD_ZAPI_MCP_URL||DEFAULT_ZAPI_MCP_URL,'zapi_mcp_url');
   zapiMcpUrl=mcpU.toString();
@@ -54,23 +76,39 @@ export function gatewayConfig(env){
   zapiIssuer=issU.origin;
   zapiStorePath=typeof env.EVYD_ZAPI_STORE_PATH==='string'?env.EVYD_ZAPI_STORE_PATH.trim():'';
   if(!zapiStorePath||zapiStorePath.length<4)fail('zapi_store_path');
-  if(env.EVYD_ZAPI_REST_INSTANCE_ID||env.EVYD_ZAPI_REST_TOKEN||env.EVYD_ZAPI_REST_CLIENT_TOKEN){
-   const restOp=String(env.EVYD_ZAPI_REST_OPERATOR_ID||'').trim();
-   const inst=String(env.EVYD_ZAPI_REST_INSTANCE_ID||'').trim();
-   const tok=String(env.EVYD_ZAPI_REST_TOKEN||'').trim();
-   const ctok=String(env.EVYD_ZAPI_REST_CLIENT_TOKEN||'').trim();
-   if(!restOp||!allowedOperators.has(restOp)||!inst||!tok||!ctok)fail('zapi_rest_status');
-   const restBase=parseSecureEndpoint(env.EVYD_ZAPI_REST_BASE_URL||'https://api.z-api.io','zapi_rest_base_url');
-   zapiRestStatus=Object.freeze({operatorId:restOp,baseUrl:restBase.origin,instanceId:inst,token:tok,clientToken:ctok});
-  }
  }
+ const hasSingleDiag=Boolean(
+  env.EVYD_ZAPI_DIAG_INSTANCE_ID||env.EVYD_ZAPI_DIAG_INSTANCE_TOKEN||env.EVYD_ZAPI_DIAG_CLIENT_TOKEN||
+  env.EVYD_ZAPI_REST_INSTANCE_ID||env.EVYD_ZAPI_REST_TOKEN||env.EVYD_ZAPI_REST_CLIENT_TOKEN
+ );
+ if(hasSingleDiag){
+  pushDiagInstance({
+   alias:env.EVYD_ZAPI_DIAG_ALIAS||'principal',
+   label:env.EVYD_ZAPI_DIAG_LABEL||null,
+   operatorId:env.EVYD_ZAPI_DIAG_OPERATOR_ID||env.EVYD_ZAPI_REST_OPERATOR_ID,
+   instanceId:env.EVYD_ZAPI_DIAG_INSTANCE_ID||env.EVYD_ZAPI_REST_INSTANCE_ID,
+   token:env.EVYD_ZAPI_DIAG_INSTANCE_TOKEN||env.EVYD_ZAPI_REST_TOKEN,
+   clientToken:env.EVYD_ZAPI_DIAG_CLIENT_TOKEN||env.EVYD_ZAPI_REST_CLIENT_TOKEN
+  },'zapi_rest_status');
+ }
+ if(env.EVYD_ZAPI_DIAG_INSTANCES_JSON){
+  let parsed;try{parsed=JSON.parse(env.EVYD_ZAPI_DIAG_INSTANCES_JSON)}catch{fail('zapi_diag_instances')}
+  if(!Array.isArray(parsed)||parsed.length===0||parsed.length>20)fail('zapi_diag_instances');
+  for(const item of parsed)pushDiagInstance(item,'zapi_diag_instances');
+ }
+ const rawObsPath=typeof env.EVYD_ZAPI_DIAG_OBS_PATH==='string'?env.EVYD_ZAPI_DIAG_OBS_PATH.trim():'';
+ const zapiDiagObsPath=rawObsPath||(zapiStorePath?zapiStorePath.replace(/\.json$/i,'')+'.diag-obs.json':null);
  return Object.freeze({
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
   allowedOperators,redirects,internalReadToken,
   operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
   zapiEnabled,zapiMcpUrl,zapiIssuer,zapiStorePath,zapiRestStatus,
+  zapiDiagEnabled:Boolean(zapiEnabled||zapiDiagInstances.length>0),
+  zapiDiagInstances:Object.freeze(zapiDiagInstances),
+  zapiDiagObsPath,
   zapiTimeoutMs:int(env.EVYD_ZAPI_TIMEOUT_MS,15000,100,60000),
+  zapiDiagTimeoutMs:int(env.EVYD_ZAPI_DIAG_TIMEOUT_MS,8000,100,30000),
   zapiSessionIdleMs:int(env.EVYD_ZAPI_SESSION_IDLE_S,600,5,86400)*1000,
   crmTimeoutMs:int(env.CRM_REQUEST_TIMEOUT_MS,6000,100,30000),
   accessTtl:int(env.EVYD_ACCESS_TOKEN_TTL_S,3600,60,86400),
@@ -94,7 +132,7 @@ export function redirectAllowed(uri,allow){
 
 export function deriveKeys(master){
  const d=info=>Buffer.from(hkdfSync('sha256',master,Buffer.from('evydencia-crm-mcp-gateway'),Buffer.from(info),32));
- return {aead:d('aead-v1'),mac:d('mac-v1'),log:d('log-v1'),zapiStore:d('zapi-store-v1')};
+ return {aead:d('aead-v1'),mac:d('mac-v1'),log:d('log-v1'),zapiStore:d('zapi-store-v1'),zapiDiagObs:d('zapi-diag-obs-v1')};
 }
 
 // AAD = token type, so a code can never be replayed as an access token and vice versa.
