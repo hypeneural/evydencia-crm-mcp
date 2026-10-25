@@ -19,15 +19,32 @@ export const EXTENSION_READ_ENDPOINTS=Object.freeze({
  preview:'POST /api/v1/extension/proposals/preview (worker-probe side effect; requires additional opt-in)'
 });
 const isPlain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+const SAFE_FIELDS=new Set(('data meta links status message code success id uuid name phone customer customers operator token abilities expires_at '+ 
+ 'features proposals natal_2026 server timezone api_version minimum_extension_version enabled reference_year product_slug '+ 
+ 'lookup match_count match_source normalized_e164 current_order history kpis orders participants items installments '+ 
+ 'customer_since display_name first_name purchased mode loyalty_level years_attended recommended_action '+ 
+ 'active_order_uuid package_name session_at created_at updated_at balance_pending gallery_available '+ 
+ 'lifecycle_stage orders_count completed_sessions_count lifetime_value average_ticket page per_page total has_more '+ 
+ 'campaign_key title status_label total_amount payment_status session_date age_label relationship '+ 
+ 'ready phone_status delivery_scope availability_message selection summary existing_proposal message_preview '+ 
+ 'status_key status_code status_id label scheduled_at coupon observation inner childs_data '+ 
+ 'discounts received remaining amount counts totals data_status as_of generated_at source is_live '+ 
+ 'period years year type error errors current_page last_page from to count results products '+ 
+ 'reference slug durationMinutes slotsByDate date slots time pagination googleCalendar checked hasError '+ 
+ 'financial cash_today financial_situation kpis_2026 contracted_cents paid_cents balance_due_cents '+ 
+ 'signed_at note value year tags key stage proposal_preview proposal_schedule allowed reason').split(/\s+/));
+
 export function shapeOnly(value,{maxDepth=4,maxKeys=30}={}){
  function walk(v,depth){
   if(v===null)return 'null';
   if(Array.isArray(v))return {kind:'array',item:v.length>0&&depth<maxDepth?walk(v[0],depth+1):'unknown',length_bucket:v.length===0?'empty':'nonempty'};
   if(isPlain(v)){
    if(depth>=maxDepth)return 'object';
-   const names=Object.keys(v).sort().slice(0,maxKeys);
-   return {kind:'object',fields:Object.fromEntries(names.map(k=>[k,walk(v[k],depth+1)])),
-    truncated:Object.keys(v).length>maxKeys};
+   const names=Object.keys(v).sort();
+   const allowed=names.filter(k=>SAFE_FIELDS.has(k)).slice(0,maxKeys);
+   return {kind:'object',fields:Object.fromEntries(allowed.map(k=>[k,walk(v[k],depth+1)])),
+    redacted_dynamic_keys:names.length-names.filter(k=>SAFE_FIELDS.has(k)).length,
+    truncated:allowed.length<names.filter(k=>SAFE_FIELDS.has(k)).length};
   }
   return typeof v;
  }
