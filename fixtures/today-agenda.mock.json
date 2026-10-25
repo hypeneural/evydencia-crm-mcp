@@ -1,0 +1,50 @@
+{
+  "schema_version": "mock-v1",
+  "date": "2026-10-24",
+  "timezone": "America/Sao_Paulo",
+  "appointments": [
+    {
+      "time": "08:00",
+      "duration_minutes": 15,
+      "package": "Ho Ho Ho",
+      "customer": "Marina Exemplo",
+      "status": "confirmed"
+    },
+    {
+      "time": "09:30",
+      "duration_minutes": 30,
+      "package": "Então é Natal",
+      "customer": "Joana Fictícia",
+      "status": "scheduled"
+    },
+    {
+      "time": "10:45",
+      "duration_minutes": 60,
+      "package": "Boas Festas",
+      "customer": "Paulo Ilustrativo",
+      "status": "confirmed"
+    },
+    {
+      "time": "13:30",
+      "duration_minutes": 30,
+      "package": "Então é Natal",
+      "customer": "Mariana Demonstração",
+      "status": "scheduled"
+    },
+    {
+      "time": "15:00",
+      "duration_minutes": 30,
+      "package": "Então é Natal",
+      "customer": "Luiza de Teste",
+      "status": "confirmed"
+    },
+    {
+      "time": "17:15",
+      "duration_minutes": 15,
+      "package": "Ho Ho Ho",
+      "customer": "Clara Cenário",
+      "status": "scheduled"
+    }
+  ],
+  "warning": "FICÇÃO: agenda de demonstração para 24/10/2026; não corresponde às reservas reais."
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": "mock-v1",
+  "records": [
+    {
+      "id": "fixture-marina",
+      "name": "Marina Exemplo",
+      "phone": "48999990011",
+      "natal_2026_purchased": true,
+      "package": "Então é Natal",
+      "order_status": "session_schedule",
+      "session_at": "2026-10-24T08:00:00-03:00"
+    },
+    {
+      "id": "fixture-mariana",
+      "name": "Mariana Demonstração",
+      "phone": "48999990012",
+      "natal_2026_purchased": false,
+      "package": null,
+      "order_status": null,
+      "session_at": null
+    },
+    {
+      "id": "fixture-joana",
+      "name": "Joana Fictícia",
+      "phone": "48999990013",
+      "natal_2026_purchased": true,
+      "package": "Boas Festas",
+      "order_status": "payment_confirmed",
+      "session_at": "2026-10-24T09:30:00-03:00"
+    },
+    {
+      "id": "fixture-luiza",
+      "name": "Luiza de Teste",
+      "phone": "48999990014",
+      "natal_2026_purchased": false,
+      "package": null,
+      "order_status": null,
+      "session_at": null
+    }
+  ],
+  "warning": "Os nomes, telefones, estados e pedidos desta lista são inteiramente inventados."
+}
