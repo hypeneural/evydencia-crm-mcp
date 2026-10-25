@@ -27,6 +27,11 @@ jobs:
             if ($parseErrors.Count -gt 0) { $bad += $_.Name }
           }
           if ($bad.Count -gt 0) { throw "PowerShell syntax error: $($bad -join ', ')" }
+      - name: Validate stand-alone PHP exporter (no CRM startup)
+        run: |
+          command -v php
+          php -l tools/export-natal-digest.php
+          php tools/export-natal-digest.php --help
       - run: npm run doctor
       - run: npm run check
       - run: npm test

@@ -6,8 +6,8 @@ import {resolve,dirname} from 'node:path';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const need=['AGENTS.md','src/AGENTS.md','test/AGENTS.md','fixtures/AGENTS.md',
  '.agents/hooks.json','.agents/rules/security.md','.agents/rules/flash-guardrails.md',
- 'src/core.mjs','src/mock-orders.mjs','src/server.mjs','src/capabilities.mjs','src/mock.mjs','src/mock-business.mjs',
- 'scripts/smoke.mjs','scripts/conversation-smoke.mjs','scripts/antigravity-hook.mjs',
+ 'src/core.mjs','src/mock-orders.mjs','src/natal-digest-snapshot.mjs','src/order-readiness.mjs','src/server.mjs','src/capabilities.mjs','src/mock.mjs','src/mock-business.mjs',
+ 'scripts/smoke.mjs','scripts/conversation-smoke.mjs','scripts/check-private-snapshot.mjs','scripts/validate-mvp.ps1','tools/export-natal-digest.php','scripts/antigravity-hook.mjs',
  'fixtures/natal-summary.mock.json','fixtures/order-catalog.mock.json','fixtures/today-agenda.mock.json','fixtures/customer-name-search.mock.json'];
 let fail=0,warn=0;
 const error=s=>{fail++;console.error('FAIL '+s)};
