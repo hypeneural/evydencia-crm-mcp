@@ -51,3 +51,17 @@ Se precisarmos de dashboard interativo controlado, o padrão é MCP Apps (recurs
 3. Para pedidos/nome/entregas sem telefone, considerar adaptador SQL privado `SELECT` estrito ou outro serviço existente (não token SingleAuthentication amplo).
 4. `proposals/schedule` apenas depois de UI confirmação humana e journal de UUID idempotente; NÃO acrescentado.
 Referências: https://developers.openai.com/plugins/build/auth ; https://developers.openai.com/plugins/reference ; https://developers.openai.com/plugins/build/mcp-server
+
+## Diagnóstico opcional da API LEGADA GET (chave diferente de Sanctum)
+O repositório contém `src/legacy-api-read.mjs` (sem integração ao Plugin) e `scripts/verify-legacy-get.mjs`. São rotas existentes **GET /api/orders/search** e **GET /api/orders/{uuid}/detail** protegidas por `SingleAuthentication`. O token `EVYDENCIA_LEGACY_TOKEN` é DIFERENTE de `CRM_READ_TOKEN` e tem potencial de executar operações de escrita em outras rotas; por isso requer opt-in explícito e não pode ser usado no Plugin anônimo nem distribuído.
+Somente após autorização do operador em terminal privado:
+```powershell
+$env:EVYD_ALLOW_LEGACY_GET = '1'
+$env:EVYDENCIA_LEGACY_TOKEN = Read-Host 'Token legado de integração'
+npm run legacy:get:check -- --mode=search --product=natal --status=waiting_product_retrieve
+Remove-Item Env:\EVYDENCIA_LEGACY_TOKEN
+Remove-Item Env:\EVYD_ALLOW_LEGACY_GET
+```
+O comando apresenta apenas status, fonte, contagem da amostra e has_more. Não imprime clientes ou payload. A busca suporta nome, produto, status, data de criação e UUID para detalhe (sempre com filtros predefinidos). Contagens da lista limitada NÃO são estatísticas canônicas. A chave não é exposta por HTTP ao ChatGPT nem gravada em `.env`.
+
+Para diagnóstico de estruturas, o retorno de `OrderResource` contém `id`, `uuid`, `customer`, `status`, `items`, `participants`, `installments`, `summary`, `schedule_1`. A projeção no intermediador mantém apenas identificadores do pedido, nome resumido de cliente, status, data, montantes em centavos e contagem de participantes; CPF, e-mail, WhatsApp, nascimento e nomes individuais de participantes são omitidos.
