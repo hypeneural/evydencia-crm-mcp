@@ -23,3 +23,16 @@ Os nomes, reservas, valores e telefones abaixo são fictícios. O modelo deve se
 6. Nunca afirmar "enviado" ou "agendado" de verdade.
 
 Voz é interface de entrada, não autorização adicional. Recursos de chamada de ferramentas em modos de voz específicos dependem do suporte do cliente ChatGPT utilizado e exigem teste real. O harness (npm run conversation:smoke) usa MCP por stdio e não testa a experiência de voz.
+
+## Novos exemplos de filtros e detalhe de pedido — sempre 100% MOCK
+
+| Pergunta/voz | Tool | Resultado esperado |
+|---|---|---|
+| Quais filtros existem para pedidos? | crm_filtros_pedidos_mock | Separa Manager, API legado, Customer360 e Natal transações; nenhuma nova rota real |
+| Filtre Natal com pagamento confirmado e saldo aberto | crm_pedidos_filtrar_mock(product_slug=natal, financial=open, status=[payment_confirmed]) | Apenas pedido fictício #5001; valor em centavos |
+| Como está o pedido #5001? | crm_pedido_detalhe_mock(identificador=5001) | Pacote, situação, valor, saldo, contagem de participantes; nenhum dado real |
+| Qual o recebido versus contratado de Natal? | crm_natal_indicadores_mock(modulo=financeiro) | Comparação de campos *_cents fictícios, fonte STATIC_FIXTURE_TEST |
+| Quantos pedidos da minha empresa existem? | crm_pedidos_filtrar_mock | APENAS catálogo de 10 fictícios; NUNCA dizer total da base |
+| Mostre histórico e situação de um cliente pelo telefone | crm_cliente_360(telefone=48999990001) | Projeção fictícia com campanha, status, histórico e valores; sem nomes/nascimento dos participantes |
+
+Regra de reconciliação: o catálogo MOCK de 10 pedidos é uma amostra demonstrativa de filtros, **não** uma decomposição da estatística simulada de 137 vendas. Não somar essas duas fontes.

@@ -50,3 +50,6 @@ Ações reais (POST proposals/schedule e abort), reenvio e Z-API direta NÃO sã
 As APIs internas do CRM protegidas por SingleAuthentication NÃO devem ser consumidas pelo MCP. Para estatísticas, agenda privada e busca nominal, propor endpoints read-only escopados no CRM em trabalho separado — não modificar Laravel a partir deste repositório.
 
 Documentação detalhada: [ANTIGRAVITY_LOCAL.md](docs/ANTIGRAVITY_LOCAL.md), [CONTRATOS_CRM.md](docs/CONTRATOS_CRM.md), [OFFICIAL_DOCS_AUDIT.md](docs/OFFICIAL_DOCS_AUDIT.md).
+
+## Nova auditoria de estatísticas e pedidos
+Consultas MOCK de Natal forense, filtros de pedido (13 status, financeiro, sessões), detalhe por ID/UUID e campos seguros do Cliente 360. Documentação: [auditoria do CRM](docs/AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md), [API read-only futura](docs/PROPOSTA_EXTENSION_READ_APIS.md) e [playbook](docs/CONVERSATION_PLAYBOOK.md). Os 10 pedidos da fixture são somente uma amostra; estatísticas de 137 vendas também são fictícias. Nenhuma rota Manager é chamada.

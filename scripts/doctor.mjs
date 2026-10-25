@@ -6,9 +6,9 @@ import {resolve,dirname} from 'node:path';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const need=['AGENTS.md','src/AGENTS.md','test/AGENTS.md','fixtures/AGENTS.md',
  '.agents/hooks.json','.agents/rules/security.md','.agents/rules/flash-guardrails.md',
- 'src/core.mjs','src/server.mjs','src/capabilities.mjs','src/mock.mjs','src/mock-business.mjs',
+ 'src/core.mjs','src/mock-orders.mjs','src/server.mjs','src/capabilities.mjs','src/mock.mjs','src/mock-business.mjs',
  'scripts/smoke.mjs','scripts/conversation-smoke.mjs','scripts/antigravity-hook.mjs',
- 'fixtures/natal-summary.mock.json','fixtures/today-agenda.mock.json','fixtures/customer-name-search.mock.json'];
+ 'fixtures/natal-summary.mock.json','fixtures/order-catalog.mock.json','fixtures/today-agenda.mock.json','fixtures/customer-name-search.mock.json'];
 let fail=0,warn=0;
 const error=s=>{fail++;console.error('FAIL '+s)};
 const warning=s=>{warn++;console.warn('WARN '+s)};
@@ -29,7 +29,7 @@ try{
  if(!ev.includes('PreToolUse')||!ev.includes('SessionStart'))error('hooks.json missing PreToolUse/SessionStart');
  else ok('Antigravity hooks schema basics');
 }catch{error('Invalid hooks.json')}
-for(const p of ['natal-summary','today-agenda','customer-name-search']){
+for(const p of ['natal-summary','order-catalog','today-agenda','customer-name-search']){
  try{
   const f=JSON.parse(await readFile(resolve(root,'fixtures',p+'.mock.json'),'utf8'));
   if(!f.schema_version?.startsWith('mock-')||!f.warning)error('Fixture not labeled: '+p);
