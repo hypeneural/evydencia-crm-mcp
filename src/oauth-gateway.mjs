@@ -2,17 +2,18 @@
 // Stateless by design: client registrations, authorization codes and tokens are AES-256-GCM
 // sealed with sub-keys derived (HKDF) from EVYD_GATEWAY_KEY. Nothing is persisted on disk.
 // Operator identity = the operator's OWN Sanctum token, validated against
-// GET /api/v1/extension/bootstrap. Tokens carrying any write ability are refused.
+// GET /api/v1/extension/bootstrap. Wildcard or malformed tokens are refused; standard
+// ExtensionAbilities::operator() tokens are accepted unless EVYD_STRICT_READONLY_TOKEN=1.
 // Never log upstream tokens, OAuth tokens, codes, phones or names.
 import {createCipheriv,createDecipheriv,createHash,createHmac,hkdfSync,randomBytes,timingSafeEqual} from 'node:crypto';
 import {OAuthError,OAuthErrorCode} from '@modelcontextprotocol/server';
 import {baseURL,crmClient} from './core.mjs';
-import {assertReadOnlyAbilities} from './live-abilities.mjs';
+import {assertOperatorAbilities} from './live-abilities.mjs';
 
 export const GATEWAY_SCOPE='crm.read';
 // ChatGPT uses the stable redirect when the AS advertises RFC 9207 `iss`; otherwise a per-connection callback.
 const DEFAULT_REDIRECTS='https://chatgpt.com/connector_platform_oauth_redirect,https://chatgpt.com/connector/oauth/*';
-// A shared CRM credential must never coexist with per-operator auth in this process.
+// Unauthenticated shared CRM env vars must never bypass per-operator OAuth in this process.
 const FORBIDDEN_ENV=['CRM_READ_TOKEN','CRM_TOKEN','CRM_WRITE_TOKEN','EVYDENCIA_LEGACY_TOKEN','ZAPI_TOKEN','ZAPI_INSTANCE','ZAPI_CLIENT_TOKEN'];
 const isLocal=h=>['localhost','127.0.0.1','[::1]'].includes(h);
 const fail=c=>{throw Error('gateway_config_'+c)};
@@ -33,9 +34,11 @@ export function gatewayConfig(env){
  if(!ops.length||ops.some(x=>!/^[1-9]\d{0,9}$/.test(x)))fail('operator_allowlist');
  const redirects=String(env.EVYD_OAUTH_REDIRECT_URIS||DEFAULT_REDIRECTS).split(',').map(s=>s.trim()).filter(Boolean);
  for(const r of redirects){let u;try{u=new URL(r.replace(/\*$/,'x'))}catch{fail('redirect_allowlist')}if(u.protocol!=='https:'&&!isLocal(u.hostname))fail('redirect_allowlist')}
+ const internalReadToken=typeof env.EVYD_INTERNAL_READ_TOKEN==='string'&&env.EVYD_INTERNAL_READ_TOKEN.trim().length>=12?env.EVYD_INTERNAL_READ_TOKEN.trim():null;
  return Object.freeze({
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
-  allowedOperators:new Set(ops),redirects,
+  allowedOperators:new Set(ops),redirects,internalReadToken,
+  strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
   crmTimeoutMs:int(env.CRM_REQUEST_TIMEOUT_MS,6000,100,30000),
   accessTtl:int(env.EVYD_ACCESS_TOKEN_TTL_S,3600,60,86400),
   refreshTtl:int(env.EVYD_REFRESH_TOKEN_TTL_S,2592000,300,7776000),
@@ -87,7 +90,7 @@ export function operatorTagger(master){
  return id=>id?createHmac('sha256',log).update(String(id)).digest('base64url').slice(0,10):null;
 }
 
-// Validates the operator's own Sanctum token: read-only abilities, allowlisted operator, not expired.
+// Validates the operator's own Sanctum token: operator abilities, allowlisted operator, not expired.
 export function operatorVerifier(cfg,{fetchFn=fetch,now=()=>Date.now()}={}){
  const cache=new Map();
  const h=t=>createHash('sha256').update(t).digest('base64url');
@@ -103,7 +106,7 @@ export function operatorVerifier(cfg,{fetchFn=fetch,now=()=>Date.now()}={}){
    if(e?.message==='crm_http_403')throw Error('upstream_scope_rejected');
    throw Error('crm_unavailable');
   }
-  try{assertReadOnlyAbilities(b.token?.abilities,'customer-context')}catch{throw Error('upstream_scope_rejected')}
+  try{assertOperatorAbilities(b.token?.abilities,'customer-context',{strictReadOnly:cfg.strictReadOnlyToken})}catch{throw Error('upstream_scope_rejected')}
   const id=b.operator?.id,op=Number.isSafeInteger(id)?String(id):'';
   if(!cfg.allowedOperators.has(op))throw Error('operator_not_authorized');
   const exp=b.token?.expires_at?Date.parse(b.token.expires_at):NaN;
@@ -120,7 +123,7 @@ export function operatorVerifier(cfg,{fetchFn=fetch,now=()=>Date.now()}={}){
 
 const MSG={
  upstream_token_invalid:'Token do CRM inválido, expirado ou revogado.',
- upstream_scope_rejected:'Token recusado: precisa de extension:bootstrap e extension:customer-read e NÃO pode ter permissões de escrita.',
+ upstream_scope_rejected:'Token recusado: precisa de extension:bootstrap e extension:customer-read válidos.',
  operator_not_authorized:'Operador não autorizado para o conector ChatGPT.',
  crm_unavailable:'CRM indisponível no momento. Tente novamente.'
 };
@@ -149,7 +152,7 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
 
  function page({txn,ru,error,status=200}){
   const u=new URL(ru);
-  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Evydência CRM — autorizar ChatGPT</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#1b1b1b}input,button{font:inherit;padding:.6rem;width:100%;box-sizing:border-box;margin:.4rem 0}.e{color:#a40000}.n{font-size:.9rem;color:#555}</style></head><body><h1>Conectar ChatGPT ao Evydência CRM</h1><p>Acesso <strong>somente leitura</strong>: cliente por telefone, Cliente 360 e dados públicos. Nenhum envio, agendamento ou alteração.</p><p class="n">Retorno para: ${esc(u.host)}</p>${error?`<p class="e" role="alert">${esc(error)}</p>`:''}<form method="post" action="/authorize" autocomplete="off"><input type="hidden" name="txn" value="${esc(txn)}"><label for="t">Seu token pessoal de leitura do CRM (Sanctum)</label><input id="t" name="crm_token" type="password" required minlength="12" maxlength="512" autocomplete="off"><button name="action" value="approve" type="submit">Autorizar leitura</button><button name="action" value="deny" type="submit" formnovalidate>Cancelar</button></form><p class="n">O token não é enviado ao ChatGPT. Tokens com permissões de escrita são recusados.</p></body></html>`;
+  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Evydência CRM — autorizar ChatGPT</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#1b1b1b}input,button{font:inherit;padding:.6rem;width:100%;box-sizing:border-box;margin:.4rem 0}.e{color:#a40000}.n{font-size:.9rem;color:#555}</style></head><body><h1>Conectar ChatGPT ao Evydência CRM</h1><p>Acesso <strong>somente leitura</strong> no conector: cliente por telefone, Cliente 360, pedidos e dados públicos. Nenhum envio, agendamento ou alteração é executado pelo MCP.</p><p class="n">Retorno para: ${esc(u.host)}</p>${error?`<p class="e" role="alert">${esc(error)}</p>`:''}<form method="post" action="/authorize" autocomplete="off"><input type="hidden" name="txn" value="${esc(txn)}"><label for="t">Seu token pessoal do CRM (Sanctum)</label><input id="t" name="crm_token" type="password" required minlength="12" maxlength="512" autocomplete="off"><button name="action" value="approve" type="submit">Autorizar leitura</button><button name="action" value="deny" type="submit" formnovalidate>Cancelar</button></form><p class="n">O token Sanctum permanece cifrado no gateway e não é exposto ao ChatGPT.</p></body></html>`;
   // form-action must also allow the post-submit redirect origin (Chromium enforces CSP on redirects).
   return new Response(html,{status,headers:htmlHeaders(' '+u.origin)});
  }
@@ -248,7 +251,7 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
   if(gt==='refresh_token'){
    const r=seal.open('evr',f.get('refresh_token'));
    if(!r||r.exp<sec()||r.cid!==c.cid)return oauthErr(400,'invalid_grant');
-   // Re-validate upstream on every refresh: catches revocation, allowlist removal and added write abilities.
+   // Re-validate upstream on every refresh: catches revocation and allowlist removal.
    let v;try{v=await operators.verify(r.up,{fresh:true})}catch(e){
     if(e?.message==='crm_unavailable')return oauthErr(503,'temporarily_unavailable');
     log({evt:'refresh_denied',reason:MSG[e?.message]?e.message:'invalid'});return oauthErr(400,'invalid_grant');

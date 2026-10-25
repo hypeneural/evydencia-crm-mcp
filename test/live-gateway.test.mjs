@@ -5,19 +5,21 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {createHash,randomBytes} from 'node:crypto';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
-import {createGateway,LIVE_TOOL_NAMES} from '../src/live-gateway.mjs';
+import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
 import {gatewayConfig,createSealer,redirectAllowed} from '../src/oauth-gateway.mjs';
 
 const R=['extension:bootstrap','extension:customer-read'];
 const OPS={
  'fake-op7-read-000001':{id:7,ab:R},
  'fake-op9-read-000002':{id:9,ab:[...R,'extension:proposal-read']},
- 'fake-op7-write-00003':{id:7,ab:[...R,'extension:proposal-write']},
+ 'fake-op7-write-00003':{id:7,ab:[...R,'extension:proposal-read','extension:proposal-write','extension:participant-write','extension:gallery-read']},
+ 'fake-op7-wild-000007':{id:7,ab:['*']},
  'fake-op99-read-00004':{id:99,ab:R},
  'fake-op7-expd-000005':{id:7,ab:R,exp:'2020-01-01T00:00:00Z'},
  'fake-op7-read-000006':{id:7,ab:R}
 };
-const revoked=new Set(),crmLog=[],logs=[],secrets=[...Object.keys(OPS)];
+const INTERNAL_TOK='fake-internal-crm-read-token-000001';
+const revoked=new Set(),crmLog=[],logs=[],secrets=[...Object.keys(OPS),INTERNAL_TOK];
 const KEY=randomBytes(32).toString('base64');
 const REDIR='https://chatgpt.com/connector_platform_oauth_redirect';
 // The SDK bearer gate also checks expiresAt against the real clock, so start from real time.
@@ -36,6 +38,17 @@ before(async()=>{
   const send=(s,b,ct='application/json')=>{res.writeHead(s,{'Content-Type':ct});res.end(b)};
   if(req.method!=='GET')return send(405,'{}');
   if(u.pathname==='/health/live')return send(200,JSON.stringify({status:'ok'}));
+  if(u.pathname.startsWith('/api/orders/')||u.pathname.startsWith('/api/reports/')){
+   if(auth!==INTERNAL_TOK)return send(401,JSON.stringify({message:'Unauthorized'}));
+   const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01',schedule_1:'2026-11-10 10:00:00',items:[{id:1}],participants:[{name:'Crianca Ficticia'}],summary:{total:450,received:200,remaining:250}};
+   if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder]}));
+   if(u.pathname==='/api/orders/11111111-aaaa-4111-8111-000000000101/detail')return send(200,JSON.stringify({data:sampleOrder}));
+   if(u.pathname==='/api/reports/sold-items')return send(200,JSON.stringify({data:[{item:'Mini Sessao Natal',reference:'8008',year:2026,month:10,solds:12}]}));
+   if(u.pathname==='/api/reports/christmas-orders-without-participants')return send(200,JSON.stringify([{order_uuid:'11111111-aaaa-4111-8111-000000000101',customer_name:'Cliente Ficticia 7',customer_whatsapp:'48999990001',current_status:'payment_confirmed',participants:0}]));
+   if(u.pathname==='/api/reports/customers-with-christmas-orders')return send(200,JSON.stringify([{name:'Cliente Ficticia 7',whatsapp:'48999990001',email:'ficticia@example.test'}]));
+   if(u.pathname==='/api/reports/customers-without-christmas-orders')return send(200,JSON.stringify([{name:'Cliente Ficticia 9',whatsapp:'48999990002',email:'ficticia9@example.test'}]));
+   return send(404,'{}');
+  }
   if(!u.pathname.startsWith('/api/v1/extension/'))return send(404,'{}');
   const op=OPS[tok];
   if(!op||revoked.has(tok))return send(401,JSON.stringify({message:'Unauthenticated.'}));
@@ -129,13 +142,16 @@ test('403 without scope or for an operator no longer authorized',async()=>{
  assert.equal((await rawMcp(onlyNine,tokens.access_token)).status,403);
 });
 
-test('authorization refuses write-capable, non-allowlisted, expired and revoked Sanctum tokens',async()=>{
+test('authorization accepts standard ExtensionAbilities::operator() token by default, refuses wildcard/non-allowlisted/expired, and honors EVYD_STRICT_READONLY_TOKEN=1',async()=>{
  const g=gw();
- const w=await connect(g,'fake-op7-write-00003');
- assert.equal(w.denied,403);assert.match(w.html,/escrita/);
+ const std=await connect(g,'fake-op7-write-00003');
+ assert.ok(std.tokens?.access_token,'standard operator token with ExtensionAbilities::operator() is accepted');
+ assert.equal((await connect(g,'fake-op7-wild-000007')).denied,403,'wildcard token is always refused');
  assert.equal((await connect(g,'fake-op99-read-00004')).denied,403);
  assert.equal((await connect(g,'fake-op7-expd-000005')).denied,403);
  assert.equal((await connect(g,'fake-op-unknown-0007')).denied,403);
+ const strictGw=gw({EVYD_STRICT_READONLY_TOKEN:'1'});
+ assert.equal((await connect(strictGw,'fake-op7-write-00003')).denied,403,'EVYD_STRICT_READONLY_TOKEN=1 refuses write-capable tokens');
 });
 
 test('PKCE, single-use code, redirect binding and registration allowlist',async()=>{
@@ -177,6 +193,31 @@ test('authorized read-only operator: exact tool set, customer lookup and Cliente
   const cap=await client.callTool({name:'crm_capacidades',arguments:{}});
   assert.equal(cap.structuredContent.mode,'LIVE_READ_ONLY_OAUTH');
   assert.equal(cap.structuredContent.tools.find(t=>t.tool==='crm_previa_proposta_natal').state,'NOT_AVAILABLE');
+ }finally{await client.close()}
+});
+
+test('direct CRM read integration (replaces api.evydencia.com.br): orders and Natal reports without PII leaks',async()=>{
+ const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK});
+ const {tokens}=await connect(g,'fake-op7-write-00003');
+ const client=await mcp(g,tokens.access_token);
+ try{
+  const {tools}=await client.listTools();
+  assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES].sort());
+  const s=await client.callTool({name:'crm_pedidos_buscar',arguments:{product_slug:'natal',order_status:'waiting_product_retrieve'}});
+  assert.equal(s.isError,undefined);
+  assert.equal(s.structuredContent.orders.length,1);
+  assert.equal(s.structuredContent.orders[0].remaining_cents,25000);
+  assert.ok(!JSON.stringify(s).includes('Crianca'));
+  const d=await client.callTool({name:'crm_pedido_detalhe',arguments:{uuid:'11111111-aaaa-4111-8111-000000000101'}});
+  assert.equal(d.structuredContent.order.order_id,5001);
+  const si=await client.callTool({name:'crm_relatorio_itens_vendidos',arguments:{inicio:'2026-10-01',fim:'2026-10-25',slug:'natal'}});
+  assert.equal(si.structuredContent.items[0].solds,12);
+  const np=await client.callTool({name:'crm_relatorio_natal_sem_participantes',arguments:{limite:10}});
+  assert.equal(np.structuredContent.orders[0].customer_phone_masked,'(**) *****-0001');
+  assert.ok(!JSON.stringify(np).includes('48999990001'));
+  const cn=await client.callTool({name:'crm_relatorio_clientes_natal',arguments:{comprou_natal:true,busca_nome:'Ficticia'}});
+  assert.equal(cn.structuredContent.customers[0].phone_masked,'(**) *****-0001');
+  assert.ok(!JSON.stringify(cn).includes('ficticia@example.test')&&!JSON.stringify(cn).includes('48999990001'));
  }finally{await client.close()}
 });
 
