@@ -1,6 +1,6 @@
-// LIVE read-only gateway: OAuth 2.1 Authorization Server + Resource Server token verifier.
-// Stateless by design: client registrations, authorization codes and tokens are AES-256-GCM
-// sealed with sub-keys derived (HKDF) from EVYD_GATEWAY_KEY. Nothing is persisted on disk.
+// LIVE operator gateway: OAuth 2.1 Authorization Server + Resource Server token verifier.
+// Stateless CRM OAuth by design: client registrations, authorization codes and tokens are AES-256-GCM
+// sealed with sub-keys derived (HKDF) from EVYD_GATEWAY_KEY.
 // Operator identity = the operator's OWN Sanctum token, validated against
 // GET /api/v1/extension/bootstrap. Wildcard or malformed tokens are refused; standard
 // ExtensionAbilities::operator() tokens are accepted unless EVYD_STRICT_READONLY_TOKEN=1.
@@ -13,13 +13,21 @@ import {assertOperatorAbilities} from './live-abilities.mjs';
 export const GATEWAY_SCOPE='crm.read';
 // ChatGPT uses the stable redirect when the AS advertises RFC 9207 `iss`; otherwise a per-connection callback.
 const DEFAULT_REDIRECTS='https://chatgpt.com/connector_platform_oauth_redirect,https://chatgpt.com/connector/oauth/*';
-// Unauthenticated shared CRM env vars must never bypass per-operator OAuth in this process.
+const DEFAULT_ZAPI_MCP_URL='https://mcp.z-api.io/mcp';
+// Unauthenticated shared CRM/Z-API env vars must never bypass per-operator OAuth in this process.
 const FORBIDDEN_ENV=['CRM_READ_TOKEN','CRM_TOKEN','CRM_WRITE_TOKEN','EVYDENCIA_LEGACY_TOKEN','ZAPI_TOKEN','ZAPI_INSTANCE','ZAPI_CLIENT_TOKEN'];
 const isLocal=h=>['localhost','127.0.0.1','[::1]'].includes(h);
 const fail=c=>{throw Error('gateway_config_'+c)};
 const int=(v,d,min,max)=>{if(v===undefined||v==='')return d;const n=Number(v);if(!Number.isInteger(n)||n<min||n>max)fail('invalid_number');return n};
 const norm=s=>String(s).replace(/#.*$/,'').replace(/\/$/,'');
 const safeEq=(a,b)=>{const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y)};
+
+function parseSecureEndpoint(raw,code){
+ let u;try{u=new URL(raw)}catch{fail(code)}
+ if(u.username||u.password||u.search||u.hash)fail(code);
+ if(u.protocol!=='https:'&&!(u.protocol==='http:'&&isLocal(u.hostname)))fail(code+'_https');
+ return u;
+}
 
 export function gatewayConfig(env){
  if(env.EVYD_MOCK_MODE==='1')fail('mock_mode_forbidden');
@@ -32,14 +40,76 @@ export function gatewayConfig(env){
  if(key.length<32)fail('key_too_short');
  const ops=String(env.EVYD_ALLOWED_OPERATOR_IDS||'').split(',').map(s=>s.trim()).filter(Boolean);
  if(!ops.length||ops.some(x=>!/^[1-9]\d{0,9}$/.test(x)))fail('operator_allowlist');
+ const allowedOperators=new Set(ops);
  const redirects=String(env.EVYD_OAUTH_REDIRECT_URIS||DEFAULT_REDIRECTS).split(',').map(s=>s.trim()).filter(Boolean);
  for(const r of redirects){let u;try{u=new URL(r.replace(/\*$/,'x'))}catch{fail('redirect_allowlist')}if(u.protocol!=='https:'&&!isLocal(u.hostname))fail('redirect_allowlist')}
  const internalReadToken=typeof env.EVYD_INTERNAL_READ_TOKEN==='string'&&env.EVYD_INTERNAL_READ_TOKEN.trim().length>=12?env.EVYD_INTERNAL_READ_TOKEN.trim():null;
+ const zapiEnabled=env.EVYD_ZAPI_MCP_ENABLED==='1';
+ let zapiMcpUrl=DEFAULT_ZAPI_MCP_URL,zapiIssuer='https://mcp.z-api.io',zapiStorePath=null,zapiRestStatus=null;
+ const zapiDiagInstances=[];
+ const parseRestBase=raw=>{
+  const u=parseSecureEndpoint(raw||'https://api.z-api.io','zapi_rest_base_url');
+  if(!['/',''].includes(u.pathname))fail('zapi_rest_base_url');
+  const localAllowed=pub.protocol==='http:'&&isLocal(pub.hostname)&&isLocal(u.hostname);
+  if(u.origin!=='https://api.z-api.io'&&!localAllowed)fail('zapi_rest_base_url');
+  return u.origin;
+ };
+ const zapiRestBaseUrl=parseRestBase(env.EVYD_ZAPI_DIAG_BASE_URL||env.EVYD_ZAPI_REST_BASE_URL||'https://api.z-api.io');
+ const pushDiagInstance=(rawEntry,sourceCode)=>{
+  const restOp=String(rawEntry?.operatorId||'').trim();
+  const alias=String(rawEntry?.alias||'principal').trim();
+  const inst=String(rawEntry?.instanceId||'').trim();
+  const tok=String(rawEntry?.token||'').trim();
+  const ctok=String(rawEntry?.clientToken||'').trim();
+  const label=typeof rawEntry?.label==='string'&&rawEntry.label.trim()?rawEntry.label.trim().slice(0,80):null;
+  if(!restOp||!allowedOperators.has(restOp)||!/^[a-zA-Z0-9_-]{1,40}$/.test(alias)||!inst||!tok||!ctok||/\s/.test(inst)||/\s/.test(tok)||/\s/.test(ctok))fail(sourceCode);
+  if(zapiDiagInstances.some(x=>x.operatorId===restOp&&x.alias===alias))fail(sourceCode);
+  const frozen=Object.freeze({alias,label,operatorId:restOp,baseUrl:zapiRestBaseUrl,instanceId:inst,token:tok,clientToken:ctok});
+  zapiDiagInstances.push(frozen);
+  if(!zapiRestStatus)zapiRestStatus=frozen;
+ };
+ if(zapiEnabled){
+  const mcpU=parseSecureEndpoint(env.EVYD_ZAPI_MCP_URL||DEFAULT_ZAPI_MCP_URL,'zapi_mcp_url');
+  zapiMcpUrl=mcpU.toString();
+  const issU=parseSecureEndpoint(env.EVYD_ZAPI_OAUTH_ISSUER||mcpU.origin,'zapi_oauth_issuer');
+  if(!['/',''].includes(issU.pathname))fail('zapi_oauth_issuer');
+  zapiIssuer=issU.origin;
+  zapiStorePath=typeof env.EVYD_ZAPI_STORE_PATH==='string'?env.EVYD_ZAPI_STORE_PATH.trim():'';
+  if(!zapiStorePath||zapiStorePath.length<4)fail('zapi_store_path');
+ }
+ const hasSingleDiag=Boolean(
+  env.EVYD_ZAPI_DIAG_INSTANCE_ID||env.EVYD_ZAPI_DIAG_INSTANCE_TOKEN||env.EVYD_ZAPI_DIAG_CLIENT_TOKEN||
+  env.EVYD_ZAPI_REST_INSTANCE_ID||env.EVYD_ZAPI_REST_TOKEN||env.EVYD_ZAPI_REST_CLIENT_TOKEN
+ );
+ if(hasSingleDiag){
+  pushDiagInstance({
+   alias:env.EVYD_ZAPI_DIAG_ALIAS||'principal',
+   label:env.EVYD_ZAPI_DIAG_LABEL||null,
+   operatorId:env.EVYD_ZAPI_DIAG_OPERATOR_ID||env.EVYD_ZAPI_REST_OPERATOR_ID,
+   instanceId:env.EVYD_ZAPI_DIAG_INSTANCE_ID||env.EVYD_ZAPI_REST_INSTANCE_ID,
+   token:env.EVYD_ZAPI_DIAG_INSTANCE_TOKEN||env.EVYD_ZAPI_REST_TOKEN,
+   clientToken:env.EVYD_ZAPI_DIAG_CLIENT_TOKEN||env.EVYD_ZAPI_REST_CLIENT_TOKEN
+  },'zapi_rest_status');
+ }
+ if(env.EVYD_ZAPI_DIAG_INSTANCES_JSON){
+  let parsed;try{parsed=JSON.parse(env.EVYD_ZAPI_DIAG_INSTANCES_JSON)}catch{fail('zapi_diag_instances')}
+  if(!Array.isArray(parsed)||parsed.length===0||parsed.length>20)fail('zapi_diag_instances');
+  for(const item of parsed)pushDiagInstance(item,'zapi_diag_instances');
+ }
+ const rawObsPath=typeof env.EVYD_ZAPI_DIAG_OBS_PATH==='string'?env.EVYD_ZAPI_DIAG_OBS_PATH.trim():'';
+ const zapiDiagObsPath=rawObsPath||(zapiStorePath?zapiStorePath.replace(/\.json$/i,'')+'.diag-obs.json':null);
  return Object.freeze({
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
-  allowedOperators:new Set(ops),redirects,internalReadToken,
+  allowedOperators,redirects,internalReadToken,
   operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
+  zapiEnabled,zapiMcpUrl,zapiIssuer,zapiStorePath,zapiRestStatus,
+  zapiDiagEnabled:Boolean(zapiEnabled||zapiDiagInstances.length>0),
+  zapiDiagInstances:Object.freeze(zapiDiagInstances),
+  zapiDiagObsPath,
+  zapiTimeoutMs:int(env.EVYD_ZAPI_TIMEOUT_MS,15000,100,60000),
+  zapiDiagTimeoutMs:int(env.EVYD_ZAPI_DIAG_TIMEOUT_MS,8000,100,30000),
+  zapiSessionIdleMs:int(env.EVYD_ZAPI_SESSION_IDLE_S,600,5,86400)*1000,
   crmTimeoutMs:int(env.CRM_REQUEST_TIMEOUT_MS,6000,100,30000),
   accessTtl:int(env.EVYD_ACCESS_TOKEN_TTL_S,3600,60,86400),
   refreshTtl:int(env.EVYD_REFRESH_TOKEN_TTL_S,2592000,300,7776000),
@@ -62,7 +132,7 @@ export function redirectAllowed(uri,allow){
 
 export function deriveKeys(master){
  const d=info=>Buffer.from(hkdfSync('sha256',master,Buffer.from('evydencia-crm-mcp-gateway'),Buffer.from(info),32));
- return {aead:d('aead-v1'),mac:d('mac-v1'),log:d('log-v1')};
+ return {aead:d('aead-v1'),mac:d('mac-v1'),log:d('log-v1'),zapiStore:d('zapi-store-v1'),zapiDiagObs:d('zapi-diag-obs-v1')};
 }
 
 // AAD = token type, so a code can never be replayed as an access token and vice versa.
@@ -153,7 +223,12 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
 
  function page({txn,ru,error,status=200}){
   const u=new URL(ru);
-  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Evydência CRM — autorizar ChatGPT</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#1b1b1b}input,button{font:inherit;padding:.6rem;width:100%;box-sizing:border-box;margin:.4rem 0}.e{color:#a40000}.n{font-size:.9rem;color:#555}</style></head><body><h1>Conectar ChatGPT ao Evydência CRM</h1><p>Acesso <strong>somente leitura</strong> no conector: cliente por telefone, Cliente 360, pedidos e dados públicos. Nenhum envio, agendamento ou alteração é executado pelo MCP.</p><p class="n">Retorno para: ${esc(u.host)}</p>${error?`<p class="e" role="alert">${esc(error)}</p>`:''}<form method="post" action="/authorize" autocomplete="off"><input type="hidden" name="txn" value="${esc(txn)}"><label for="t">Seu token pessoal do CRM (Sanctum)</label><input id="t" name="crm_token" type="password" required minlength="12" maxlength="512" autocomplete="off"><button name="action" value="approve" type="submit">Autorizar leitura</button><button name="action" value="deny" type="submit" formnovalidate>Cancelar</button></form><p class="n">O token Sanctum permanece cifrado no gateway e não é exposto ao ChatGPT.</p></body></html>`;
+  const fullMode=Boolean(cfg.operatorFullCrm||cfg.zapiEnabled);
+  const desc=fullMode
+   ?`Acesso de <strong>operador autenticado</strong> no conector: consultas completas do CRM, Cliente 360, relatórios${cfg.operatorFullCrm?', proposta Natal 2026':''}${cfg.zapiEnabled?' e integração opcional com instância Z-API MCP autorizada separadamente por operador':''}.`
+   :'Acesso <strong>somente leitura</strong> no conector: cliente por telefone, Cliente 360, pedidos e dados públicos. Nenhum envio, agendamento ou alteração é executado pelo MCP.';
+  const btn=fullMode?'Autorizar operador':'Autorizar leitura';
+  const html=`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Evydência CRM — autorizar ChatGPT</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#1b1b1b}input,button{font:inherit;padding:.6rem;width:100%;box-sizing:border-box;margin:.4rem 0}.e{color:#a40000}.n{font-size:.9rem;color:#555}</style></head><body><h1>Conectar ChatGPT ao Evydência CRM</h1><p>${desc}</p><p class="n">Retorno para: ${esc(u.host)}</p>${error?`<p class="e" role="alert">${esc(error)}</p>`:''}<form method="post" action="/authorize" autocomplete="off"><input type="hidden" name="txn" value="${esc(txn)}"><label for="t">Seu token pessoal do CRM (Sanctum)</label><input id="t" name="crm_token" type="password" required minlength="12" maxlength="512" autocomplete="off"><button name="action" value="approve" type="submit">${btn}</button><button name="action" value="deny" type="submit" formnovalidate>Cancelar</button></form><p class="n">O token Sanctum permanece cifrado no gateway e não é exposto ao ChatGPT.</p></body></html>`;
   // form-action must also allow the post-submit redirect origin (Chromium enforces CSP on redirects).
   return new Response(html,{status,headers:htmlHeaders(' '+u.origin)});
  }
