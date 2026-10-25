@@ -1749,6 +1749,24 @@ if ($wantSec('financeiro_caixa')) {
     }
     usort($openMethodsList, static fn ($a, $b) => $b['open_cents'] <=> $a['open_cents']);
 
+    // The CRM aging report may sum orders_installments.total on payment_at, while
+    // canonical cash uses payment_total. Mark differences explicitly; never infer lost cash.
+    $agingDataForMcp = $svc->getFinancialAgingData($selectedYear, false, $ctx);
+    $agingReconciliationForMcp = ['available' => false, 'reason' => 'comparison_only_supported_for_2026'];
+    if ($selectedYear === 2026 && is_array($agingDataForMcp) && isset($agingDataForMcp['total_paid'])) {
+        $agingPaidCents = nbFloatToCents($agingDataForMcp['total_paid']);
+        $agingDeltaCents = $agingPaidCents - $paidRevenueCents;
+        $agingReconciliationForMcp = [
+            'available' => true,
+            'status' => $agingDeltaCents === 0 ? 'MATCHES_CANONICAL_RECORDED_RECEIPTS' : 'NEEDS_REVIEW_DIFFERENT_PAYMENT_BASIS_OR_SCOPE',
+            'canonical_recorded_received_cents' => $paidRevenueCents,
+            'aging_paid_report_cents' => $agingPaidCents,
+            'difference_cents' => $agingDeltaCents,
+            'bank_statement_integrated' => false,
+            'methodology_note' => 'Aging may sum installment face value (total) for payment_at records; canonical paid uses payment_total. Review installment-by-installment before attributing the difference.',
+        ];
+    }
+
     $out['financeiro_caixa'] = [
         'open_installments_2026' => [
             'orders_with_open_installments_count' => count($openOrderSet),
@@ -1766,7 +1784,8 @@ if ($wantSec('financeiro_caixa')) {
         'effective_paid_methods_2026' => $effectiveMethodsList,
         'financial_situation_2026' => $finSit,
         'cash_audit_conciliation' => $svc->getCashAuditConciliation($selectedYear, $ctx),
-        'financial_aging' => $svc->getFinancialAgingData($selectedYear, false, $ctx),
+        'financial_aging' => $agingDataForMcp,
+        'financial_aging_vs_canonical' => $agingReconciliationForMcp,
         'gateway_health_and_recovery' => $svc->getGatewayHealthAndRecoveryData($selectedYear, false, $ctx),
         'installments_and_pix_analytics' => $svc->getInstallmentsAndPixAnalytics($selectedYear, false, $ctx),
     ];
