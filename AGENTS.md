@@ -21,3 +21,10 @@ Evite planos largos e novas bibliotecas. Execute os validadores como caixas pret
 
 ## Auditoria de contratos de pedidos — regra nova
 Leia docs/AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md apenas quando a tarefa envolver filtros, vendas, status, financeiro ou Cliente 360. As ferramentas crm_pedidos_filtrar_mock, crm_pedido_detalhe_mock, crm_natal_indicadores_mock e crm_filtros_pedidos_mock são SOMENTE mock. Never infer live from the order manager API. O painel CustomerDashboardDTO::mock não é fonte de compras reais.
+
+## Pós-conexão real ChatGPT (somente MOCK)
+- O Tunnel já foi validado em chamada real do ChatGPT. Não recriar plugin, IDs ou perfis automaticamente.
+- Verificar o serviço existente com `node scripts/tunnel-ready.mjs`; não reiniciar se estiver saudável.
+- Stdio suporta apenas uma instância `tunnel-client` por Tunnel ID. Parar a antiga antes de qualquer restart.
+- Manter dados sintéticos e ferramentas WRITE_GATED ausentes. A conexão sem autenticação individual NUNCA recebe dados reais.
+- Consultar `docs/AUDITORIA_FORENSE_TUNNEL_CHATGPT_20261024.md` quando a tarefa for Tunnel/ChatGPT.
