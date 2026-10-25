@@ -1,4 +1,5 @@
 import {readFile,access} from 'node:fs/promises';
+import {inspectMockEnvText} from '../src/mock-safety.mjs';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {resolve,dirname} from 'node:path';
@@ -39,6 +40,7 @@ try{await access(resolve(root,'package-lock.json'));const trackedLock=spawnSync(
  if(process.argv.includes('--strict-lock'))error('package-lock.json missing: run npm install --package-lock-only then commit it');
  else warning('package-lock.json not yet generated; npm install --package-lock-only then commit and prefer npm ci');
 }
+try{const env=await readFile(resolve(root,'.env'),'utf8');const safety=inspectMockEnvText(env);if(!safety.ok)error('Unsafe local .env: '+safety.issues.join(','));else ok('Local .env is MOCK-only and zero-token')}catch(e){if(e?.code==='ENOENT')ok('No local .env: CI isolated mode');else error('Local .env cannot be validated')}
 const tracked=spawnSync('git',['ls-files','--error-unmatch','.env'],{cwd:root,encoding:'utf8'});
 if(tracked.status===0)error('Real .env is tracked');else ok('No .env tracked by git');
 try{

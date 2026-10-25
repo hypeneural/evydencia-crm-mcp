@@ -1,8 +1,12 @@
 param()
 $ErrorActionPreference = 'Stop'
-Set-Location (Resolve-Path (Join-Path $PSScriptRoot '..'))
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+Set-Location $root
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'BLOCKED: Node.js >= 22 necessário.' }
 if (Test-Path '.env') {
-    Write-Host '.env já existe: preservado. Revise manualmente NODE_ENV/EVYD_MOCK_MODE/CRM_READ_TOKEN.'
+    node scripts/check-mock-env.mjs --require
+    if ($LASTEXITCODE -ne 0) { throw 'BLOCKED: .env existente NAO e seguro para MOCK. Revise manualmente, sem revelar segredos.' }
+    Write-Host 'MOCK_ENV_OK: arquivo local já existente e validado. Nenhuma alteração.'
     exit 0
 }
 $lines = @(
@@ -13,5 +17,7 @@ $lines = @(
     'CRM_READ_TOKEN=',
     'CRM_REQUEST_TIMEOUT_MS=7000'
 )
-[System.IO.File]::WriteAllLines((Join-Path (Get-Location) '.env'), $lines, [System.Text.UTF8Encoding]::new($false))
-Write-Host '.env local criado em modo MOCK, sem token e sem chamadas CRM. NUNCA versionar.'
+[System.IO.File]::WriteAllLines((Join-Path $root '.env'), $lines, [System.Text.UTF8Encoding]::new($false))
+node scripts/check-mock-env.mjs --require
+if ($LASTEXITCODE -ne 0) { throw 'BLOCKED: erro ao gerar .env MOCK.' }
+Write-Host 'MOCK_ENV_CREATED: dados sinteticos, sem acesso ao CRM. Nunca versionar .env.'
