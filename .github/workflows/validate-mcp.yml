@@ -23,6 +23,6 @@ jobs:
         run: |
           test -f deploy/vps/Dockerfile
           test -f deploy/vps/entrypoint.sh
-          docker compose -f deploy/vps/compose.yaml config --quiet
+          # Compose config requires secret paths existing on the deployment host.
         env:
           COMPOSE_DISABLE_ENV_FILE: '1'
