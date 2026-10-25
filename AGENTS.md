@@ -1,45 +1,20 @@
-# Evydência CRM MCP — contrato operacional do agente (Antigravity)
+# Evydência CRM MCP — instruções Antigravity Flash
 
-**Workspace permitido:** apenas hypeneural/evydencia-crm-mcp.
-**Workspace proibido:** hypeneural/evydencia-crm (somente leitura para conferir API).
-**Modo atual:** MOCK + consultas GET e POST preview estritamente permitidos. Nenhum envio real.
-**Modelo local:** Gemini 3.8 Flash; use esforço High para auditorias de segurança/contrato e Medium apenas para correções isoladas.
+## Começo rápido
+1. Confira `git status --short`; preserve alterações locais.
+2. Abra `docs/ONE_COMMAND.md`.
+3. Execute `.\scripts\go.ps1`.
+4. Registre o resultado de doctor, test, smoke e conversation smoke.
+5. Se houver erro, corrija uma causa por vez e reexecute `npm run validate:local`.
 
-## Ordem de verdade (sem inferência)
-1. Implementação e testes do CRM Laravel no HEAD comprovado; rotas e scopes autorizados.
-2. Contratos OpenAPI em contracts/ e fixtures auditadas.
-3. Código deste MCP e testes.
-4. Docs. Se faltar fonte: marcar UNVERIFIED, não criar endpoint/tool live.
+## Escopo
+Somente o repositório MCP. CRM Laravel é referência de leitura, nunca modifique o CRM. Não executar mensagens reais, Z-API, /proposals/schedule nem /abort. Nada de segredos ou dados reais em fixtures (o GitHub está público). Nunca confundir mock:true com dados da produção.
 
-## Ciclo obrigatório (uma hipótese e um patch pequeno)
-1. git status --short; git rev-parse HEAD; ler somente arquivos relevantes.
-2. Consultar docs/CAPABILITY_MATRIX.md; identificar estado LIVE_PUBLIC, LIVE_EXTENSION, MOCK_ONLY, WRITE_GATED ou BLOCKED.
-3. Executar node scripts/doctor.mjs e testes atuais para obter baseline.
-4. Alterar no máximo 3 arquivos por ciclo de correção com testes negativos. Não remover assert para ficar verde.
-5. npm run validate:local (doctor, syntax, unit, stdio smoke e conversation smoke).
-6. Anotar comando, exit code, evidência, diff e risco. Nada de 'funcionou' sem logs.
-7. Publicação, edição de .env, CRM ou mudança de autorização exigem aprovação humana. Verificar hooks via /hooks.
+## Fonte de verdade
+- `docs/CAPABILITY_MATRIX.md` separa ferramentas reais, mock e bloqueadas.
+- `docs/CONTRATOS_CRM.md` registra rotas verificadas.
+- `docs/CONVERSATION_PLAYBOOK.md` contém perguntas simuladas.
+- `docs/OPENAI_PLUGIN_DEPLOYMENT.md` explica o ChatGPT e o Tunnel.
 
-## Nunca
-- Chamar Z-API, /proposals/schedule, /abort, API manager SingleAuthentication ou SQL.
-- Registrar dados reais (o repositório GitHub é público).
-- Assumir que sessão de voz significa autorização para enviar.
-- Converter OpenAPI para expor endpoints indiscriminadamente.
-- Declarar MOCK de estatística/agenda/busca por nome como dados reais.
-- Instalar plataforma alternativa MCP sem comparar SDK oficial e aprovar PR.
-- Publicar Streamable HTTP sem OAuth individual e proteção de secrets.
-
-## Primeiro teste seguro
-PowerShell: .\scripts\bootstrap-mock.ps1; .\scripts\validate.ps1.
-Depois npm run conversation:smoke, inspecionar docs/CONVERSATION_PLAYBOOK.md.
-Voz/Textos são ambas entradas MCP; qualquer pedido de enviar por voz vai APENAS simular em desenvolvimento.
-
-## Skills (invoque a necessária, uma de cada vez)
-- /crm-mcp-preflight
-- /crm-mcp-security-audit
-- /crm-mcp-contract-parity
-- /crm-mcp-conversation-harness
-- /crm-mcp-capability-audit
-- /crm-mcp-chatgpt-connect
-- /crm-mcp-proposal-design (somente planejamento)
-Leia docs/ANTIGRAVITY_LOCAL.md, docs/CAPABILITY_MATRIX.md e docs/CONVERSATION_PLAYBOOK.md antes da execução.
+## Limites do modelo
+Evite planos largos e novas bibliotecas. Execute os validadores como caixas pretas. Um bug, um patch, um teste. Só declare GO_LOCAL_MOCK quando os gates passarem; GO_CHATGPT_MOCK exige ferramenta chamada de fato no ChatGPT. Hooks são barreira adicional, não sandbox. Consulte skills específicas conforme necessário.
