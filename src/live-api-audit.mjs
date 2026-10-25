@@ -135,7 +135,7 @@ export function legacyReadClient({baseUrl,token,allowPrivilegedGet=false,fetchFn
  }
  return {get};
 }
-export async function auditExtension({baseUrl,token,action='bootstrap',phoneValue,consent=false,previewConsent=false,fetchFn=fetch}){
+export async function auditExtension({baseUrl,token,action='bootstrap',phoneValue,consent=false,previewConsent=false,publicDate,fetchFn=fetch}){
  if(!['bootstrap','customer','history','preview','status','campaign','availability'].includes(action))errors('unknown_action');
  if(['customer','history','preview'].includes(action)&&!consent)errors('customer_probe_consent_required');
  if(action==='preview'&&!previewConsent)errors('preview_probe_consent_required');
@@ -149,7 +149,7 @@ export async function auditExtension({baseUrl,token,action='bootstrap',phoneValu
   case 'preview':result=await client.preview(phone(phoneValue));break;
   case 'status':result=await client.status();break;
   case 'campaign':result=await client.campaign('natal');break;
-  case 'availability':result=await client.availability('natal','ho-ho-ho',day('2026-10-25'),day('2026-10-25'));break;
+  case 'availability':if(!publicDate)errors('date_required');result=await client.availability('natal','ho-ho-ho',day(publicDate),day(publicDate));break;
  }
  const abilities=action==='bootstrap'?result.token?.abilities:[];
  return {mode:'SANCTUM_EXTENSION',action,verified_contract:true,structure:shapeOnly(result),
