@@ -1,6 +1,6 @@
 {
   "name": "evydencia-crm-mcp",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Servidor MCP intermediário privado para API do Evydência CRM",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node --env-file=.env scripts/start-mock.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/core.mjs && node --check src/mock.mjs && node --check src/server.mjs && node --check scripts/smoke.mjs && node --check src/capabilities.mjs && node --check src/mock-business.mjs && node --check scripts/antigravity-hook.mjs && node --check scripts/session-start.mjs && node --check scripts/doctor.mjs && node --check scripts/conversation-smoke.mjs && node --check src/mock-safety.mjs && node --check scripts/check-mock-env.mjs && node --check scripts/start-mock.mjs && node --check scripts/startup-smoke.mjs",
+    "check": "node --check src/core.mjs && node --check src/mock.mjs && node --check src/server.mjs && node --check scripts/smoke.mjs && node --check src/capabilities.mjs && node --check src/mock-business.mjs && node --check scripts/antigravity-hook.mjs && node --check scripts/session-start.mjs && node --check scripts/doctor.mjs && node --check scripts/conversation-smoke.mjs && node --check src/mock-safety.mjs && node --check scripts/check-mock-env.mjs && node --check scripts/start-mock.mjs && node --check scripts/startup-smoke.mjs && node --check src/mock-orders.mjs",
     "smoke": "node scripts/smoke.mjs",
     "conversation:smoke": "node scripts/conversation-smoke.mjs",
     "doctor": "node scripts/doctor.mjs",

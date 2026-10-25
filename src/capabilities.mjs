@@ -10,6 +10,10 @@ const defs=[
  {tool:'crm_natal_resumo',capability:'estatisticas_natal',live:'MOCK_ONLY',source:'fixture',production_gap:'API read-only Sanctum de estatísticas ainda não existe'},
  {tool:'crm_agenda_hoje',capability:'agenda_privada',live:'MOCK_ONLY',source:'fixture',production_gap:'API read-only Sanctum para agenda operacional ainda não existe'},
  {tool:'crm_buscar_cliente_nome',capability:'buscar_cliente_por_nome',live:'MOCK_ONLY',source:'fixture',production_gap:'API read-only Sanctum de busca por nome ainda não existe'},
+ {tool:'crm_natal_indicadores_mock',capability:'kpis_natal_forense',live:'MOCK_ONLY',source:'fixture',production_gap:'NatalStatisticsController é endpoint gerencial, não Extension API'},
+ {tool:'crm_pedidos_filtrar_mock',capability:'filtros_pedidos_gerenciais',live:'MOCK_ONLY',source:'fixture',production_gap:'OrderListRequest é interface gerencial, não rota Extension Sanctum'},
+ {tool:'crm_pedido_detalhe_mock',capability:'detalhe_pedido',live:'MOCK_ONLY',source:'fixture',production_gap:'OrderResource e detalhe gerencial não expostos por Extension API'},
+ {tool:'crm_filtros_pedidos_mock',capability:'contratos_filtro_pedido',live:'MOCK_ONLY',source:'fixture',production_gap:'Descrição de contratos; não concede acesso aos endpoints de manager'},
  {tool:'crm_simular_agendamento_proposta_natal',capability:'treino_confirmacao_proposta',live:'MOCK_ONLY',source:'fixture',production_gap:'Simulação não implementa journal de envio'},
  {tool:'crm_agendar_proposta_natal',capability:'envio_real',live:'WRITE_GATED',source:'/api/v1/extension/proposals/schedule',production_gap:'Exige OAuth, confirmação humana e journal durável'}
 ];
