@@ -14,14 +14,15 @@
     "smoke": "node scripts/smoke.mjs",
     "conversation:smoke": "node scripts/conversation-smoke.mjs",
     "doctor": "node scripts/doctor.mjs",
-    "validate:local": "npm run doctor && npm run check && npm test && npm run smoke && npm run conversation:smoke && npm run startup:smoke",
+    "validate:local": "npm run doctor && npm run check && npm test && npm run smoke && npm run conversation:smoke && npm run startup:smoke && npm run vps:preflight",
     "env:check": "node scripts/check-mock-env.mjs --require",
     "startup:smoke": "node scripts/startup-smoke.mjs",
     "snapshot:inspect": "node scripts/check-private-snapshot.mjs",
     "history:import": "node scripts/import-legacy-history.mjs",
     "crm:json:inspect": "node scripts/live-api-inspect.mjs",
     "live:read:check": "node scripts/verify-live-read.mjs",
-    "legacy:get:check": "node scripts/verify-legacy-get.mjs"
+    "legacy:get:check": "node scripts/verify-legacy-get.mjs",
+    "vps:preflight": "node scripts/verify-vps-deployment.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
