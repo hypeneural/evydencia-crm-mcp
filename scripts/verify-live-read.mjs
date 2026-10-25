@@ -1,6 +1,7 @@
 // Operator-only isolated CLI: access real Sanctum read endpoints without exposing JSON payloads.
 // Run ONLY in private Windows terminal after authorization; stdout is metadata only.
 import {crmClient} from '../src/core.mjs';
+import {assertReadOnlyAbilities} from '../src/live-abilities.mjs';
 import {validateRealContract} from '../src/live-contracts.mjs';
 import {readFile} from 'node:fs/promises';
 const args=Object.fromEntries(process.argv.slice(2).map(x=>{const a=/^--([a-z-]+)=(.*)$/.exec(x);if(!a)throw Error('invalid_arguments');return [a[1],a[2]]}));
@@ -15,12 +16,7 @@ const client=crmClient({baseUrl:process.env.CRM_BASE_URL,token:key,privateEnable
 const modeToMethod={'bootstrap':'bootstrap','customer-context':'customer','customer-360':'history','proposal-preview':'preview'};
 try{
  const bootstrap=await client.bootstrap();
- const abilities=bootstrap.token?.abilities;
- const allowed=new Set(['extension:bootstrap','extension:customer-read','extension:proposal-read']);
- if(!Array.isArray(abilities)||abilities.length===0||abilities.some(x=>!allowed.has(x))||
-    !abilities.includes('extension:bootstrap')||
-    (mode!=='bootstrap'&&!abilities.includes(mode==='proposal-preview'?'extension:proposal-read':'extension:customer-read')))
-   throw Error('crm_overprivileged_or_missing_scope');
+ assertReadOnlyAbilities(bootstrap.token?.abilities,mode);
  const result=mode==='bootstrap'?bootstrap:mode==='customer-context'?await client.customer(args.phone):
   mode==='customer-360'?await client.history(args.phone,1):await client.preview(args.phone,args.name);
  // The client projections already enforce minimal fields, which are checked without persisting payload.
@@ -33,7 +29,7 @@ try{
   page_size:mode==='customer-360'?result.orders?.length??0:undefined,
   read_only:mode!=='proposal-preview',preview_may_probe_worker:mode==='proposal-preview'}));
 }catch(e){
- const allowed=/^(crm_http_(401|403|404|409|422|429|500|502|503|504)|crm_contract_invalid|crm_url_invalid|crm_https_required|invalid_)/;
+ const allowed=/^(crm_http_(401|403|404|409|422|429|500|502|503|504)|crm_contract_invalid|crm_url_invalid|crm_https_required|crm_overprivileged_or_missing_scope|invalid_)/;
  console.error('LIVE_READ_CHECK_BLOCKED '+(allowed.test(e.message)?e.message:'crm_unavailable'));
  process.exitCode=1;
 }finally{key=''}
