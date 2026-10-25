@@ -38,6 +38,8 @@ const MISSING_FIELD_LABELS={
  phone:'Telefone',zipcode:'CEP',street:'Rua',district:'Bairro',city:'Cidade',state:'UF'
 };
 
+const ADULT_KINSHIPS=new Set(['mae','pai','vo','avo','esposo (a)','marido','esposa','titular']);
+
 const fail=x=>{throw Error('legacy_read_'+x)};
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(x);
 const name=x=>{if(typeof x!=='string'||x.trim().length<2||x.trim().length>100||/[\x00-\x1f<>]/.test(x))fail('invalid_name');return x.trim()};
@@ -45,6 +47,7 @@ const money=x=>{const n=typeof x==='number'?x:(typeof x==='string'&&x.trim()!=='
 const reais=cents=>typeof cents==='number'&&Number.isFinite(cents)?Math.round(cents)/100:null;
 const value=x=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
 const maskPhone=x=>{if(typeof x!=='string')return null;const d=x.replace(/\D/g,'');return d.length>=4?'(**) *****-'+d.slice(-4):null};
+const normAscii=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 
 const toBrt=iso=>{
  if(typeof iso!=='string'||!iso.trim()||iso.startsWith('0000-00-00'))return null;
@@ -59,6 +62,17 @@ const todayBrtYmd=()=>{
  const parts=new Intl.DateTimeFormat('sv-SE',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
  const m=Object.fromEntries(parts.map(p=>[p.type,p.value]));
  return `${m.year}-${m.month}-${m.day}`;
+};
+
+const yearsAtYmd=(birthYmd,refYmd)=>{
+ if(typeof birthYmd!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(birthYmd)||birthYmd.startsWith('0000-'))return null;
+ if(typeof refYmd!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(refYmd))return null;
+ const [by,bm,bd]=birthYmd.split('-').map(Number);
+ const [ry,rm,rd]=refYmd.split('-').map(Number);
+ if(!Number.isFinite(by)||!Number.isFinite(ry)||Date.UTC(by,bm-1,bd)>Date.UTC(ry,rm-1,rd))return null;
+ let y=ry-by;
+ if(rm<bm||(rm===bm&&rd<bd))y--;
+ return y;
 };
 
 export function customerInitials(rawName){
@@ -86,6 +100,149 @@ export function humanAgeAt(birthYmd,refYmd){
  if(years>0)out.push(years===1?'1 ano':`${years} anos`);
  if(months>0)out.push(months===1?'1 mês':`${months} meses`);
  return out.join(' e ');
+}
+
+/**
+ * SSRF-safe lightweight HTTP + binary image signature probe for customer avatars.
+ * Never downloads full assets in bulk, never follows redirects to external hosts,
+ * and distinguishes metadata presence (`has_avatar`) from real HTTP accessibility (`asset_accessible`).
+ */
+export async function probeCustomerAvatarAsset(avatar,{fetchFn=fetch,crmBaseUrl='https://evydencia.com',timeoutMs=2500}={}){
+ const av=value(avatar);
+ if(!av.has_avatar||!av.url){
+  return {...av,has_avatar:false,url:null,asset_accessible:false,asset_check_status:'not_checked'};
+ }
+ const checkedAt=new Date().toISOString();
+ let targetUrl,allowedBase;
+ try{
+  targetUrl=new URL(String(av.url));
+  allowedBase=new URL(baseURL(crmBaseUrl));
+ }catch{
+  return {...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{reason:'invalid_avatar_url',checked_at:checkedAt}};
+ }
+ if(targetUrl.username||targetUrl.password){
+  return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'url_credentials_blocked',checked_at:checkedAt}};
+ }
+ const baseIsLoopback=allowedBase.hostname==='127.0.0.1'||allowedBase.hostname==='localhost';
+ // In offline local unit tests (CRM_BASE_URL on 127.0.0.1), never open external internet sockets to evydencia.com.
+ if(baseIsLoopback&&targetUrl.origin==='https://evydencia.com'&&targetUrl.pathname.startsWith('/storage/')&&fetchFn===fetch){
+  return {...av,asset_accessible:null,asset_check_status:'not_checked'};
+ }
+ if(targetUrl.origin!==allowedBase.origin){
+  return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'origin_not_allowlisted',checked_at:checkedAt}};
+ }
+ if(!baseIsLoopback&&targetUrl.protocol!=='https:'){
+  return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'https_required',checked_at:checkedAt}};
+ }
+ if(!targetUrl.pathname.startsWith('/storage/')||targetUrl.pathname.includes('..')){
+  return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'storage_path_required',checked_at:checkedAt}};
+ }
+
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),Math.min(5000,Math.max(400,Number(timeoutMs)||2500)));
+ try{
+  const headRes=await fetchFn(targetUrl,{
+   method:'HEAD',
+   redirect:'manual',
+   signal:controller.signal,
+   headers:{Accept:'image/webp,image/*;q=0.8'}
+  });
+  if(headRes.status>=300&&headRes.status<400){
+   return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:headRes.status,reason:'redirect_blocked',checked_at:checkedAt}};
+  }
+  if(headRes.status===401||headRes.status===403){
+   return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:headRes.status,reason:'http_auth_restricted',checked_at:checkedAt}};
+  }
+  if(!headRes.ok){
+   return {...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{http_status:headRes.status,reason:'http_not_ok',checked_at:checkedAt}};
+  }
+
+  const getRes=await fetchFn(targetUrl,{
+   method:'GET',
+   redirect:'manual',
+   signal:controller.signal,
+   headers:{Range:'bytes=0-31',Accept:'image/webp,image/*;q=0.8'}
+  });
+  if(getRes.status>=300&&getRes.status<400){
+   return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:getRes.status,reason:'redirect_blocked',checked_at:checkedAt}};
+  }
+  if(getRes.status===401||getRes.status===403){
+   return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:getRes.status,reason:'http_auth_restricted',checked_at:checkedAt}};
+  }
+  if(!getRes.ok&&getRes.status!==206){
+   return {...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{http_status:getRes.status,reason:'range_get_failed',checked_at:checkedAt}};
+  }
+
+  let headBytes=Buffer.alloc(0);
+  if(getRes.body&&typeof getRes.body.getReader==='function'){
+   const reader=getRes.body.getReader();
+   const chunks=[];let total=0;
+   try{
+    while(total<32){
+     const {done,value:chunk}=await reader.read();
+     if(done)break;
+     const buf=Buffer.from(chunk);
+     chunks.push(buf);
+     total+=buf.length;
+    }
+    await reader.cancel().catch(()=>{});
+   }finally{
+    try{reader.releaseLock()}catch{}
+   }
+   headBytes=Buffer.concat(chunks).subarray(0,32);
+  }else{
+   const ab=await getRes.arrayBuffer();
+   headBytes=Buffer.from(ab).subarray(0,32);
+  }
+
+  const ct=String(getRes.headers.get('content-type')||headRes.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  const clHeader=headRes.headers.get('content-length');
+  const crHeader=getRes.headers.get('content-range')||'';
+  const crMatch=/\/(\d+)$/.exec(crHeader);
+  const contentLengthBytes=crMatch?Number(crMatch[1]):(clHeader&&Number.isFinite(Number(clHeader))?Number(clHeader):headBytes.length);
+
+  const isWebp=headBytes.length>=12&&headBytes.subarray(0,4).toString('ascii')==='RIFF'&&headBytes.subarray(8,12).toString('ascii')==='WEBP';
+  const isPng=headBytes.length>=4&&headBytes[0]===0x89&&headBytes[1]===0x50&&headBytes[2]===0x4e&&headBytes[3]===0x47;
+  const isJpeg=headBytes.length>=3&&headBytes[0]===0xff&&headBytes[1]===0xd8&&headBytes[2]===0xff;
+  const validImage=(isWebp||isPng||isJpeg)&&ct.startsWith('image/')&&contentLengthBytes>0;
+
+  if(!validImage){
+   return {
+    ...av,
+    asset_accessible:false,
+    asset_check_status:'unavailable',
+    asset_probe:{
+     http_status:headRes.status,
+     range_http_status:getRes.status,
+     content_type:ct||null,
+     content_length_bytes:contentLengthBytes,
+     webp_magic_valid:false,
+     reason:'invalid_image_signature_or_mime',
+     checked_at:checkedAt
+    }
+   };
+  }
+
+  return {
+   ...av,
+   has_avatar:true,
+   asset_accessible:true,
+   asset_check_status:'validated',
+   asset_probe:{
+    http_status:headRes.status,
+    range_http_status:getRes.status,
+    content_type:ct,
+    content_length_bytes:contentLengthBytes,
+    webp_magic_valid:isWebp,
+    image_magic_format:isWebp?'webp':(isPng?'png':'jpeg'),
+    checked_at:checkedAt
+   }
+  };
+ }catch{
+  return {...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{reason:'network_or_timeout',checked_at:checkedAt}};
+ }finally{
+  clearTimeout(timer);
+ }
 }
 
 export function forensicCustomerProjection(raw,{fullProfile=false}={}){
@@ -131,14 +288,26 @@ export function forensicCustomerProjection(raw,{fullProfile=false}={}){
   };
  }
 
+ const canonicalCustomerUrl=typeof c.crm_customer_url==='string'&&c.crm_customer_url.startsWith('https://evydencia.com/gestao/clientes/')
+  ?c.crm_customer_url.replace(/\/ler$/,'/consultar')
+  :(validUuid?`https://evydencia.com/gestao/clientes/${validUuid}/consultar`:null);
+
  const base={
   id:Number.isSafeInteger(c.id)?c.id:null,
   uuid:validUuid,
-  crm_customer_url:validUuid?`https://evydencia.com/gestao/clientes/${validUuid}/ler`:null,
+  crm_customer_url:canonicalCustomerUrl,
   name:typeof c.name==='string'?c.name.slice(0,120):null,
   customer_since_brt:toBrt(c.created_at||c.customer_since_brt||c.customer_since),
   phone_masked:maskPhone(c.whatsapp||c.phone),
-  avatar:{has_avatar:hasAvatar,url:avatarUrl,revision:avatarRevision,initials},
+  avatar:{
+   has_avatar:hasAvatar,
+   url:hasAvatar?avatarUrl:null,
+   revision:avatarRevision,
+   initials,
+   asset_accessible:typeof avatarObj.asset_accessible==='boolean'?avatarObj.asset_accessible:(hasAvatar?null:false),
+   asset_check_status:typeof avatarObj.asset_check_status==='string'?avatarObj.asset_check_status:'not_checked',
+   ...(avatarObj.asset_probe?{asset_probe:avatarObj.asset_probe}:{})
+  },
   registration_completeness:completeness,
   ...(Number.isInteger(c.orders_count)?{orders_count:c.orders_count,lifecycle_stage:c.lifecycle_stage||(c.orders_count===0?'lead':c.orders_count===1?'first_time':'recurring')}:{})
  };
@@ -165,10 +334,11 @@ export function forensicCustomerProjection(raw,{fullProfile=false}={}){
  return base;
 }
 
-export function forensicOrderProjection(raw,{includeParticipants=false,fullProfile=false,todayYmd=todayBrtYmd()}={}){
+export function forensicOrderProjection(raw,{includeParticipants=false,fullProfile=false,todayYmd=todayBrtYmd(),detailLevel='forense'}={}){
  if(raw&&raw.payment_summary&&Array.isArray(raw.installments)&&raw.participants_registration){
   return raw;
  }
+ const isSummaryOnly=detailLevel==='resumo';
  const x=value(raw),s=value(x.status),c=value(x.customer),sum=value(x.summary);
  const statusId=Number.isInteger(s.id)?s.id:null;
  const statusKey=typeof x.status_key==='string'?x.status_key:(typeof s.key==='string'?s.key:null);
@@ -234,11 +404,16 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
    description:desc||null,
    is_bundle:isBundle,
    quantity:qty,
+   unit_price_cents:unitCents,
    unit_price_reais:reais(unitCents),
+   gross_amount_cents:grossCents,
    gross_amount_reais:reais(grossCents),
+   discount_cents:discCents,
    discount_reais:reais(discCents),
+   net_total_cents:netCents,
    net_total_reais:reais(netCents),
    total_reais:reais(netCents),
+   entry_cents:entryCents,
    entry_reais:reais(entryCents),
    bonus_classification
   };
@@ -277,8 +452,10 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
   }
   if(methodName)configuredMethods.push(methodName);
 
-  const rawTx=Array.isArray(inst?.transactions)?inst.transactions:(Array.isArray(pay.transactions)?pay.transactions:[]);
-  const rawBills=Array.isArray(inst?.bills)?inst.bills:[];
+  const rawTx=isSummaryOnly?[]:(Array.isArray(inst?.transactions)?inst.transactions:(Array.isArray(pay.transactions)?pay.transactions:[]));
+  const rawBills=isSummaryOnly?[]:(Array.isArray(inst?.bills)?inst.bills:[]);
+  const discCents=money(inst?.discount??pay.discount)??0;
+  const incCents=money(inst?.increase??pay.accrual)??0;
   return {
    installment_id:Number.isSafeInteger(inst?.id)?inst.id:null,
    number:Number.isSafeInteger(inst?.installment)?inst.installment:(idx+1),
@@ -290,8 +467,10 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
    paid_cents:paidCents,
    paid_at_brt:paidAtBrt,
    is_paid:isPaid,
-   discount_reais:reais(money(inst?.discount??pay.discount)??0),
-   increase_reais:reais(money(inst?.increase??pay.accrual)??0),
+   discount_cents:discCents,
+   discount_reais:reais(discCents),
+   increase_cents:incCents,
+   increase_reais:reais(incCents),
    method_name:methodName,
    method_category_key:categoryKey,
    method_category_label:categoryLabel,
@@ -303,13 +482,18 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
     gateway_status:tx?.original_status||null,
     recorded_at_brt:toBrt(tx?.created_at)
    })),
-   bills:rawBills.slice(0,10).map(b=>({
-    bill_id:Number.isSafeInteger(b?.id)?b.id:null,
-    amount_reais:reais(money(b?.amount)??0),
-    paid_reais:reais(money(b?.payment_total)??0),
-    closed_at_brt:toBrt(b?.closed_at),
-    aborted_at_brt:toBrt(b?.aborted_at)
-   }))
+   bills:rawBills.slice(0,10).map(b=>{
+    const bAmt=money(b?.amount)??0,bPaid=money(b?.payment_total)??0;
+    return {
+     bill_id:Number.isSafeInteger(b?.id)?b.id:null,
+     amount_cents:bAmt,
+     amount_reais:reais(bAmt),
+     paid_cents:bPaid,
+     paid_reais:reais(bPaid),
+     closed_at_brt:toBrt(b?.closed_at),
+     aborted_at_brt:toBrt(b?.aborted_at)
+    };
+   })
   };
  });
 
@@ -317,8 +501,6 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
  const uniqCfgMethods=[...new Set(configuredMethods)];
  const uniqCategories=[...new Set(paidCategories)];
 
- // Legacy read-only compatibility: keep category label (e.g. 'Pix') when not in forensic mode,
- // EXCEPT when category is 'Dinheiro' and actual method.name is a distinct non-cash method like 'Permuta'!
  const legacyCompatMethods=[...new Set(rawInst.map(i=>{
   const m=value(i?.method),t=value(m.type);
   const mName=typeof m.name==='string'?m.name.trim():(typeof i?.method_name==='string'?i.method_name.trim():'');
@@ -332,33 +514,52 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
  const receivedCents=money(sum.received);
  const remainingCents=money(sum.remaining);
  const validUuid=uuid(x.uuid)?x.uuid:null;
+ const ordId=Number.isSafeInteger(x.id)?x.id:null;
 
  const sessionAtBrt=toBrt(x.schedule_1);
+ const selectionAtBrt=toBrt(x.schedule_2);
+ const auxScheduleAtBrt=toBrt(x.schedule_3);
  const sessionRefYmd=sessionAtBrt&&/^\d{4}-\d{2}-\d{2}/.test(sessionAtBrt)?sessionAtBrt.slice(0,10):null;
 
- const participants=includeParticipants
-  ?(Array.isArray(x.participants)?x.participants:[]).slice(0,20).map(p=>{
-    const pName=typeof p?.name==='string'&&p.name.trim()?p.name.trim().slice(0,120):null;
-    const bRaw=typeof p?.birth==='string'&&p.birth?p.birth:(typeof p?.birth_date==='string'&&p.birth_date?p.birth_date:(typeof p?.birthday==='string'&&p.birthday?p.birthday:null));
-    const birthDate=bRaw&&!bRaw.startsWith('0000-')?bRaw.slice(0,10):null;
-    const computedToday=birthDate?humanAgeAt(birthDate,todayYmd):null;
-    const fallbackAge=typeof p?.birth_for_extense==='string'&&p.birth_for_extense.trim()?p.birth_for_extense.replace(/^h[áa]\s+/i,'').trim():(typeof p?.age==='string'?p.age:null);
-    const ageToday=computedToday||fallbackAge;
-    const ageAtSession=birthDate&&sessionRefYmd?humanAgeAt(birthDate,sessionRefYmd):null;
-    const kinship=typeof p?.relation?.name==='string'&&p.relation.name.trim()?p.relation.name.trim():(typeof p?.kinship==='string'&&p.kinship.trim()?p.kinship.trim():(typeof p?.relationship==='string'&&p.relationship.trim()?p.relationship.trim():null));
-    return {
-     participant_id:Number.isSafeInteger(p?.id)?p.id:(Number.isSafeInteger(p?.participant_id)?p.participant_id:null),
-     name:pName,
-     birth_date:birthDate,
-     age:ageToday,
-     age_today:ageToday,
-     age_reference_date:todayYmd,
-     age_at_session:ageAtSession,
-     session_reference_date:sessionRefYmd,
-     kinship
-    };
-   }).filter(p=>p.name)
-  :undefined;
+ const kinshipAgeAnomalies=[];
+ const mappedParticipants=(Array.isArray(x.participants)?x.participants:[]).slice(0,20).map(p=>{
+  const pName=typeof p?.name==='string'&&p.name.trim()?p.name.trim().slice(0,120):null;
+  const bRaw=typeof p?.birth==='string'&&p.birth?p.birth:(typeof p?.birth_date==='string'&&p.birth_date?p.birth_date:(typeof p?.birthday==='string'&&p.birthday?p.birthday:null));
+  const birthDate=bRaw&&/^\d{4}-\d{2}-\d{2}/.test(bRaw)&&!bRaw.startsWith('0000-')?bRaw.slice(0,10):null;
+  const computedToday=birthDate?humanAgeAt(birthDate,todayYmd):null;
+  const fallbackAge=typeof p?.birth_for_extense==='string'&&p.birth_for_extense.trim()?p.birth_for_extense.replace(/^h[áa]\s+/i,'').trim():(typeof p?.age==='string'?p.age:null);
+  const ageToday=computedToday||fallbackAge;
+  const ageAtSession=birthDate&&sessionRefYmd?humanAgeAt(birthDate,sessionRefYmd):null;
+  const kinship=typeof p?.relation?.name==='string'&&p.relation.name.trim()?p.relation.name.trim():(typeof p?.kinship==='string'&&p.kinship.trim()?p.kinship.trim():(typeof p?.relationship==='string'&&p.relationship.trim()?p.relationship.trim():null));
+  const pId=Number.isSafeInteger(p?.id)?p.id:(Number.isSafeInteger(p?.participant_id)?p.participant_id:null);
+  const yRef=birthDate?yearsAtYmd(birthDate,sessionRefYmd||todayYmd):null;
+  if(kinship&&yRef!==null&&yRef<14&&ADULT_KINSHIPS.has(normAscii(kinship))){
+   kinshipAgeAnomalies.push({
+    order_id:ordId,
+    participant_id:pId,
+    participant_name:fullProfile?pName:null,
+    kinship,
+    birth_date:fullProfile?birthDate:null,
+    age_years_at_reference:yRef,
+    age_at_session:ageAtSession,
+    anomaly_code:'parent_or_adult_kinship_with_child_age',
+    advisory:'Parentesco adulto registrado com data de nascimento infantil (< 14 anos). Provável inversão cadastral; confirmar com o titular antes de alterar.'
+   });
+  }
+  return {
+   participant_id:pId,
+   name:pName,
+   birth_date:birthDate,
+   age:ageToday,
+   age_today:ageToday,
+   age_reference_date:todayYmd,
+   age_at_session:ageAtSession,
+   session_reference_date:sessionRefYmd,
+   kinship
+  };
+ }).filter(p=>p.name);
+
+ const participants=includeParticipants?(isSummaryOnly?[]:mappedParticipants):undefined;
 
  const rawStatuses=Array.isArray(x.status_history)?x.status_history:(Array.isArray(x.statuses)?x.statuses:[]);
  const statusHistory=rawStatuses.map((st,idx)=>{
@@ -381,12 +582,48 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
 
  const completedAtBrt=toBrt(x.participants_completed_at);
  const partCount=Array.isArray(x.participants)?x.participants.length:0;
+ const canEditNow=Boolean(x.customer_can_edit_now??false);
+ const editLockReason=canEditNow
+  ?'editable'
+  :(['order_completed','product_retrieve_confirmed','order_aborted','payment_chargeback','payment_refunded'].includes(statusKey||'')
+   ?'order_finalized_or_reversed'
+   :'portal_feature_disabled');
  const participantsRegistration=x.participants_registration||{
   count:partCount,
   completed:Boolean(completedAtBrt),
   completed_at_brt:completedAtBrt,
   completed_source:x.participants_completed_source||null,
-  status_label:completedAtBrt?`Concluído em ${completedAtBrt}`:'Cadastro pendente'
+  status_label:completedAtBrt?`Concluído em ${completedAtBrt}`:'Cadastro pendente',
+  customer_can_edit_now:canEditNow,
+  customer_access_label:x.customer_access_label||(canEditNow?'Edição liberada ao cliente':'Cadastro de participantes desativado'),
+  edit_lock_reason:editLockReason,
+  temporary_access_state:x.temporary_access_state||'disabled',
+  temporary_access_label:x.temporary_access_label||'Links temporários desativados',
+  kinship_age_anomalies_count:kinshipAgeAnomalies.length,
+  kinship_age_anomalies:kinshipAgeAnomalies
+ };
+
+ const scheduleDetails=x.schedule_details||{
+  session_at_brt:sessionAtBrt,
+  selection_at_brt:selectionAtBrt,
+  auxiliary_schedule_at_brt:auxScheduleAtBrt,
+  google_calendar:x.google_calendar||{available:false,unavailable_reason:'not_loaded_in_legacy_http_projection'}
+ };
+
+ const hasChildPers=Boolean(x.child_fullname||x.child_options||x.child_values||x.child_genders);
+ const personalization=x.personalization||{
+  observation_public:fullProfile?(x.note||null):null,
+  internal_note:fullProfile?(x.inner||null):null,
+  child_personalization:{
+   available:hasChildPers,
+   unavailable_reason:hasChildPers?null:'not_filled_on_order',
+   child_fullname:fullProfile?(x.child_fullname||null):null,
+   child_options:x.child_options??null,
+   child_values:x.child_values??null,
+   recorded_child_genders:x.child_genders??null
+  },
+  cake:x.cake?{available:true,...x.cake}:{available:false,unavailable_reason:'no_cake_record_for_order'},
+  santa_audio:{available:false,unavailable_reason:'no_santa_audio_field_in_crm_schema'}
  };
 
  const effectivePaidByMethodReais=Object.fromEntries(
@@ -402,18 +639,21 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
  const bundleItem=items.find(i=>i.is_bundle)||items[0]||null;
 
  return {
-  order_id:Number.isSafeInteger(x.id)?x.id:null,
+  order_id:ordId,
   order_uuid:validUuid,
   crm_order_url:validUuid?'https://evydencia.com/gestao/pedidos/'+validUuid+'/detalhes':null,
   customer_name:typeof c.name==='string'?c.name.slice(0,100):null,
   customer_phone_masked:maskPhone(c.whatsapp||c.phone),
   status_id:statusId,
+  status_key:statusKey,
   status_label:statusLabel,
   created_at:typeof x.created_at==='string'?x.created_at:null,
   created_at_brt:toBrt(x.created_at),
   session_at:typeof x.schedule_1==='string'?x.schedule_1:null,
+  selection_at:selectionAtBrt,
+  auxiliary_schedule_at:auxScheduleAtBrt,
   package_name:bundleItem?.name||null,
-  items:(includeParticipants||fullProfile)?items:items.slice(0,5).map(({name:n,slug:sl,reference:rf,quantity:qt,total_reais:tr})=>({name:n,slug:sl,reference:rf,quantity:qt,total_reais:tr})),
+  items:(includeParticipants||fullProfile)?(isSummaryOnly?[]:items):items.slice(0,5).map(({name:n,slug:sl,reference:rf,quantity:qt,total_reais:tr})=>({name:n,slug:sl,reference:rf,quantity:qt,total_reais:tr})),
   payment_methods:(includeParticipants||fullProfile)?(uniqEffMethods.length?uniqEffMethods:uniqCfgMethods):legacyCompatMethods,
   total_reais:reais(totalCents),
   received_reais:reais(receivedCents),
@@ -422,28 +662,36 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
   item_count:Array.isArray(x.items)?x.items.length:null,
   participant_count:Array.isArray(x.participants)?x.participants.length:null,
   ...((includeParticipants||fullProfile)?{
+   crm_customer_url:custProjected?.crm_customer_url??null,
    customer_avatar_url:custProjected?.avatar?.url??null,
    customer_has_avatar:custProjected?.avatar?.has_avatar??false,
    customer_initials:custProjected?.avatar?.initials??customerInitials(c.name),
-   customer:custProjected,
+   customer:isSummaryOnly?null:custProjected,
+   schedule_details:scheduleDetails,
+   personalization:isSummaryOnly?null:personalization,
    status_history_count:statusHistory.length,
-   status_history:statusHistory,
+   status_history:isSummaryOnly?[]:statusHistory,
    payment_summary:{
+    total_cents:totalCents,
     total_reais:reais(totalCents),
+    received_cents:receivedCents,
     received_reais:reais(receivedCents),
+    remaining_cents:remainingCents,
     remaining_reais:reais(remainingCents),
     installments_count:installments.length,
     paid_installments_count:paidInstCount,
     open_installments_count:openInstCount,
+    open_installments_cents:openInstCents,
     open_installments_reais:reais(openInstCents),
     effective_paid_methods:uniqEffMethods,
+    effective_paid_by_method_cents:effectivePaidByMethodCents,
     effective_paid_by_method_reais:effectivePaidByMethodReais,
     configured_installment_methods:uniqCfgMethods,
     paid_method_categories:uniqCategories,
     payment_needs_review:reviewReasons.length>0,
     financial_review_reasons:reviewReasons
    },
-   installments,
+   installments:isSummaryOnly?[]:installments,
    participants_registration:participantsRegistration,
    participants
   }:{})
@@ -452,9 +700,13 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
 
 export function buildCrossOrderParticipantAudit(orders=[]){
  const groups=new Map();
+ const kinshipAgeAnomalies=[];
  for(const ord of orders){
+  for(const anom of (ord?.participants_registration?.kinship_age_anomalies||[])){
+   kinshipAgeAnomalies.push(anom);
+  }
   for(const p of (ord?.participants||[])){
-   const norm=String(p?.name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim().replace(/\s+/g,' ');
+   const norm=normAscii(p?.name).replace(/\s+/g,' ');
    if(!norm)continue;
    if(!groups.has(norm))groups.set(norm,[]);
    groups.get(norm).push({
@@ -502,10 +754,12 @@ export function buildCrossOrderParticipantAudit(orders=[]){
  }
  return {
   unique_named_participants_count:timeline.length,
-  has_discrepancies:birthDiscrepancies.length>0||kinshipDiscrepancies.length>0,
+  has_discrepancies:birthDiscrepancies.length>0||kinshipDiscrepancies.length>0||kinshipAgeAnomalies.length>0,
   birth_date_discrepancies_count:birthDiscrepancies.length,
   birth_date_discrepancies:birthDiscrepancies,
   kinship_discrepancies:kinshipDiscrepancies,
+  kinship_age_anomalies_count:kinshipAgeAnomalies.length,
+  kinship_age_anomalies:kinshipAgeAnomalies,
   participants_timeline:timeline
  };
 }
@@ -544,6 +798,22 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
   return fetchFn===fetch&&existsSync(crmAppPath+'/vendor/autoload.php')&&existsSync(FORENSIC_BRIDGE_SCRIPT);
  };
 
+ const canUseNatalBridge=()=>{
+  const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
+  return fetchFn===fetch&&existsSync(crmAppPath+'/vendor/autoload.php')&&existsSync(BRIDGE_SCRIPT);
+ };
+
+ const attachProbedAvatarToOrder=async ord=>{
+  if(!ord||typeof ord!=='object'||!ord.customer?.avatar)return ord;
+  const probed=await probeCustomerAvatarAsset(ord.customer.avatar,{fetchFn,crmBaseUrl:base,timeoutMs:Math.min(timeoutMs,2500)});
+  return {
+   ...ord,
+   customer_avatar_accessible:probed.asset_accessible,
+   customer_avatar_check_status:probed.asset_check_status,
+   customer:{...ord.customer,avatar:probed}
+  };
+ };
+
  async function runForensicBridge(payload){
   const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
   try{
@@ -556,6 +826,21 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
   }catch(e){
    if(typeof e?.message==='string'&&e.message.startsWith('legacy_read_'))throw e;
    fail('forensic_bridge_unavailable');
+  }
+ }
+
+ async function runNatalBridge(payload){
+  const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
+  try{
+   const {stdout}=await execFileAsync('php',[BRIDGE_SCRIPT,JSON.stringify(payload)],{
+    timeout:Math.max(timeoutMs,18000),maxBuffer:4194304,env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
+   });
+   const parsed=JSON.parse(stdout);
+   if(parsed?.error)fail(String(parsed.error));
+   return parsed;
+  }catch(e){
+   if(typeof e?.message==='string'&&e.message.startsWith('legacy_read_'))throw e;
+   fail('natal_stats_unavailable');
   }
  }
 
@@ -586,13 +871,14 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
   async search(filters={},opts={}){
    const max=Math.min(25,Math.max(1,Number(opts?.limit)||10));
    const page=Math.max(1,Number(opts?.page)||1);
+   const detailLevel=['resumo','padrao','forense'].includes(opts?.detailLevel)?opts.detailLevel:'padrao';
    if(fullProfile&&canUseForensicBridge()){
     const bridgeFilters={};
     const keyMap={'customer.name':'customer_name','customer.whatsapp':'customer_whatsapp','customer.uuid':'customer_uuid','order.uuid':'order_uuid','order.id':'order_id','order.status':'order_status','product.slug':'product_slug','order.created-start':'created_start','order.created-end':'created_end','order.session-start':'session_start','order.session-end':'session_end','payment_method_name':'payment_method_name','has_open_balance':'has_open_balance'};
     for(const [k,v] of Object.entries(filters||{})){
      if(v!==undefined&&v!==null&&v!==''&&keyMap[k])bridgeFilters[keyMap[k]]=v;
     }
-    return await runForensicBridge({action:'orders.search',filters:bridgeFilters,limit:max,page,full_profile:true});
+    return await runForensicBridge({action:'orders.search',filters:bridgeFilters,limit:max,page,detail_level:detailLevel,full_profile:true});
    }
    const cleanFilters={};
    for(const [k,v] of Object.entries(filters||{})){if(allKeys.has(k)&&v!==undefined&&v!==null&&v!=='')cleanFilters[k]=v}
@@ -620,11 +906,12 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const totalMatching=Number.isInteger(raw?.meta?.total)?raw.meta.total:sorted.length;
    const paged=sorted.slice((page-1)*max,page*max);
    return {source:'LEGACY_SINGLE_AUTH_READ',scope:'PAGINATED_ORDER_SAMPLE',
+    detail_level:detailLevel,
     sort:'order_id_desc_most_recent_first',
     pagination:{page,per_page:max,returned_count:paged.length,total_matching_orders:totalMatching,total_pages:Math.max(1,Math.ceil(totalMatching/max)),has_more:(page*max)<totalMatching||raw?.links?.next!=null},
     total_in_page:rows.length,
     sampled_count:paged.length,has_more:(page*max)<totalMatching||raw?.links?.next!=null,
-    orders:paged.map(r=>forensicOrderProjection(r,{includeParticipants,fullProfile})),
+    orders:paged.map(r=>forensicOrderProjection(r,{includeParticipants,fullProfile,detailLevel})),
     warning:'Ordenado do pedido mais recente para o mais antigo (horário de emissão em created_at_brt America/Sao_Paulo).'};
   },
   async resolvePhoneByName(customerName){
@@ -650,28 +937,35 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const isObj=locator&&typeof locator==='object';
    const idUuid=isObj?locator.uuid:locator;
    const orderId=isObj&&Number.isSafeInteger(locator.order_id)?locator.order_id:null;
+   const detailLevel=isObj&&['resumo','padrao','forense'].includes(locator.detailLevel)?locator.detailLevel:'forense';
    if(idUuid!==undefined&&idUuid!==null&&idUuid!==''&&!uuid(idUuid))fail('invalid_uuid');
    if(!idUuid&&(!orderId||orderId<1))fail('invalid_uuid');
 
    if(fullProfile&&canUseForensicBridge()){
-    return await runForensicBridge({action:'orders.detail',...(idUuid?{uuid:idUuid}:{order_id:orderId}),full_profile:true});
+    const res=await runForensicBridge({action:'orders.detail',...(idUuid?{uuid:idUuid}:{order_id:orderId}),detail_level:detailLevel,full_profile:true});
+    if(res?.order)res.order=await attachProbedAvatarToOrder(res.order);
+    return res;
    }
    if(idUuid){
     const raw=await get('/api/orders/'+idUuid+'/detail');
     const entry=raw?.data??raw;
     if(!entry||typeof entry!=='object'||!entry.uuid)fail('invalid_order_contract');
-    return {source:'LEGACY_SINGLE_AUTH_READ',order:forensicOrderProjection(entry,{includeParticipants,fullProfile})};
+    const ord=await attachProbedAvatarToOrder(forensicOrderProjection(entry,{includeParticipants,fullProfile,detailLevel}));
+    return {source:'LEGACY_SINGLE_AUTH_READ',detail_level:detailLevel,order:ord};
    }
    const raw=await get('/api/orders/search',legacyFilters({'order.id':orderId}));
    const rows=Array.isArray(raw)?raw:Array.isArray(raw?.data)?raw.data:null;
    if(!rows||!rows.length)fail('order_not_found');
-   return {source:'LEGACY_SINGLE_AUTH_READ',order:forensicOrderProjection(rows[0],{includeParticipants,fullProfile})};
+   const ord=await attachProbedAvatarToOrder(forensicOrderProjection(rows[0],{includeParticipants,fullProfile,detailLevel}));
+   return {source:'LEGACY_SINGLE_AUTH_READ',detail_level:detailLevel,order:ord};
   },
   async searchCustomers(params={}){
    const limit=Math.min(25,Math.max(1,Number(params?.limit)||10));
    const page=Math.max(1,Number(params?.page)||1);
+   const verifyAvatar=Boolean(params?.verificar_avatar_http);
+   let result;
    if(canUseForensicBridge()){
-    return await runForensicBridge({
+    result=await runForensicBridge({
      action:'customers.search',
      busca:params.busca||undefined,
      nome_cliente:params.nome_cliente||undefined,
@@ -683,22 +977,31 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      only_incomplete_registration:Boolean(params.somente_cadastro_incompleto),
      limit,page,full_profile:fullProfile
     });
+   }else{
+    const qParams=new URLSearchParams();
+    for(const [k,v] of Object.entries(params||{})){if(v!==undefined&&v!==null&&v!=='')qParams.set(k,String(v))}
+    const raw=await get('/api/customers/search',qParams);
+    const rows=Array.isArray(raw)?raw:Array.isArray(raw?.data)?raw.data:(Array.isArray(raw?.customers)?raw.customers:null);
+    if(!rows)fail('invalid_customer_list_contract');
+    const customers=rows.slice(0,limit).map(c=>forensicCustomerProjection(c,{fullProfile}));
+    result={
+     source:'CRM_DIRECT_CUSTOMER_SEARCH',
+     pagination:{page,per_page:limit,returned_count:customers.length,total_matching_customers:raw?.meta?.total??rows.length,total_pages:1,has_more:rows.length>limit},
+     customers
+    };
    }
-   const qParams=new URLSearchParams();
-   for(const [k,v] of Object.entries(params||{})){if(v!==undefined&&v!==null&&v!=='')qParams.set(k,String(v))}
-   const raw=await get('/api/customers/search',qParams);
-   const rows=Array.isArray(raw)?raw:Array.isArray(raw?.data)?raw.data:(Array.isArray(raw?.customers)?raw.customers:null);
-   if(!rows)fail('invalid_customer_list_contract');
-   const customers=rows.slice(0,limit).map(c=>forensicCustomerProjection(c,{fullProfile}));
-   return {
-    source:'CRM_DIRECT_CUSTOMER_SEARCH',
-    pagination:{page,per_page:limit,returned_count:customers.length,total_matching_customers:raw?.meta?.total??rows.length,total_pages:1,has_more:rows.length>limit},
-    customers
-   };
+   if(verifyAvatar&&Array.isArray(result?.customers)){
+    result.customers=await Promise.all(result.customers.map(async c=>({
+     ...c,
+     avatar:await probeCustomerAvatarAsset(c?.avatar,{fetchFn,crmBaseUrl:base,timeoutMs:Math.min(timeoutMs,2500)})
+    })));
+   }
+   return result;
   },
   async customerForensic360(locator={}){
+   let res;
    if(canUseForensicBridge()){
-    return await runForensicBridge({
+    res=await runForensicBridge({
      action:'customers.forensic360',
      customer_uuid:locator.customer_uuid||undefined,
      telefone:locator.telefone||undefined,
@@ -709,50 +1012,95 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      per_page:Math.min(20,Math.max(1,Number(locator.por_pagina)||10)),
      full_profile:fullProfile
     });
-   }
-   const qParams=new URLSearchParams();
-   for(const [k,v] of Object.entries(locator||{})){if(v!==undefined&&v!==null&&v!=='')qParams.set(k,String(v))}
-   const raw=await get('/api/customers/forensic-360',qParams);
-   if(!raw||typeof raw!=='object')fail('invalid_customer_360_contract');
-   if(raw.lookup?.status!=='matched')return raw;
-   const cust=forensicCustomerProjection(raw.customer,{fullProfile});
-   const orders=(Array.isArray(raw.orders)?raw.orders:[]).map(o=>forensicOrderProjection(o,{includeParticipants,fullProfile}));
-   const receivedByMethod={};
-   for(const o of orders){
-    for(const [mk,val] of Object.entries(o?.payment_summary?.effective_paid_by_method_reais||{})){
-     receivedByMethod[mk]=Math.round(((receivedByMethod[mk]||0)+val)*100)/100;
+   }else{
+    const qParams=new URLSearchParams();
+    for(const [k,v] of Object.entries(locator||{})){if(v!==undefined&&v!==null&&v!=='')qParams.set(k,String(v))}
+    const raw=await get('/api/customers/forensic-360',qParams);
+    if(!raw||typeof raw!=='object')fail('invalid_customer_360_contract');
+    if(raw.lookup?.status!=='matched')return raw;
+    const cust=forensicCustomerProjection(raw.customer,{fullProfile});
+    const orders=(Array.isArray(raw.orders)?raw.orders:[]).map(o=>forensicOrderProjection(o,{includeParticipants,fullProfile}));
+    const receivedByMethod={};
+    const receivedByMethodCents={};
+    for(const o of orders){
+     for(const [mk,val] of Object.entries(o?.payment_summary?.effective_paid_by_method_reais||{})){
+      receivedByMethod[mk]=Math.round(((receivedByMethod[mk]||0)+val)*100)/100;
+      receivedByMethodCents[mk]=Math.round(receivedByMethod[mk]*100);
+     }
     }
+    res={
+     source:'CRM_DIRECT_CUSTOMER_360',
+     lookup:raw.lookup,
+     customer:cust,
+     kpis:raw.kpis||{total_orders_registered:orders.length},
+     financial_audit_summary:raw.financial_audit_summary||{received_by_effective_method_cents:receivedByMethodCents,received_by_effective_method_reais:receivedByMethod},
+     participants_cross_order_audit:fullProfile?buildCrossOrderParticipantAudit(orders):undefined,
+     current_order:orders[0]||null,
+     history:raw.history||{page:1,per_page:10,total:orders.length,has_more:false},
+     orders
+    };
    }
-   return {
-    source:'CRM_DIRECT_CUSTOMER_360',
-    lookup:raw.lookup,
-    customer:cust,
-    kpis:raw.kpis||{total_orders_registered:orders.length},
-    financial_audit_summary:raw.financial_audit_summary||{received_by_effective_method_reais:receivedByMethod},
-    participants_cross_order_audit:fullProfile?buildCrossOrderParticipantAudit(orders):undefined,
-    current_order:orders[0]||null,
-    history:raw.history||{page:1,per_page:10,total:orders.length,has_more:false},
-    orders
-   };
+   if(res?.lookup?.status==='matched'&&res.customer?.avatar){
+    const probed=await probeCustomerAvatarAsset(res.customer.avatar,{fetchFn,crmBaseUrl:base,timeoutMs:Math.min(timeoutMs,2500)});
+    res.customer={...res.customer,avatar:probed};
+    const syncOrdAvatar=ord=>ord&&ord.customer?{...ord,customer_avatar_accessible:probed.asset_accessible,customer_avatar_check_status:probed.asset_check_status,customer:{...ord.customer,avatar:probed}}:ord;
+    if(res.current_order)res.current_order=syncOrdAvatar(res.current_order);
+    if(Array.isArray(res.orders))res.orders=res.orders.map(syncOrdAvatar);
+   }
+   return res;
   },
-  async natalStatistics({cutoffMmDd}={}){
+  async natalStatistics({cutoffMmDd,secoes,nivelDetalhe='resumo',ano,pagina=1,limite=15}={}){
    let mmdd='';
    if(cutoffMmDd!==undefined&&cutoffMmDd!==null&&cutoffMmDd!==''){
     if(typeof cutoffMmDd!=='string'||!/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(cutoffMmDd))fail('invalid_mmdd');
     mmdd=cutoffMmDd;
    }
-   const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
-   if(fetchFn===fetch&&existsSync(crmAppPath+'/vendor/autoload.php')&&existsSync(BRIDGE_SCRIPT)){
-    try{
-     const {stdout}=await execFileAsync('php',[BRIDGE_SCRIPT,...(mmdd?[mmdd]:[])],{
-      timeout:Math.max(timeoutMs,15000),maxBuffer:2097152,env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
-     });
-     return JSON.parse(stdout);
-    }catch{fail('natal_stats_unavailable')}
+   const sections=Array.isArray(secoes)?secoes.filter(s=>typeof s==='string'):[];
+   const detail=['resumo','padrao','completo'].includes(nivelDetalhe)?nivelDetalhe:'resumo';
+   const page=Math.min(50,Math.max(1,Number(pagina)||1));
+   const limit=Math.min(50,Math.max(1,Number(limite)||15));
+   if(canUseNatalBridge()){
+    return await runNatalBridge({
+     mode:'natal.stats',
+     cutoff_mmdd:mmdd,
+     year:Number.isInteger(ano)?ano:null,
+     detail_level:detail,
+     sections,
+     page,
+     limit,
+     include_full_pii:fullProfile
+    });
    }
    const params=new URLSearchParams();
    if(mmdd)params.set('date',mmdd);
+   params.set('detail_level',detail);
+   if(sections.length)params.set('sections',sections.join(','));
+   if(Number.isInteger(ano))params.set('year',String(ano));
+   params.set('page',String(page));
+   params.set('limit',String(limit));
    return await get('/api/reports/natal-statistics',params);
+  },
+  async natalParticipantsStatistics({ano='2026',secoes,incluirAnomalias=true,incluirListaParticipantes=false,pagina=1,limite=20}={}){
+   const yearStr=['2026','2025','2024','todos'].includes(String(ano))?String(ano):'2026';
+   const sections=Array.isArray(secoes)?secoes.filter(s=>typeof s==='string'):[];
+   const page=Math.min(50,Math.max(1,Number(pagina)||1));
+   const limit=Math.min(50,Math.max(1,Number(limite)||20));
+   if(canUseNatalBridge()){
+    return await runNatalBridge({
+     mode:'natal.participants_stats',
+     year:yearStr,
+     sections,
+     include_anomalies:Boolean(incluirAnomalias),
+     include_participants_list:Boolean(incluirListaParticipantes&&fullProfile),
+     page,
+     limit,
+     include_full_pii:fullProfile
+    });
+   }
+   const params=new URLSearchParams({year:yearStr,include_anomalies:String(Boolean(incluirAnomalias)),page:String(page),limit:String(limit)});
+   if(sections.length)params.set('sections',sections.join(','));
+   if(incluirListaParticipantes&&fullProfile)params.set('include_participants_list','true');
+   return await get('/api/reports/natal-participants-statistics',params);
   },
   async soldItems({start,end,slug:itemSlug,search,busca}={}){
    if(!start&&!end)fail('missing_period');
@@ -766,7 +1114,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const rows=Array.isArray(raw)?raw:Array.isArray(raw?.data)?raw.data:null;
    if(!rows)fail('invalid_report_contract');
    return {source:'CRM_DIRECT_SOLD_ITEMS',total_rows:rows.length,
-    warning:'Relatório de unidades de itens vendidos por data de criação (orders_items). Para números canônicos de pedidos de Natal (101 em 2026, 142 em 2025, 124 em 2024 até 25/10), use SEMPRE crm_estatisticas_natal.',
+    warning:'Relatório de unidades brutas de itens vendidos por data de criação (orders_items). Para contagens canônicas de pedidos e sessões de Natal, use SEMPRE crm_estatisticas_natal.',
     items:rows.slice(0,30).map(r=>({
     item:typeof r?.item==='string'?r.item.slice(0,120):null,
     reference:r?.reference!=null?String(r.reference).slice(0,40):null,

@@ -1,74 +1,68 @@
-## Integração de leitura real — diagnóstico protegido (novo)
+# Evydência CRM MCP (`v0.10.0`)
 
-O repositório inclui `scripts/verify-live-read.mjs`, `src/live-contracts.mjs` e testes de envelope da API Sanctum. A chave é configurada somente no computador do operador. O diagnóstico nunca imprime respostas brutas. **O Plugin ChatGPT atual continua MOCK anônimo**, não deve receber esta chave. [Inventário e plano local](docs/CRM_LIVE_API_INVENTORY_20261025.md).
+Servidor e gateway MCP independente entre o ChatGPT (OpenAI Connectors / Apps SDK) e o **Evydência CRM** (Laravel 10 / PHP 8.3 / MySQL / Sanctum), operando em dois modos estritamente isolados:
+
+1. **Gateway LIVE Streamable HTTP (`src/live-gateway.mjs` + `src/oauth-gateway.mjs`):**
+   - Autenticação OAuth 2.1 + PKCE (`S256`) individual por operador autenticado no Sanctum (`LIVE_OPERATOR_FULL_OAUTH` ou `LIVE_READ_ONLY_OAUTH`), sem tokens compartilhados no ChatGPT e com `Cache-Control: private, no-store`.
+   - Integração direta somente-leitura com os modelos e serviços oficiais do CRM (`scripts/crm-forensic-bridge.php` e `scripts/crm-natal-bridge.php`), com sessão MySQL `READ ONLY`, bloqueador de SQL mutável e proxy de cache em memória efêmera (zero mutação em MySQL ou Redis).
+   - Otimizado para OpenAI MCP: `outputSchema` JSON Schema 2020-12 em todas as 17 ferramentas Live, `structuredContent` proporcional por `secoes` e `nivel_detalhe` (~9 KB no resumo padrão de Natal vs ~264 KB anteriores), montantes canônicos em `*_cents` (inteiro) + `*_reais`, verificação HTTP/WebP SSRF-safe de avatares (`RIFF....WEBP`) e confirmação explícita obrigatória (`confirmado_pelo_operador: true`) para agendamento idempotente de proposta.
+2. **Servidor Local MOCK Demonstrativo (`src/server.mjs`):**
+   - Modo `stdio` offline 100% sintético (`EVYD_MOCK_MODE=1`, zero rede e zero credenciais reais) para desenvolvimento local e validação em CI.
+
+> **Segurança de Repositório Público:** Este repositório é público. Jamais versione `.env`, tokens, CPFs, telefones, e-mails, datas de nascimento ou payloads reais de clientes. Todos os testes automatizados utilizam exclusivamente fixtures sintéticas.
+
+---
+
+## Catálogo de Ferramentas LIVE (`v0.10.0` — 17 ferramentas)
+
+| Ferramenta | Escopo / Modo | Acesso | Descrição resumida |
+|---|---|---|---|
+| `crm_capacidades` | Todos os modos Live | Leitura | Inventário fiel de ferramentas ativas, `version`, `build_commit` e escopos (sem itens `MOCK_ONLY`). |
+| `crm_status` | Todos os modos Live | Leitura | Saúde pública do CRM (`GET /health/live`). |
+| `crm_campanha_publica` | Todos os modos Live | Leitura | Catálogo público de pacotes de uma campanha. |
+| `crm_horarios_publicos` | Todos os modos Live | Leitura | Disponibilidade pública de horários por pacote (janela até 14 dias). |
+| `crm_conexao_privada` | Operador OAuth | Leitura | Identidade do operador Sanctum, fuso e abilities do token. |
+| `crm_cliente_resumo` | Operador OAuth | Leitura | Contexto executivo do titular/lead por telefone, nome, CPF, e-mail ou UUID, com rota canônica `/gestao/clientes/{uuid}/consultar`. |
+| `crm_cliente_360` | Operador OAuth | Leitura | Reconstrução 360 forense: perfil, avatar verificado via HTTP/WebP, completude cadastral, meios efetivos de pagamento, divergências cruzadas de participantes e histórico paginado de pedidos. |
+| `crm_estatisticas_natal` | Direct CRM Read | Leitura | Inteligência oficial de `/gestao/natal/estatisticas` (`2021–2026`): resumo enxuto + `secoes` sob demanda (`simulador_previsao`, `financeiro_caixa`, `clientes_recompra_campanhas`, `agenda_demanda`, `pacotes_produtos_bonus`, `operacional_listas`). |
+| `crm_natal_participantes_estatisticas` | Direct CRM Read | Leitura | Demografia e composição familiar de Natal: população reconciliada (crianças, adultos, pets, sem nascimento), faixas de bebês/crianças, parentesco, `0/1/2/3+` filhos, pacote × idade, histórico `2024–2026` e anomalias cadastrais. |
+| `crm_pedidos_buscar` | Direct CRM Read | Leitura | Busca global paginada de pedidos ordenada do mais recente para o mais antigo, com filtros gerenciais e `nivel_detalhe` (`resumo`, `padrao`, `forense`). |
+| `crm_pedido_detalhe` | Direct CRM Read | Leitura | Auditoria completa por `uuid` ou `order_id`: parcelas (`method_name` vs `method_category_label`), `bills`, `transactions`, `status_history`, `schedule_details` (Google Calendar), `personalization`, `bonus_classification`, bloqueio de edição de participantes e avatar validado. |
+| `crm_clientes_buscar` | Operator Full CRM | Leitura | Busca direta na base geral de clientes e leads (inclusive `somente_sem_pedidos: true` e `somente_cadastro_incompleto: true`). |
+| `crm_relatorio_itens_vendidos` | Direct CRM Read | Leitura | Unidades brutas de itens vendidos (`orders_items`) por período. |
+| `crm_relatorio_natal_sem_participantes` | Direct CRM Read | Leitura | Pedidos ativos de Natal sem participantes cadastrados. |
+| `crm_relatorio_clientes_natal` | Direct CRM Read | Leitura | Clientes com ou sem compra de Natal no ano corrente. |
+| `crm_previa_proposta_natal` | Operator Full CRM | Leitura | Simulação oficial de elegibilidade e mensagem da proposta de Natal 2026 (não envia mensagem). |
+| `crm_enviar_proposta_natal` | Operator Full CRM | Escrita idempotente | Agendamento oficial da proposta de Natal 2026 no CRM. **Exige `confirmado_pelo_operador: true` explícito** (sem valor padrão) e envia `X-Idempotency-Key`. |
+
+Veja detalhes completos em [Matriz de capacidades](docs/CAPABILITY_MATRIX.md) e [Inventário Live](docs/CRM_LIVE_API_INVENTORY_20261025.md).
 
 ---
 
-# Evydência CRM MCP
+## Validação Local Determinística (Windows / Linux / CI)
 
-**Estado:** Plugin ChatGPT demonstrativo com 17 ferramentas MOCK. Novo adaptador OFFLINE do digest Natal canônico preparado, sem alterar o Laravel e sem expor dados reais pelo túnel anônimo.
+Pré-requisitos: Node.js `>=22`, npm, Git.
 
-**Antigravity no Windows 11:** `.\scripts\validate-mvp.ps1` (Node e PHP CLI instalados). [Roteiro final](docs/MVP_AGREGADOS_EXECUCAO_20261025.md) · [Prompt Flash](PROMPT_ANTIGRAVITY_MVP_REAL_SEM_ALTERAR_CRM.md) · [Auditoria segurança/proveniência](docs/MVP_PRODUCAO_SEM_ALTERAR_CRM_20261025.md).
+```powershell
+npm ci
+npm run validate:local
+```
 
-**Histórico 2021–2025:** o importador novo valida agregados de calendários legados privados, congela a fonte por SHA-256 e NÃO os apresenta como números certificados. Veja [auditoria do legado](docs/FORENSE_LEGADO_NATAL_20261025.md) e [prompt pronto](PROMPT_ANTIGRAVITY_LEGADO_NATAL_20261025.md). Importação opcional: `npm run history:import`, apenas com fonte/destino privados.
-
-**API real — diagnóstico com chave local:** `.\\scripts\\validate-crm-key.ps1` + `.env.live.local` (consultas explícitas e schemas sem valores pessoais). [Instruções completas](docs/API_REAL_LEITURA_GUIA_20261025.md) e [prompt Antigravity](PROMPT_ANTIGRAVITY_VALIDAR_API_REAL_20261025.md). O programa não adiciona as consultas ao Plugin anônimo.
-
-**Produção comercial:** não habilitada. Snapshots agregados só podem ser exportados no ambiente Laravel autorizado, após avaliar custo e credenciais; dados privados exigem OAuth 2.1 individual em conexão separada do Plugin MOCK. O envio WhatsApp permanece WRITE_GATED.
+`npm run validate:local` executa em sequência:
+1. `npm run doctor` — integridade de estrutura, regras, hooks, lockfile e isolamento de `.env`.
+2. `npm run check` — verificação sintática `node --check` em todos os módulos e scripts.
+3. `npm test` — suíte determinística (`130` testes unitários, segurança OAuth, paridade forense, invariantes analíticos, sonda SSRF-safe de WebP e casos negativos).
+4. `npm run smoke` & `npm run conversation:smoke` & `npm run startup:smoke` — validação fim a fim do modo Mock stdio.
+5. `npm run vps:preflight` — auditoria estática de segurança de deploy (`read_only`, `no-new-privileges`, isolamento de segredos).
 
 ---
-# Evydência CRM MCP — Gateway ChatGPT
 
-Intermediário MCP independente entre ChatGPT e o Laravel Evydência CRM. Sem acesso SQL nem Z-API direta. **MVP com ferramentas read-only e mocks sintéticos; disparo real BLOQUEADO.**
+## Operação Segura de Deploy e Rollback (Host Live)
 
-## Início rápido Windows 11 com Antigravity Gemini 3.8 Flash
-
-Pré-requisitos: Node.js >=22, npm, PowerShell, Git. No clone da hypeneural/evydencia-crm-mcp:
-
-1. .\scripts\bootstrap-mock.ps1 — cria apenas .env local com NODE_ENV=development, EVYD_MOCK_MODE=1, EVYD_PRIVATE_TOOLS=0 e token vazio.
-2. .\scripts\validate.ps1 — instalação + doctor + sintaxe + testes + smoke MCP + conversation smoke.
-3. npm run conversation:smoke — teste determinístico de perguntas comuns e confirmação simulada.
-
-Em modo MOCK nenhum request é feito ao CRM. Todos os dados sintéticos contêm mock:true e source:fixture; resultados de negócio simulados contêm real_dispatch:false.
-
-## Capacidades
-
-- LIVE_PUBLIC: saúde do CRM, campanhas e disponibilidade pública (GET).
-- LIVE_EXTENSION (Sanctum de operador): bootstrap, contexto do cliente por telefone, Cliente 360, prévia da proposta de Natal (POST preview, não agenda).
-- MOCK_ONLY: crm_natal_resumo, crm_agenda_hoje, crm_buscar_cliente_nome e crm_simular_agendamento_proposta_natal. A API live read-only desses três primeiros **ainda não existe na Extension API**.
-- WRITE_GATED: envio real pelo CRM. Não há ferramenta de envio registrada no MCP.
-
-Veja [Matriz de capacidades](docs/CAPABILITY_MATRIX.md) e [Playbook de conversas](docs/CONVERSATION_PLAYBOOK.md).
-
-## Estrutura para agente menor e validações
-
-- AGENTS.md: proibições e ciclo verificável.
-- .agents/rules/security.md e flash-guardrails.md: frontmatter válido conforme documentação oficial Antigravity.
-- .agents/hooks.json: SessionStart e PreToolUse. Scripts em scripts/session-start.mjs e scripts/antigravity-hook.mjs.
-- src/AGENTS.md, test/AGENTS.md, fixtures/AGENTS.md: regras específicas por diretório.
-- .agents/skills/*/SKILL.md: rotinas pequenas (capability audit, preflight, security, conversation, conexão ChatGPT, desenho de proposta).
-- scripts/doctor.mjs: preflight, esquema de rules/hooks, fixtures e proibição de escrita.
-- scripts/smoke.mjs: SDK MCP stdio tradicional.
-- scripts/conversation-smoke.mjs: Client v2 moderno 2026-07-28, estatísticas, agenda, busca por nome e proposta simulada.
-- .github/workflows/ci.yml: executa doctor + check + testes + ambos smokes.
-
-**Lockfile versionado:** package-lock.json é gerado em Node 22 e mantido no Git. Instalação de CI e scripts Windows usam exclusivamente npm ci; doctor --strict-lock exige o arquivo rastreado.
-
-## Conexão com ChatGPT
-
-Primeira integração: OpenAI Secure MCP Tunnel com stdio em modo MOCK, evitando HTTP aberto. Guia: [CHATGPT_TUNNEL_MOCK.md](docs/CHATGPT_TUNNEL_MOCK.md). Conexão efetiva com ChatGPT, permissões e suporte específico do modo de voz dependem de testes no usuário — CI não prova isso.
-
-Referências de comparação: [BASE_REPOSITORIES_20261024.md](docs/BASE_REPOSITORIES_20261024.md). SDK oficial v2 permanece adotado; não migrar para mcp-use/Cloudflare sem necessidade comprovada.
-
-## Segurança e limitações
-
-Repositório atualmente **público**: não adicionar qualquer dado real de cliente, token ou domínio privado. .env está excluído do Git.
-
-Ações reais (POST proposals/schedule e abort), reenvio e Z-API direta NÃO são implementadas. Para futuro envio: identidade OAuth por operador, restrições de ability Sanctum, confirmação humana independente, journal durável de UUID/idempotência, reconciliação de timeout e revisão de segurança.
-
-As APIs internas do CRM protegidas por SingleAuthentication NÃO devem ser consumidas pelo MCP. Para estatísticas, priorizar o exportador canônico e os históricos privados já preparados neste MCP. A busca nominal e a agenda privada podem ser diagnosticadas pela API legada apenas no terminal autorizado, mas seu token amplo não deve chegar ao Plugin anônimo. Uma conexão LIVE exige OAuth por operador; não modificar o Laravel a partir deste repositório.
-
-Documentação detalhada: [ANTIGRAVITY_LOCAL.md](docs/ANTIGRAVITY_LOCAL.md), [CONTRATOS_CRM.md](docs/CONTRATOS_CRM.md), [OFFICIAL_DOCS_AUDIT.md](docs/OFFICIAL_DOCS_AUDIT.md).
-
-## Nova auditoria de estatísticas e pedidos
-Consultas MOCK de Natal forense, filtros de pedido (13 status, financeiro, sessões), detalhe por ID/UUID e campos seguros do Cliente 360. Documentação: [auditoria do CRM](docs/AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md), [API read-only futura](docs/PROPOSTA_EXTENSION_READ_APIS.md) e [playbook](docs/CONVERSATION_PLAYBOOK.md). Os 10 pedidos da fixture são somente uma amostra; estatísticas de 137 vendas também são fictícias. Nenhuma rota Manager é chamada.
+1. Confirmar CI/validação local verde e registrar o commit anterior em produção (`git rev-parse HEAD`) antes de atualizar.
+2. Atualizar `/opt/evydencia-mcp/app` exclusivamente via `git fetch origin main && git checkout main && git pull --ff-only origin main` (sem editar o repositório Laravel em `/var/www/evydencia/current`).
+3. Validar sintaxe dos bridges PHP (`sudo -u evydmcp -g www-data php -l scripts/crm-forensic-bridge.php` e `scripts/crm-natal-bridge.php`), reiniciar `evydencia-crm-mcp-live.service` e confirmar `version` + `build_commit` em `/healthz` e `crm_capacidades`.
+4. **Rollback imediato** em caso de regressão:
+   ```bash
+   cd /opt/evydencia-mcp/app && git checkout <COMMIT_ANTERIOR> && systemctl restart evydencia-crm-mcp-live.service
+   ```

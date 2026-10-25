@@ -190,6 +190,22 @@ function humanAgeAt(?string $birthYmd, CarbonImmutable $refDate): ?string
     return implode(' e ', $parts);
 }
 
+function yearsAt(?string $birthYmd, CarbonImmutable $refDate): ?int
+{
+    if ($birthYmd === null || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $birthYmd) || str_starts_with($birthYmd, '0000-')) {
+        return null;
+    }
+    try {
+        $b = CarbonImmutable::createFromFormat('Y-m-d', $birthYmd, 'America/Sao_Paulo')->startOfDay();
+    } catch (Throwable) {
+        return null;
+    }
+    if ($b->greaterThan($refDate)) {
+        return null;
+    }
+    return (int) $b->diff($refDate)->y;
+}
+
 function safeCustomerUrl(string $uuid): string
 {
     try {
@@ -200,7 +216,7 @@ function safeCustomerUrl(string $uuid): string
     } catch (Throwable) {
         // Fallback to canonical CRM URL below
     }
-    return "https://evydencia.com/gestao/clientes/{$uuid}/ler";
+    return "https://evydencia.com/gestao/clientes/{$uuid}/consultar";
 }
 
 function projectCustomer(?Customer $c, bool $fullProfile, PagarmeCardProfileService $cardSvc): ?array
@@ -226,6 +242,8 @@ function projectCustomer(?Customer $c, bool $fullProfile, PagarmeCardProfileServ
             'url' => $avatarUrl,
             'revision' => (int) ($c->avatar_revision ?? 0),
             'initials' => customerInitials($c->name),
+            'asset_accessible' => $avatarUrl !== null ? null : false,
+            'asset_check_status' => 'not_checked',
         ],
         'registration_completeness' => [
             'is_complete_for_card' => (bool) $readiness->ready,
@@ -288,11 +306,15 @@ function projectOrdersBatch(
     Collection $orders,
     bool $fullProfile,
     PagarmeCardProfileService $cardSvc,
-    CarbonImmutable $todayBrt
+    CarbonImmutable $todayBrt,
+    string $detailLevel = 'forense'
 ): array {
     if ($orders->isEmpty()) {
         return [];
     }
+
+    $isSummaryOnly = ($detailLevel === 'resumo');
+    $includeCalendarSync = ($detailLevel === 'forense');
 
     $orders->loadMissing([
         'customer.city.state',
@@ -304,6 +326,15 @@ function projectOrdersBatch(
         'coupon',
         'cake',
     ]);
+
+    $calendarUiSvc = null;
+    if ($includeCalendarSync && class_exists(\App\Services\Calendar\Presentation\OrderCalendarUiStateService::class)) {
+        try {
+            $calendarUiSvc = app(\App\Services\Calendar\Presentation\OrderCalendarUiStateService::class);
+        } catch (Throwable) {
+            $calendarUiSvc = null;
+        }
+    }
 
     $orderIds = $orders->modelKeys();
 
@@ -443,32 +474,47 @@ function projectOrdersBatch(
                     }
                 }
 
-                $txOut = $inst->transactions->sortBy('id')->values()->map(static fn ($tx): array => [
-                    'transaction_id' => (int) $tx->id,
-                    'status_code' => enumInt($tx->status),
-                    'status_key' => enumProp($tx->status, 'key'),
-                    'status_label' => enumProp($tx->status, 'description'),
-                    'message' => scalarOrEnumString($tx->message),
-                    'gateway_order_or_tx_id' => scalarOrEnumString($tx->original_id),
-                    'gateway_status' => scalarOrEnumString($tx->original_status),
-                    'gateway_reference' => scalarOrEnumString($tx->original_message),
-                    'recorded_at_brt' => formatBrt($tx->created_at),
-                ])->all();
+                $txOut = $isSummaryOnly
+                    ? []
+                    : $inst->transactions->sortBy('id')->values()->map(static fn ($tx): array => [
+                        'transaction_id' => (int) $tx->id,
+                        'status_code' => enumInt($tx->status),
+                        'status_key' => enumProp($tx->status, 'key'),
+                        'status_label' => enumProp($tx->status, 'description'),
+                        'message' => scalarOrEnumString($tx->message),
+                        'gateway_order_or_tx_id' => scalarOrEnumString($tx->original_id),
+                        'gateway_status' => scalarOrEnumString($tx->original_status),
+                        'gateway_reference' => scalarOrEnumString($tx->original_message),
+                        'recorded_at_brt' => formatBrt($tx->created_at),
+                    ])->all();
 
-                $billsOut = $inst->bills->sortBy('id')->values()->map(static fn ($b): array => [
-                    'bill_id' => (int) $b->id,
-                    'installment' => enumInt($b->installment),
-                    'status_key' => enumProp($b->status, 'key') ?? scalarOrEnumString($b->status),
-                    'status_label' => enumProp($b->status, 'description'),
-                    'type_key' => enumProp($b->type, 'key') ?? scalarOrEnumString($b->type),
-                    'type_label' => enumProp($b->type, 'description'),
-                    'amount_reais' => reaisOfCents(centsOf($b->amount)),
-                    'paid_reais' => reaisOfCents(centsOf($b->payment_total)),
-                    'expiry_at_brt' => formatBrt($b->expiry_at),
-                    'closed_at_brt' => formatBrt($b->closed_at),
-                    'aborted_at_brt' => formatBrt($b->aborted_at),
-                    'note' => scalarOrEnumString($b->note),
-                ])->all();
+                $billsOut = $isSummaryOnly
+                    ? []
+                    : $inst->bills->sortBy('id')->values()->map(static function ($b): array {
+                        $bAmountCents = centsOf($b->amount);
+                        $bPaidCents = centsOf($b->payment_total);
+                        return [
+                            'bill_id' => (int) $b->id,
+                            'installment' => enumInt($b->installment),
+                            'status_key' => enumProp($b->status, 'key') ?? scalarOrEnumString($b->status),
+                            'status_label' => enumProp($b->status, 'description'),
+                            'type_key' => enumProp($b->type, 'key') ?? scalarOrEnumString($b->type),
+                            'type_label' => enumProp($b->type, 'description'),
+                            'amount_cents' => $bAmountCents,
+                            'amount_reais' => reaisOfCents($bAmountCents),
+                            'paid_cents' => $bPaidCents,
+                            'paid_reais' => reaisOfCents($bPaidCents),
+                            'expiry_at_brt' => formatBrt($b->expiry_at),
+                            'closed_at_brt' => formatBrt($b->closed_at),
+                            'aborted_at_brt' => formatBrt($b->aborted_at),
+                            'note' => scalarOrEnumString($b->note),
+                        ];
+                    })->all();
+
+                $discInstCents = centsOf($inst->discount);
+                $incInstCents = centsOf($inst->increase);
+                $finesInstCents = centsOf($inst->fines);
+                $intInstCents = centsOf($inst->interest);
 
                 return [
                     'installment_id' => (int) $inst->id,
@@ -481,10 +527,14 @@ function projectOrdersBatch(
                     'paid_cents' => $paidCents,
                     'paid_at_brt' => $paidAtBrt,
                     'is_paid' => $isPaid,
-                    'discount_reais' => reaisOfCents(centsOf($inst->discount)),
-                    'increase_reais' => reaisOfCents(centsOf($inst->increase)),
-                    'fines_reais' => reaisOfCents(centsOf($inst->fines)),
-                    'interest_reais' => reaisOfCents(centsOf($inst->interest)),
+                    'discount_cents' => $discInstCents,
+                    'discount_reais' => reaisOfCents($discInstCents),
+                    'increase_cents' => $incInstCents,
+                    'increase_reais' => reaisOfCents($incInstCents),
+                    'fines_cents' => $finesInstCents,
+                    'fines_reais' => reaisOfCents($finesInstCents),
+                    'interest_cents' => $intInstCents,
+                    'interest_reais' => reaisOfCents($intInstCents),
                     'method_id' => $inst->payment_method_id !== null ? (int) $inst->payment_method_id : null,
                     'method_name' => $methodName,
                     'method_description' => $pm?->description ?: null,
@@ -576,25 +626,32 @@ function projectOrdersBatch(
                 'description' => $it->product?->description ?? null,
                 'is_bundle' => $isBundle,
                 'quantity' => $qty,
+                'unit_price_cents' => $unitCents,
                 'unit_price_reais' => reaisOfCents($unitCents),
+                'gross_amount_cents' => $grossCents,
                 'gross_amount_reais' => reaisOfCents($grossCents),
+                'discount_cents' => $discCents,
                 'discount_reais' => reaisOfCents($discCents),
+                'net_total_cents' => $netCents,
                 'net_total_reais' => reaisOfCents($netCents),
                 'total_reais' => reaisOfCents($netCents),
+                'entry_cents' => $entryCents,
                 'entry_reais' => reaisOfCents($entryCents),
                 'bonus_classification' => $bonusClassification,
             ];
         })->all();
 
-        // Participants + registration completion state + age at session vs today
+        // Participants + registration completion state + lock reason + age at session vs today + kinship anomaly check
         $pvd = new OrderParticipantManagementViewData($order);
         $sessionCarbon = toCarbonBrt($order->schedule_1);
         $sessionDateRef = $sessionCarbon?->startOfDay();
         $todayYmd = $todayBrt->format('Y-m-d');
         $sessionYmd = $sessionDateRef?->format('Y-m-d');
+        $adultKinshipNorms = ['mae', 'pai', 'vo', 'avo', 'esposo (a)', 'marido', 'esposa', 'titular'];
+        $kinshipAgeAnomalies = [];
 
-        $participantsOut = $fullProfile
-            ? $order->participants->values()->map(static function ($p) use ($todayBrt, $todayYmd, $sessionDateRef, $sessionYmd): array {
+        $participantsMapped = $order->participants->values()->map(
+            static function ($p) use ($order, $fullProfile, $todayBrt, $todayYmd, $sessionDateRef, $sessionYmd, $adultKinshipNorms, &$kinshipAgeAnomalies): array {
                 $birthYmd = null;
                 if ($p->birth !== null && $p->birth !== '') {
                     $birthYmd = $p->birth instanceof DateTimeInterface
@@ -604,22 +661,146 @@ function projectOrdersBatch(
                         $birthYmd = null;
                     }
                 }
+                $pName = $p->name ? trim((string) $p->name) : null;
+                $kinship = $p->relation?->name ? trim((string) $p->relation->name) : null;
                 $ageToday = humanAgeAt($birthYmd, $todayBrt);
                 $ageSession = $sessionDateRef ? humanAgeAt($birthYmd, $sessionDateRef) : null;
+                $refDateForYears = $sessionDateRef ?? $todayBrt;
+                $yearsAtRef = yearsAt($birthYmd, $refDateForYears);
+
+                if ($kinship !== null && $yearsAtRef !== null && $yearsAtRef < 14) {
+                    $kinNorm = Str::ascii(mb_strtolower($kinship));
+                    if (in_array($kinNorm, $adultKinshipNorms, true)) {
+                        $kinshipAgeAnomalies[] = [
+                            'order_id' => (int) $order->id,
+                            'participant_id' => (int) $p->id,
+                            'participant_name' => $fullProfile ? $pName : null,
+                            'kinship' => $kinship,
+                            'birth_date' => $fullProfile ? $birthYmd : null,
+                            'age_years_at_reference' => $yearsAtRef,
+                            'age_at_session' => $ageSession,
+                            'anomaly_code' => 'parent_or_adult_kinship_with_child_age',
+                            'advisory' => 'Parentesco adulto registrado com data de nascimento infantil (< 14 anos). Provável inversão cadastral; confirmar com o titular antes de alterar.',
+                        ];
+                    }
+                }
 
                 return [
                     'participant_id' => (int) $p->id,
-                    'name' => $p->name ? trim((string) $p->name) : null,
+                    'name' => $pName,
                     'birth_date' => $birthYmd,
-                    'kinship' => $p->relation?->name ? trim((string) $p->relation->name) : null,
+                    'kinship' => $kinship,
                     'age' => $ageToday,
                     'age_today' => $ageToday,
                     'age_reference_date' => $todayYmd,
                     'age_at_session' => $ageSession,
                     'session_reference_date' => $sessionYmd,
                 ];
-            })->all()
-            : [];
+            }
+        )->all();
+
+        $participantsOut = $fullProfile ? $participantsMapped : [];
+
+        $canEditNow = $pvd->customerCanEdit();
+        $accessLabel = method_exists($pvd, 'customerAccessLabel')
+            ? $pvd->customerAccessLabel()
+            : ($canEditNow ? 'Edição liberada ao cliente' : 'Edição bloqueada para o cliente');
+        $tempAccessState = method_exists($pvd, 'temporaryAccessState') ? $pvd->temporaryAccessState() : 'disabled';
+        $tempAccessLabel = method_exists($pvd, 'temporaryAccessLabel') ? $pvd->temporaryAccessLabel() : null;
+
+        if ($canEditNow) {
+            $editLockReason = 'editable';
+        } elseif (stripos((string) $accessLabel, 'desativado') !== false || $tempAccessState === 'disabled') {
+            $editLockReason = 'portal_feature_disabled';
+        } elseif (in_array($currentStatusKey, ['order_completed', 'product_retrieve_confirmed', 'order_aborted', 'payment_chargeback', 'payment_refunded'], true)) {
+            $editLockReason = 'order_finalized_or_reversed';
+        } else {
+            $editLockReason = 'status_locked_for_customer';
+        }
+
+        // Schedule & Google Calendar sync state (OrderCalendarUiStateService)
+        $googleCalendarState = null;
+        if ($calendarUiSvc !== null) {
+            try {
+                $calRaw = $calendarUiSvc->forOrder($order);
+                if (is_array($calRaw)) {
+                    $sessPurpose = is_array($calRaw['purposes']['orderSession'] ?? null) ? $calRaw['purposes']['orderSession'] : [];
+                    $selPurpose = is_array($calRaw['purposes']['orderSelection'] ?? null) ? $calRaw['purposes']['orderSelection'] : [];
+                    $histEntries = is_array($calRaw['history']['entries'] ?? null) ? array_slice($calRaw['history']['entries'], 0, 20) : [];
+                    $googleCalendarState = [
+                        'available' => true,
+                        'sync_enabled' => (bool) ($calRaw['enabled'] ?? false),
+                        'order_session' => [
+                            'is_synced' => (bool) ($sessPurpose['isSynced'] ?? false),
+                            'status' => $sessPurpose['status'] ?? null,
+                            'synced_at_label' => $sessPurpose['syncedAtLabel'] ?? null,
+                            'status_message' => $sessPurpose['statusMessage'] ?? null,
+                            'html_link' => $sessPurpose['htmlLink'] ?? null,
+                        ],
+                        'order_selection' => [
+                            'is_synced' => (bool) ($selPurpose['isSynced'] ?? false),
+                            'status' => $selPurpose['status'] ?? null,
+                            'synced_at_label' => $selPurpose['syncedAtLabel'] ?? null,
+                            'status_message' => $selPurpose['statusMessage'] ?? null,
+                            'html_link' => $selPurpose['htmlLink'] ?? null,
+                        ],
+                        'schedule_change_history_count' => count($histEntries),
+                        'schedule_change_history' => $histEntries,
+                    ];
+                }
+            } catch (Throwable) {
+                $googleCalendarState = [
+                    'available' => false,
+                    'unavailable_reason' => 'calendar_ui_state_query_failed',
+                ];
+            }
+        }
+
+        $scheduleDetails = [
+            'session_at_brt' => formatBrt($order->schedule_1),
+            'selection_at_brt' => formatBrt($order->schedule_2),
+            'auxiliary_schedule_at_brt' => formatBrt($order->schedule_3),
+            'google_calendar' => $googleCalendarState ?? [
+                'available' => false,
+                'unavailable_reason' => $includeCalendarSync ? 'calendar_service_unavailable' : 'omitted_in_list_level_use_order_detail',
+            ],
+        ];
+
+        // Personalization, cake, notes & explicit Santa audio availability
+        $hasChildPers = !empty($order->child_fullname)
+            || !empty($order->child_options)
+            || !empty($order->child_values)
+            || !empty($order->child_genders);
+        $cakeModel = $order->relationLoaded('cake') ? $order->cake : null;
+        $personalization = [
+            'observation_public' => $fullProfile ? ($order->note ?: null) : null,
+            'internal_note' => $fullProfile ? ($order->inner ?: null) : null,
+            'child_personalization' => [
+                'available' => $hasChildPers,
+                'unavailable_reason' => $hasChildPers ? null : 'not_filled_on_order',
+                'child_fullname' => $fullProfile ? ($order->child_fullname ?: null) : null,
+                'child_options' => $order->child_options ?? null,
+                'child_values' => $order->child_values ?? null,
+                'recorded_child_genders' => $order->child_genders ?? null,
+            ],
+            'cake' => $cakeModel
+                ? [
+                    'available' => true,
+                    'cake_id' => (int) $cakeModel->id,
+                    'status' => scalarOrEnumString($cakeModel->status ?? null),
+                    'decision_status' => scalarOrEnumString($cakeModel->decision_status ?? null),
+                    'delivery_at_brt' => formatBrt($cakeModel->delivery_at ?? null),
+                    'note' => scalarOrEnumString($cakeModel->note ?? $cakeModel->observation ?? null),
+                ]
+                : [
+                    'available' => false,
+                    'unavailable_reason' => 'no_cake_record_for_order',
+                ],
+            'santa_audio' => [
+                'available' => false,
+                'unavailable_reason' => 'no_santa_audio_field_in_crm_schema',
+            ],
+        ];
 
         $custProjected = projectCustomer($order->customer, $fullProfile, $cardSvc);
         $topPaymentMethods = $effectivePaidMethods !== [] ? $effectivePaidMethods : $configuredMethods;
@@ -628,12 +809,13 @@ function projectOrdersBatch(
             'order_id' => (int) $order->id,
             'order_uuid' => $order->uuid,
             'crm_order_url' => $order->uuid ? "https://evydencia.com/gestao/pedidos/{$order->uuid}/detalhes" : null,
+            'crm_customer_url' => $custProjected['crm_customer_url'] ?? null,
             'customer_name' => $order->customer?->name,
             'customer_phone_masked' => maskPhoneBr($order->customer?->whatsapp ?: $order->customer?->phone),
             'customer_avatar_url' => $custProjected['avatar']['url'] ?? null,
             'customer_has_avatar' => $custProjected['avatar']['has_avatar'] ?? false,
             'customer_initials' => $custProjected['avatar']['initials'] ?? '?',
-            'customer' => $custProjected,
+            'customer' => $isSummaryOnly ? null : $custProjected,
             'status_id' => $currentStatusEnum?->value ?? null,
             'status_key' => $currentStatusKey,
             'status_label' => $currentStatusEnum?->description ?? null,
@@ -643,16 +825,20 @@ function projectOrdersBatch(
                 'label' => $currentStatusEnum?->description ?? null,
             ],
             'status_history_count' => count($statusHistory),
-            'status_history' => $statusHistory,
+            'status_history' => $isSummaryOnly ? [] : $statusHistory,
             'created_at' => $order->created_at ? CarbonImmutable::instance($order->created_at)->toIso8601String() : null,
             'created_at_brt' => formatBrt($order->created_at),
             'updated_at_brt' => formatBrt($order->updated_at),
             'session_at' => formatBrt($order->schedule_1),
             'selection_at' => formatBrt($order->schedule_2),
+            'auxiliary_schedule_at' => formatBrt($order->schedule_3),
+            'schedule_details' => $scheduleDetails,
             'observation' => $fullProfile ? ($order->note ?: null) : null,
+            'internal_note' => $fullProfile ? ($order->inner ?: null) : null,
+            'personalization' => $isSummaryOnly ? null : $personalization,
             'package_name' => $bundleItem?->product?->name ?? null,
             'item_count' => count($itemsOut),
-            'items' => $itemsOut,
+            'items' => $isSummaryOnly ? [] : $itemsOut,
             'payment_methods' => $topPaymentMethods,
             'total_reais' => reaisOfCents($commercialCents),
             'received_reais' => reaisOfCents($receivedCents),
@@ -661,27 +847,37 @@ function projectOrdersBatch(
             'received_cents' => $receivedCents,
             'remaining_cents' => $remainingCents,
             'payment_summary' => [
+                'subtotal_cents' => $subtotalCents,
                 'subtotal_reais' => reaisOfCents($subtotalCents),
+                'items_discount_cents' => $discountItemsCents,
                 'items_discount_reais' => reaisOfCents($discountItemsCents),
                 'coupon_code' => $order->coupon?->code ?? null,
+                'coupon_discount_cents' => $couponAmountCents,
                 'coupon_discount_reais' => reaisOfCents($couponAmountCents),
+                'total_discounts_cents' => $totalDiscountCents,
                 'total_discounts_reais' => reaisOfCents($totalDiscountCents),
+                'total_cents' => $commercialCents,
                 'total_reais' => reaisOfCents($commercialCents),
+                'received_cents' => $receivedCents,
                 'received_reais' => reaisOfCents($receivedCents),
+                'remaining_cents' => $remainingCents,
                 'remaining_reais' => reaisOfCents($remainingCents),
+                'entry_snapshot_cents' => $entrySnapshotCents,
                 'entry_snapshot_reais' => reaisOfCents($entrySnapshotCents),
                 'installments_count' => count($installmentsOut),
                 'paid_installments_count' => $paidInstallmentsCount,
                 'open_installments_count' => $openCount,
+                'open_installments_cents' => $openCents,
                 'open_installments_reais' => reaisOfCents($openCents),
                 'effective_paid_methods' => $effectivePaidMethods,
+                'effective_paid_by_method_cents' => $effectivePaidByMethodCents,
                 'effective_paid_by_method_reais' => $effectivePaidByMethodReais,
                 'configured_installment_methods' => $configuredMethods,
                 'paid_method_categories' => $paidMethodCategories,
                 'payment_needs_review' => $paymentNeedsReview,
                 'financial_review_reasons' => $reviewReasons,
             ],
-            'installments' => $installmentsOut,
+            'installments' => $isSummaryOnly ? [] : $installmentsOut,
             'participant_count' => $pvd->participantsCount(),
             'participants_registration' => [
                 'count' => $pvd->participantsCount(),
@@ -689,9 +885,15 @@ function projectOrdersBatch(
                 'completed_at_brt' => formatBrt($order->participants_completed_at),
                 'completed_source' => $order->participants_completed_source ?: null,
                 'status_label' => $pvd->completionLabel(),
-                'customer_can_edit_now' => $pvd->customerCanEdit(),
+                'customer_can_edit_now' => $canEditNow,
+                'customer_access_label' => $accessLabel,
+                'edit_lock_reason' => $editLockReason,
+                'temporary_access_state' => $tempAccessState,
+                'temporary_access_label' => $tempAccessLabel,
+                'kinship_age_anomalies_count' => count($kinshipAgeAnomalies),
+                'kinship_age_anomalies' => $kinshipAgeAnomalies,
             ],
-            'participants' => $participantsOut,
+            'participants' => $isSummaryOnly ? [] : $participantsOut,
         ];
     }
 
@@ -707,7 +909,11 @@ function normalizeParticipantKey(?string $name): string
 function buildParticipantCrossOrderAudit(array $projectedOrders): array
 {
     $groups = [];
+    $kinshipAgeAnomalies = [];
     foreach ($projectedOrders as $ord) {
+        foreach ($ord['participants_registration']['kinship_age_anomalies'] ?? [] as $anom) {
+            $kinshipAgeAnomalies[] = $anom;
+        }
         foreach ($ord['participants'] ?? [] as $p) {
             $key = normalizeParticipantKey($p['name'] ?? '');
             if ($key === '') {
@@ -782,16 +988,21 @@ function buildParticipantCrossOrderAudit(array $projectedOrders): array
 
     return [
         'unique_named_participants_count' => count($profiles),
-        'has_discrepancies' => $birthDiscrepancies !== [] || $kinshipDiscrepancies !== [],
+        'has_discrepancies' => $birthDiscrepancies !== [] || $kinshipDiscrepancies !== [] || $kinshipAgeAnomalies !== [],
         'birth_date_discrepancies_count' => count($birthDiscrepancies),
         'birth_date_discrepancies' => $birthDiscrepancies,
         'kinship_discrepancies' => $kinshipDiscrepancies,
+        'kinship_age_anomalies_count' => count($kinshipAgeAnomalies),
+        'kinship_age_anomalies' => $kinshipAgeAnomalies,
         'participants_timeline' => $profiles,
     ];
 }
 
 $action = (string) ($payload['action'] ?? '');
 $fullProfile = !empty($payload['full_profile']);
+$requestedDetailLevel = isset($payload['detail_level']) && in_array($payload['detail_level'], ['resumo', 'padrao', 'forense'], true)
+    ? (string) $payload['detail_level']
+    : null;
 
 if ($action === 'orders.detail') {
     $uuid = isset($payload['uuid']) ? trim((string) $payload['uuid']) : '';
@@ -813,9 +1024,11 @@ if ($action === 'orders.detail') {
         exit(0);
     }
 
-    $batch = projectOrdersBatch(new Collection([$order]), $fullProfile, $cardSvc, $todayBrt);
+    $effDetailLevel = $requestedDetailLevel ?? 'forense';
+    $batch = projectOrdersBatch(new Collection([$order]), $fullProfile, $cardSvc, $todayBrt, $effDetailLevel);
     echo json_encode([
         'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
+        'detail_level' => $effDetailLevel,
         'order' => $batch[0],
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit(0);
@@ -825,6 +1038,7 @@ if ($action === 'orders.search') {
     $filters = is_array($payload['filters'] ?? null) ? $payload['filters'] : [];
     $limit = min(25, max(1, (int) ($payload['limit'] ?? 10)));
     $page = max(1, (int) ($payload['page'] ?? 1));
+    $effDetailLevel = $requestedDetailLevel ?? 'padrao';
 
     $totalOrdersInCrm = Order::query()->count();
     $q = Order::query();
@@ -890,11 +1104,12 @@ if ($action === 'orders.search') {
         ->take($limit)
         ->get();
 
-    $ordersOut = projectOrdersBatch($rows, $fullProfile, $cardSvc, $todayBrt);
+    $ordersOut = projectOrdersBatch($rows, $fullProfile, $cardSvc, $todayBrt, $effDetailLevel);
 
     echo json_encode([
         'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
         'scope' => 'PAGINATED_FORENSIC_ORDER_LIST',
+        'detail_level' => $effDetailLevel,
         'ordering' => 'order_id_desc_most_recent_first',
         'applied_filters' => $filters,
         'pagination' => [
@@ -1157,13 +1372,18 @@ if ($action === 'customers.forensic360') {
             'valid_orders_count' => $validOrdersCount,
             'reversed_or_aborted_orders_count' => $reversedOrAbortedCount,
             'completed_sessions_count' => $completedSessionsCount,
+            'lifetime_contracted_valid_cents' => $contractedValidCents,
             'lifetime_contracted_valid_reais' => reaisOfCents($contractedValidCents),
+            'lifetime_received_cents' => $receivedAllCents,
             'lifetime_received_reais' => reaisOfCents($receivedAllCents),
+            'lifetime_remaining_valid_cents' => $remainingValidCents,
             'lifetime_remaining_valid_reais' => reaisOfCents($remainingValidCents),
+            'average_ticket_valid_cents' => $validOrdersCount > 0 ? (int) round($contractedValidCents / $validOrdersCount) : 0,
             'average_ticket_valid_reais' => $validOrdersCount > 0 ? round(($contractedValidCents / 100) / $validOrdersCount, 2) : 0,
             'years_attended' => $yearsAttended,
         ],
         'financial_audit_summary' => [
+            'received_by_effective_method_cents' => $receivedByMethodCents,
             'received_by_effective_method_reais' => $receivedByMethodReais,
             'orders_needing_financial_review_count' => count($ordersNeedingReview),
             'orders_needing_financial_review' => $ordersNeedingReview,
