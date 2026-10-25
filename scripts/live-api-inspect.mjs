@@ -11,15 +11,20 @@ try {
    schemas[file]=shapeOnly(raw);
   }
   result={mode:'OFFLINE',network:false,schemas};
- }else if(family==='extension'){
+ }else if(['extension','legacy'].includes(family)){
+  if(e.CRM_LIVE_NETWORK_CONSENT!=='1')throw Error('live_probe_network_consent_required');
+  const host=new URL(e.CRM_BASE_URL).hostname.toLowerCase();
+  if(host!==(e.CRM_EXPECTED_HOST??'evydencia.com').toLowerCase())throw Error('live_probe_host_mismatch');
+  if(family==='extension'){
   result=await auditExtension({baseUrl:e.CRM_BASE_URL,token:e.CRM_READ_TOKEN,
    action:e.CRM_PROBE_ACTION??'bootstrap',phoneValue:e.CRM_TEST_PHONE,
    consent:e.CRM_LIVE_CUSTOMER_CONSENT==='1',
    previewConsent:e.CRM_LIVE_PREVIEW_PROBE_CONSENT==='1'});
- }else if(family==='legacy'){
+ }else{
   result=await auditLegacy({baseUrl:e.CRM_BASE_URL,token:e.CRM_READ_TOKEN,
    action:e.CRM_PROBE_ACTION??'orders',uuid:e.CRM_TEST_ORDER_UUID,
    allowPrivilegedGet:e.EVYD_ACK_LEGACY_WRITE_POWER==='1'});
+  }
  }else throw Error('probe_family_invalid');
  console.log('CRM_JSON_STRUCTURE_PASS '+JSON.stringify(result));
 }catch(error){
