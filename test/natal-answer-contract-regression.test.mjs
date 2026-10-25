@@ -45,3 +45,11 @@ test('expanded goal rejects accidental base-goal value in reais',()=>{
  assert.ok(expanded);
  assert.equal(Number(expanded[1])/100,Number(expanded[2]));
 });
+
+test('aging and purchase-time figures are explicitly marked as non-canonical in the bridge',()=>{
+ assert.match(php,/financial_aging_vs_canonical/);
+ assert.match(php,/NEEDS_REVIEW_DIFFERENT_PAYMENT_BASIS_OR_SCOPE/);
+ assert.match(php,/purchase_timing_semantics/);
+ assert.match(php,/'basis' => 'order_created_at'/);
+ assert.match(php,/'confirmed_sale_time_available' => false/);
+});
