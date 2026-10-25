@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {createHash,randomBytes} from 'node:crypto';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
-import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES,PROPOSAL_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
+import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES,FORENSIC_CRM_TOOL_NAMES,PROPOSAL_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
 import {gatewayConfig,createSealer,redirectAllowed} from '../src/oauth-gateway.mjs';
 
 const R=['extension:bootstrap','extension:customer-read'];
@@ -312,18 +312,30 @@ test('no write call ever reached the CRM and logs carry no secrets or PII',()=>{
  assert.ok(logs.some(l=>l.evt==='tool'&&l.ok===true&&typeof l.op==='string'));
 });
 
-test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispatch, full participants and CRM order URLs',async()=>{
+test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispatch, forensic customer search, full participants and CRM order URLs',async()=>{
  const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
+ const hz=await call(g,'/healthz');
+ assert.equal(hz.status,200);
+ const hzJson=await hz.json();
+ assert.equal(typeof hzJson.build_commit,'string');
  const {tokens}=await connect(g,'fake-op7-write-00003');
+ const rawRes=await rawMcp(g,tokens.access_token);
+ assert.equal(rawRes.headers.get('cache-control'),'private, no-store');
  const client=await mcp(g,tokens.access_token);
  try{
   const {tools}=await client.listTools();
-  assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES].sort());
+  assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES].sort());
+  const cap=await client.callTool({name:'crm_capacidades',arguments:{}});
+  assert.equal(cap.structuredContent.forensic_audit_enabled,true);
+  assert.equal(typeof cap.structuredContent.build_commit,'string');
   const s=await client.callTool({name:'crm_pedidos_buscar',arguments:{}});
   assert.equal(s.structuredContent.orders[0].crm_order_url,'https://evydencia.com/gestao/pedidos/22222222-bbbb-4222-8222-000000000202/detalhes');
   assert.equal(s.structuredContent.orders[0].participants[0].name,'João Miguel Exemplo');
   assert.equal(s.structuredContent.orders[0].participants[0].birth_date,'2024-04-30');
   assert.equal(s.structuredContent.orders[0].participants[0].kinship,'Filho (a)');
+  assert.equal(s.structuredContent.orders[0].participants[0].session_reference_date,'2026-11-02');
+  const dById=await client.callTool({name:'crm_pedido_detalhe',arguments:{order_id:5001}});
+  assert.equal(dById.structuredContent.order.order_id,5001);
   const np=await client.callTool({name:'crm_relatorio_natal_sem_participantes',arguments:{limite:10}});
   assert.equal(np.structuredContent.orders[0].crm_order_url,'https://evydencia.com/gestao/pedidos/11111111-aaaa-4111-8111-000000000101/detalhes');
   const prev=await client.callTool({name:'crm_previa_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano'}});

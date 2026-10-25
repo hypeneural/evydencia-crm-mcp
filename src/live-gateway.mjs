@@ -4,30 +4,49 @@
 // Logs never carry tokens or raw PII.
 import {McpServer,createMcpHandler,requireBearerAuth,getOAuthProtectedResourceMetadataUrl,oauthMetadataResponse,validateHostHeader} from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {dirname,resolve} from 'node:path';
 import {Readable} from 'node:stream';
+import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {capabilityManifest} from './capabilities.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE} from './oauth-gateway.mjs';
 
+const REPO_ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+const resolveBuildInfo=()=>{
+ try{
+  const commit=execFileSync('git',['rev-parse','--short','HEAD'],{cwd:REPO_ROOT,encoding:'utf8',timeout:1500}).trim()||'unknown';
+  const branch=execFileSync('git',['rev-parse','--abbrev-ref','HEAD'],{cwd:REPO_ROOT,encoding:'utf8',timeout:1500}).trim()||'unknown';
+  return {commit,branch};
+ }catch{
+  return {commit:process.env.EVYD_BUILD_COMMIT||'unknown',branch:process.env.EVYD_BUILD_BRANCH||'unknown'};
+ }
+};
+export const BUILD_INFO=Object.freeze(resolveBuildInfo());
+
 export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_campanha_publica','crm_horarios_publicos','crm_conexao_privada','crm_cliente_resumo','crm_cliente_360']);
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
+export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
 export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
 const SAFE_ERR=/^(crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required)$/;
-const INSTRUCTIONS='EVYDÊNCIA CRM LIVE — Conectado diretamente ao CRM oficial (evydencia.com, sem intermediário). Regras de precisão obrigatórias: (1) Para KPIs de Natal 2026, pedidos aguardando retirada (operational_stages_2026.waiting_product_retrieve_orders), pedidos sem participantes (orders_without_participants_2026), próxima sessão agendada de Natal (sessions_schedule_2026.next_session), histórico de ensaios realizados até a data atual nos anos anteriores 2021–2026 (realized_sessions_comparison_at_cutoff) e comparativos de vendas acumuladas até 25/10 (ytd_comparison_at_cutoff), use SEMPRE crm_estatisticas_natal. (2) Sempre inclua o link direto do pedido no CRM (crm_order_url: https://evydencia.com/gestao/pedidos/$UUID/detalhes) ao citar pedidos. (3) Para consultar dados completos dos participantes de um pedido (nome completo, data de nascimento, idade e parentesco), use crm_pedidos_buscar, crm_pedido_detalhe ou crm_cliente_360. (4) Para enviar ou agendar proposta comercial de Natal 2026 para um telefone, use crm_enviar_proposta_natal (ou crm_previa_proposta_natal para apenas simular).';
+const INSTRUCTIONS='EVYDÊNCIA CRM LIVE (v0.9 Forense) — Conectado diretamente ao CRM oficial (evydencia.com). Regras obrigatórias de precisão e auditoria: (1) Natal 2026: para KPIs, pedidos aguardando retirada (operational_stages_2026.waiting_product_retrieve_orders), sem participantes (orders_without_participants_2026), próxima sessão (sessions_schedule_2026.next_session), ensaios realizados em 2021–2026 (realized_sessions_comparison_at_cutoff) e comparativos de vendas até o corte (ytd_comparison_at_cutoff), use SEMPRE crm_estatisticas_natal. (2) Links diretos: sempre cite crm_order_url (https://evydencia.com/gestao/pedidos/$UUID/detalhes) e crm_customer_url (https://evydencia.com/gestao/clientes/$UUID/ler). (3) Auditoria financeira e parcelas: consulte installments[] e payment_summary; diferencie SEMPRE method_name (meio específico registrado na parcela, ex.: "Permuta", "Pix - Pagar.me") de method_category_label (categoria contábil/enum, ex.: "Dinheiro", "Pix"), verifique payment_summary.effective_paid_by_method_reais, payment_needs_review e a linha do tempo cronológica em status_history[]. (4) Produtos e bônus R$ 0: verifique items[].bonus_classification; só afirme regra automática de campanha (campaign_bonus / benefit_key) quando bonus_classification.proven === true; quando origin === "unknown" (proven: false), informe que a origem do item R$ 0 não está rastreada automaticamente. (5) Participantes: informe participants_registration.status_label ("Cadastro pendente" vs "Concluído em..."), diferencie age_at_session (session_reference_date) de age_today (age_reference_date) e, no Cliente 360, verifique participants_cross_order_audit.birth_date_discrepancies sem jamais sugerir sobrescrita automática. (6) Avatar e clientes sem pedidos (leads): verifique avatar.has_avatar (url quando true; initials com url: null quando false — ausência de foto não é erro) e registration_completeness; para localizar clientes com 0 pedidos ou por nome/CPF/e-mail/UUID, use crm_clientes_buscar, crm_cliente_resumo ou crm_cliente_360. (7) Proposta Natal 2026: use crm_previa_proposta_natal / crm_enviar_proposta_natal.';
 
 export function defaultLog(entry){process.stderr.write(JSON.stringify({ts:new Date().toISOString(),...entry})+'\n')}
 
 function manifest(directEnabled=false,operatorFullCrm=false){
  const m=capabilityManifest({mock:false,privateEnabled:true});
  const activeSet=new Set([...LIVE_TOOL_NAMES,...(operatorFullCrm?PROPOSAL_CRM_TOOL_NAMES:[])]);
- return {...m,mode:operatorFullCrm?'LIVE_OPERATOR_FULL_OAUTH':'LIVE_READ_ONLY_OAUTH',direct_crm_read_enabled:directEnabled,
+ return {...m,version:'0.9.0',build_commit:BUILD_INFO.commit,repository_branch:BUILD_INFO.branch,
+  mode:operatorFullCrm?'LIVE_OPERATOR_FULL_OAUTH':'LIVE_READ_ONLY_OAUTH',direct_crm_read_enabled:directEnabled,
+  forensic_audit_enabled:Boolean(directEnabled&&operatorFullCrm),
   proposal_dispatch_enabled:operatorFullCrm,
   tools:m.tools.map(t=>activeSet.has(t.tool)?{...t,state:'LIVE_ACTIVE'}:{...t,state:t.state==='WRITE_GATED'?'WRITE_GATED':'NOT_AVAILABLE'}),
   ...(directEnabled?{direct_crm_tools:DIRECT_CRM_TOOL_NAMES}:{}),
+  ...(directEnabled&&operatorFullCrm?{forensic_crm_tools:FORENSIC_CRM_TOOL_NAMES}:{}),
   ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{})};
 }
 
@@ -50,7 +69,7 @@ function liveServer(auth,{cfg,fetchFn,operators,log}){
   const crm_order_url='https://evydencia.com/gestao/pedidos/'+ord.uuid+'/detalhes';
   if(!direct||!cfg.operatorFullCrm)return {...ord,crm_order_url};
   try{
-   const det=await direct.detail(ord.uuid);
+   const det=await direct.detail({uuid:ord.uuid});
    const d=det?.order;
    if(!d)return {...ord,crm_order_url};
    return {
@@ -61,15 +80,28 @@ function liveServer(auth,{cfg,fetchFn,operators,log}){
     session_at:d.session_at??ord.session_date??ord.session_at??null,
     package_name:d.package_name??ord.package_name??null,
     payment_methods:d.payment_methods??[],
+    payment_summary:d.payment_summary??null,
+    installments:d.installments??[],
+    items:d.items??[],
+    status_history_count:d.status_history_count??0,
+    status_history:d.status_history??[],
+    customer_avatar_url:d.customer_avatar_url??null,
+    customer_has_avatar:d.customer_has_avatar??false,
+    customer_initials:d.customer_initials??null,
     total_reais:d.total_reais??ord.total_amount??null,
     received_reais:d.received_reais??null,
     remaining_reais:d.remaining_reais??ord.balance_pending??null,
     participants_count:d.participant_count??ord.participants_count??0,
+    participants_registration:d.participants_registration??null,
     participants:d.participants??[]
    };
   }catch{
    return {...ord,crm_order_url};
   }
+ };
+ const tryExtensionEligibility=async rawPhone=>{
+  if(typeof rawPhone!=='string'||!rawPhone.trim())return null;
+  try{return await crm.customer(phone(rawPhone))}catch{return null}
  };
  const callExtensionPost=async(path,body,extraHeaders={})=>{
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),cfg.crmTimeoutMs);
@@ -99,19 +131,67 @@ function liveServer(auth,{cfg,fetchFn,operators,log}){
    return {isError:true,content:[{type:'text',text:JSON.stringify({error:code})}]};
   }
  };
- const m=new McpServer({name:'evydencia-crm-mcp-live',version:'0.8.0'},{instructions:INSTRUCTIONS});
+ const m=new McpServer({name:'evydencia-crm-mcp-live',version:'0.9.0'},{instructions:INSTRUCTIONS});
  const reg=(name,title,description,inputSchema,fn,annotations=READ)=>m.registerTool(name,{title,description,inputSchema,annotations},safe(name,fn));
- reg('crm_capacidades','Capacidades disponíveis','Lista o que existe neste conector LIVE e as ferramentas habilitadas.',z.object({}),()=>manifest(Boolean(direct),cfg.operatorFullCrm));
+ reg('crm_capacidades','Capacidades disponíveis','Lista o que existe neste conector LIVE, versão/commit implantado (build_commit) e as ferramentas habilitadas.',z.object({}),()=>manifest(Boolean(direct),cfg.operatorFullCrm));
  reg('crm_status','Estado do CRM','Liveness público do CRM.',z.object({}),()=>crm.status());
  reg('crm_campanha_publica','Pacotes públicos','Catálogo público de uma campanha (padrão natal).',z.object({campanha:z.string().max(80).default('natal')}),({campanha})=>crm.campaign(campanha));
  reg('crm_horarios_publicos','Horários públicos','Horários públicos de um pacote, janela máxima de 14 dias (AAAA-MM-DD). Não cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),({campanha,pacote,inicio,fim})=>crm.availability(campanha,pacote,inicio,fim));
  reg('crm_conexao_privada','Identidade do operador','Operador autenticado, fuso do servidor e abilities do token.',z.object({}),()=>crm.bootstrap());
- reg('crm_cliente_resumo','Cliente por telefone ou nome','Contexto do cliente por celular brasileiro (DDD+número) ou por nome_cliente, incluindo pedido atual, link no CRM e participantes.',z.object({telefone:z.string().min(8).max(30).optional(),nome_cliente:z.string().min(2).max(100).optional()}),async input=>{
+ reg('crm_cliente_resumo','Cliente por telefone, nome, CPF, e-mail ou UUID','Contexto completo do cliente (inclusive leads com 0 pedidos) por telefone (DDD+número), nome_cliente, customer_uuid, email ou documento: dados cadastrais do titular, avatar/iniciais, completude cadastral (registration_completeness), resumo financeiro, pedido atual, link no CRM e elegibilidade Natal 2026.',z.object({
+  telefone:z.string().min(8).max(30).optional(),
+  nome_cliente:z.string().min(2).max(100).optional(),
+  customer_uuid:z.string().min(36).max(36).optional(),
+  email:z.string().min(4).max(120).optional(),
+  documento:z.string().min(11).max(20).optional()
+ }),async input=>{
+  if(cfg.operatorFullCrm&&direct){
+   try{
+    const f360=await direct.customerForensic360({...input,pagina:1,por_pagina:3});
+    if(f360?.lookup?.status!=='matched')return f360;
+    const ext=await tryExtensionEligibility(f360.customer?.whatsapp||f360.customer?.phone||input?.telefone);
+    return {
+     source:f360.source,
+     lookup:f360.lookup,
+     customer:f360.customer,
+     kpis:f360.kpis,
+     financial_audit_summary:f360.financial_audit_summary,
+     participants_cross_order_audit:f360.participants_cross_order_audit,
+     current_order:f360.current_order,
+     ...(ext?.natal_2026?{natal_2026:ext.natal_2026}:{}),
+     ...(ext?.capabilities?{capabilities:ext.capabilities}:{})
+    };
+   }catch(e){
+    if(e?.message!=='legacy_read_http_404')throw e;
+   }
+  }
   const res=await crm.customer(await resolvePhone(input));
   if(!cfg.operatorFullCrm||!res?.current_order)return res;
   return {...res,current_order:await enrichOrderWithDirect(res.current_order)};
  });
- reg('crm_cliente_360','Cliente 360 por telefone ou nome','Histórico completo do cliente por celular (DDD+número) ou por nome_cliente: KPIs (reais decimais), até 5 pedidos por página com link direto no CRM (crm_order_url) e dados completos dos participantes (nome completo, data de nascimento, idade e parentesco).',z.object({telefone:z.string().min(8).max(30).optional(),nome_cliente:z.string().min(2).max(100).optional(),pagina:z.number().int().min(1).max(100).default(1)}),async input=>{
+ reg('crm_cliente_360','Cliente 360 Forense (histórico, pagamentos, avatar e auditoria)','Reconstrução 360 completa do cliente (inclusive leads com 0 pedidos) por telefone, nome_cliente, customer_uuid, email ou documento: perfil completo do titular, avatar/iniciais, diagnóstico de cadastro incompleto (registration_completeness), KPIs, resumo financeiro por meio efetivo (financial_audit_summary), auditoria cruzada de divergências históricas de participantes entre pedidos (participants_cross_order_audit) e pedidos completos com parcelas, linha do tempo de status e origem de bônus.',z.object({
+  telefone:z.string().min(8).max(30).optional(),
+  nome_cliente:z.string().min(2).max(100).optional(),
+  customer_uuid:z.string().min(36).max(36).optional(),
+  email:z.string().min(4).max(120).optional(),
+  documento:z.string().min(11).max(20).optional(),
+  pagina:z.number().int().min(1).max(100).default(1),
+  por_pagina:z.number().int().min(1).max(20).default(10)
+ }),async input=>{
+  if(cfg.operatorFullCrm&&direct){
+   try{
+    const f360=await direct.customerForensic360(input);
+    if(f360?.lookup?.status!=='matched')return f360;
+    const ext=await tryExtensionEligibility(f360.customer?.whatsapp||f360.customer?.phone||input?.telefone);
+    return {
+     ...f360,
+     ...(ext?.natal_2026?{natal_2026:ext.natal_2026}:{}),
+     ...(ext?.capabilities?{capabilities:ext.capabilities}:{})
+    };
+   }catch(e){
+    if(e?.message!=='legacy_read_http_404')throw e;
+   }
+  }
   const res=await crm.history(await resolvePhone(input),input.pagina);
   if(!cfg.operatorFullCrm)return res;
   const current_order=res?.current_order?await enrichOrderWithDirect(res.current_order):null;
@@ -170,25 +250,46 @@ function liveServer(auth,{cfg,fetchFn,operators,log}){
   reg('crm_estatisticas_natal','Central de Inteligência — Estatísticas e Operação de Natal','Retorna os dados canônicos oficiais de /gestao/natal/estatisticas e da operação de Natal 2026: (1) KPIs 2026 (101 pedidos válidos, clientes únicos, sessões agendadas, receita contratada/recebida/a receber, pacotes 2026); (2) Estágios operacionais de Natal 2026 (operational_stages_2026: quantos e quais pedidos estão Aguardando Retirada em waiting_product_retrieve_orders, Sessão Agendada, Pagamento Confirmado, Concluídos, com crm_order_url e participantes); (3) Quantos e quem são os clientes/pedidos de Natal 2026 que ainda não enviaram participantes (orders_without_participants_2026); (4) Qual é a próxima sessão de Natal agendada e quando é (sessions_schedule_2026.next_session e upcoming_sessions_next_15); (5) Quantos ensaios de Natal já tínhamos realizado até a mesma data (MM-DD) nos anos anteriores (2021 a 2026, excluindo cancelados/chargeback/estornados) e total realizado no ano vigente (realized_sessions_comparison_at_cutoff); (6) Comparativo de vendas acumuladas até o corte (ytd_comparison_at_cutoff).',z.object({
    data_corte_mm_dd:z.string().max(5).optional()
   }),({data_corte_mm_dd})=>direct.natalStatistics({cutoffMmDd:data_corte_mm_dd}));
-  reg('crm_pedidos_buscar','Buscar pedidos ou listar últimos pedidos no CRM','Busca direta de pedidos no CRM (evydencia.com) ordenados do MAIS RECENTE para o mais antigo (como na tela /gestao/pedidos). Se chamado sem filtros, retorna os últimos pedidos emitidos. Inclui link direto do pedido no CRM (crm_order_url: https://evydencia.com/gestao/pedidos/$UUID/detalhes), dados completos dos participantes (nome completo, data de nascimento, idade e parentesco), horário de emissão em Brasília (created_at_brt), data/hora da sessão (session_at), pacote (package_name), método de pagamento (payment_methods), valores em reais e centavos e situação.',z.object({
+  reg('crm_pedidos_buscar','Buscar pedidos ou listar todos os pedidos no CRM','Busca direta e paginada de pedidos no CRM (evydencia.com) ordenados do MAIS RECENTE para o mais antigo (paridade com /gestao/pedidos), retornando pagination.total_matching_orders e total_orders_in_crm (ex.: 5.054+ pedidos). Inclui crm_order_url, avatar/iniciais e perfil do cliente, parcelas individuais (installments[] com method_name vs method_category_label, vencimento, pagamento, transações e recibos), payment_summary, linha do tempo de status (status_history[]), itens detalhados com origem comprovada de bônus (bonus_classification), participants_registration ("Cadastro pendente" vs "Concluído") e participantes (com age_at_session e age_today).',z.object({
    customer_name:z.string().min(2).max(100).optional(),
    customer_whatsapp:z.string().min(8).max(30).optional(),
+   customer_uuid:z.string().min(36).max(36).optional(),
    order_uuid:z.string().max(40).optional(),
    order_id:z.number().int().min(1).optional(),
    order_status:z.string().max(40).optional(),
    product_slug:z.string().max(60).optional(),
+   payment_method_name:z.string().min(2).max(60).optional(),
+   has_open_balance:z.boolean().optional(),
    created_start:z.string().max(10).optional(),
    created_end:z.string().max(10).optional(),
    session_start:z.string().max(10).optional(),
    session_end:z.string().max(10).optional(),
-   limite:z.number().int().min(1).max(20).default(10)
+   pagina:z.number().int().min(1).max(500).default(1),
+   limite:z.number().int().min(1).max(25).default(10)
   }),input=>{
-   const map={'customer_name':'customer.name','customer_whatsapp':'customer.whatsapp','order_uuid':'order.uuid','order_id':'order.id','order_status':'order.status','product_slug':'product.slug','created_start':'order.created-start','created_end':'order.created-end','session_start':'order.session-start','session_end':'order.session-end'};
+   const map={'customer_name':'customer.name','customer_whatsapp':'customer.whatsapp','customer_uuid':'customer.uuid','order_uuid':'order.uuid','order_id':'order.id','order_status':'order.status','product_slug':'product.slug','payment_method_name':'payment_method_name','has_open_balance':'has_open_balance','created_start':'order.created-start','created_end':'order.created-end','session_start':'order.session-start','session_end':'order.session-end'};
    const filters={};
    for(const [k,v] of Object.entries(input||{}))if(v!==undefined&&v!==null&&v!==''&&map[k])filters[map[k]]=v;
-   return direct.search(filters,{limit:input?.limite});
+   return direct.search(filters,{limit:input?.limite,page:input?.pagina});
   });
-  reg('crm_pedido_detalhe','Detalhe completo de pedido no CRM','Detalhe completo de um pedido específico no CRM por UUID: link direto no CRM (crm_order_url), pacote, itens, valores em reais/centavos, método de pagamento, emissão em BRT, data da sessão e lista completa de participantes (nome completo, data de nascimento, idade e parentesco).',z.object({uuid:z.string().min(36).max(36)}),({uuid})=>direct.detail(uuid));
+  reg('crm_pedido_detalhe','Auditoria e detalhe completo de pedido no CRM (por UUID ou ID)','Auditoria completa de um pedido no CRM aceitando uuid OU order_id numérico (ex.: order_id: 4510): retorna crm_order_url, dados do titular e avatar, payment_summary, parcelas individuais (installments[] distinguindo method_name como "Permuta" de method_category_label como "Dinheiro", datas de baixa, transações Pagar.me e recibos bills[]), linha do tempo cronológica de status (status_history[]), produtos/extras com bonus_classification (order_bonus_applications), participants_registration e participantes com idade na sessão e idade hoje.',z.object({
+   uuid:z.string().min(36).max(36).optional(),
+   order_id:z.number().int().min(1).optional()
+  }),({uuid,order_id})=>direct.detail({uuid,order_id}));
+  if(cfg.operatorFullCrm){
+   reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Busca paginada diretamente no cadastro geral de clientes (/gestao/clientes) por busca livre (nome, WhatsApp, e-mail ou CPF/CNPJ), nome_cliente, telefone, email, documento ou customer_uuid. Localiza inclusive leads com 0 pedidos (somente_sem_pedidos: true) ou com cadastro incompleto para cartão (somente_cadastro_incompleto: true), retornando avatar/iniciais, dados completos do titular, orders_count, lifecycle_stage e registration_completeness.',z.object({
+    busca:z.string().min(2).max(120).optional(),
+    nome_cliente:z.string().min(2).max(100).optional(),
+    telefone:z.string().min(8).max(30).optional(),
+    email:z.string().min(4).max(120).optional(),
+    documento:z.string().min(4).max(20).optional(),
+    customer_uuid:z.string().min(36).max(36).optional(),
+    somente_sem_pedidos:z.boolean().default(false),
+    somente_cadastro_incompleto:z.boolean().default(false),
+    pagina:z.number().int().min(1).max(500).default(1),
+    limite:z.number().int().min(1).max(25).default(10)
+   }),input=>direct.searchCustomers({...input,page:input?.pagina,limit:input?.limite}));
+  }
   reg('crm_relatorio_itens_vendidos','Relatório de itens vendidos (unidades brutas)','Relatório geral do CRM de unidades de itens vendidos (orders_items) por período de emissão (AAAA-MM-DD). ATENÇÃO: Não use para contagem oficial de pedidos ou ensaios de Natal (para Natal use crm_estatisticas_natal).',z.object({
    inicio:z.string().max(10),
    fim:z.string().max(10),
@@ -228,10 +329,14 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:[GATEWAY_SCOPE],resourceName:'Evydência CRM (somente leitura)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
  const plain=(status,body,extra={})=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store',...extra}});
+ const withPrivateNoStore=res=>{
+  try{res.headers.set('Cache-Control','private, no-store');return res}
+  catch{const h=new Headers(res.headers);h.set('Cache-Control','private, no-store');return new Response(res.body,{status:res.status,statusText:res.statusText,headers:h})}
+ };
 
  async function route(request,{ip='unknown',host}={}){
   const path=new URL(request.url).pathname;
-  if(path==='/healthz')return plain(200,{ok:true,service:'evydencia-crm-mcp-live'});
+  if(path==='/healthz')return plain(200,{ok:true,service:'evydencia-crm-mcp-live',version:'0.9.0',build_commit:BUILD_INFO.commit,repository_branch:BUILD_INFO.branch});
   if(!validateHostHeader(host??request.headers.get('host'),allowedHosts).ok)return plain(403,{error:'invalid_host'});
   const meta=oauthMetadataResponse(request,metaOpts);
   if(meta)return meta;
@@ -241,9 +346,9 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   }
   if(path==='/mcp'){
    const auth=await gate(request);
-   if(auth instanceof Response)return auth;
-   if(!allowed('op:'+auth.extra.operatorId,cfg.rateMcpPerMin))return plain(429,{error:'rate_limited'},{'Retry-After':'60'});
-   return mcp.fetch(request,{authInfo:auth});
+   if(auth instanceof Response)return withPrivateNoStore(auth);
+   if(!allowed('op:'+auth.extra.operatorId,cfg.rateMcpPerMin))return plain(429,{error:'rate_limited'},{'Retry-After':'60'},);
+   return withPrivateNoStore(await mcp.fetch(request,{authInfo:auth}));
   }
   return plain(404,{error:'not_found'});
  }
