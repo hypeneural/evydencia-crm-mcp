@@ -1,6 +1,6 @@
 {
   "name": "evydencia-crm-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Servidor MCP intermediário privado para API do Evydência CRM",
@@ -10,8 +10,11 @@
   "scripts": {
     "start": "node --env-file=.env src/server.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/core.mjs && node --check src/mock.mjs && node --check src/server.mjs && node --check scripts/smoke.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "check": "node --check src/core.mjs && node --check src/mock.mjs && node --check src/server.mjs && node --check scripts/smoke.mjs && node --check src/capabilities.mjs && node --check src/mock-business.mjs && node --check scripts/antigravity-hook.mjs && node --check scripts/session-start.mjs && node --check scripts/doctor.mjs && node --check scripts/conversation-smoke.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "conversation:smoke": "node scripts/conversation-smoke.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "validate:local": "npm run doctor && npm run check && npm test && npm run smoke && npm run conversation:smoke"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
