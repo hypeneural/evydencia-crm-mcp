@@ -444,7 +444,7 @@ function projectOrdersBatch(
                 &$effectivePaidMethods,
                 &$configuredMethods,
                 &$paidMethodCategories,
-                &$paidInstallmentsCount
+                &$paidInstallmentsCount, $isSummaryOnly
             ): array {
                 $totalCents = centsOf($inst->total);
                 $paidCents = centsOf($inst->payment_total);
