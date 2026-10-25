@@ -1049,7 +1049,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    }
    return res;
   },
-  async natalStatistics({cutoffMmDd,secoes,nivelDetalhe='resumo',ano,pagina=1,limite=15}={}){
+  async natalStatistics({cutoffMmDd,secoes,nivelDetalhe='resumo',perfilResposta='default',ano,pagina=1,limite=15}={}){
    let mmdd='';
    if(cutoffMmDd!==undefined&&cutoffMmDd!==null&&cutoffMmDd!==''){
     if(typeof cutoffMmDd!=='string'||!/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(cutoffMmDd))fail('invalid_mmdd');
@@ -1057,6 +1057,9 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    }
    const sections=Array.isArray(secoes)?secoes.filter(s=>typeof s==='string'):[];
    const detail=['resumo','padrao','completo'].includes(nivelDetalhe)?nivelDetalhe:'resumo';
+   const profile=['default','kpi_minimal'].includes(perfilResposta)?perfilResposta:'default';
+   if(profile==='kpi_minimal'&&(detail==='completo'||sections.some(x=>x!=='resumo')||(ano!==undefined&&ano!==2026)))fail('invalid_natal_kpi_scope');
+   if(profile==='kpi_minimal'&&!canUseNatalBridge())fail('natal_kpi_requires_readonly_bridge');
    const page=Math.min(50,Math.max(1,Number(pagina)||1));
    const limit=Math.min(50,Math.max(1,Number(limite)||15));
    if(canUseNatalBridge()){
@@ -1065,6 +1068,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      cutoff_mmdd:mmdd,
      year:Number.isInteger(ano)?ano:null,
      detail_level:detail,
+     response_profile:profile,
      sections,
      page,
      limit,
