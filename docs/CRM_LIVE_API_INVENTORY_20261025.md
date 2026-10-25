@@ -22,6 +22,8 @@ Em `app/Http/Controllers/Manager/NatalStatisticsController.php` (autenticado por
 A API Sanctum NÃO expõe estatísticas agregadas; fornecer um token read-only não fará esses endpoints funcionarem. Para Natal 2026, o MCP já tem `tools/export-natal-digest.php`, que reaproveita `NatalValidOrdersQuery::getSeasonDigestMetrics()` em CLI com Laravel existente, sem PR no CRM. Falta executar com credenciais autorizadas e comparar com o painel.
 
 ## Modo de diagnóstico com chave (local, fora do ChatGPT)
+**Atenção:** `php artisan extension:token:issue` emite `ExtensionAbilities::operator()`, que também inclui `extension:proposal-write`. NÃO reutilize a credencial padrão no diagnóstico de leitura. Um administrador precisa provisionar um token Sanctum limitado usando as capacidades já existentes do Laravel, com TTL e abilities mínimas; isso não requer PR no CRM. O diagnóstico consulta `/bootstrap` e rejeita abilities não permitidas, antes de acessar clientes.
+
 Crie um token Sanctum exclusivo de **leitura**, com abilities `extension:bootstrap`, `extension:customer-read` e, SOMENTE se necessário, `extension:proposal-read`. O ambiente Laravel precisa de `EXTENSION_API_ENABLED=1`. Provisione token pela administração do CRM e nunca cole no chat/Git.
 
 No PowerShell do Windows, apenas depois de autorizar o uso de dados reais:
