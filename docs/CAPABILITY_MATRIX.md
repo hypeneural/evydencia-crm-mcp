@@ -1,35 +1,45 @@
-# Matriz de capacidades — fonte de verdade
-Toda resposta MOCK é sintética: mock:true, source:fixture. NÃO inferir live por nome de função.
+# Matriz de Capacidades — Fonte de Verdade (`v0.10.0`)
 
-| Pergunta | Ferramenta | MOCK | LIVE | Origem |
-|---|---|---|---|---|
-| CRM está de pé? | crm_status | ativo | LIVE_PUBLIC | GET /health/live |
-| Pacotes e horários públicos? | crm_campanha_publica, crm_horarios_publicos | ativo | LIVE_PUBLIC | Agenda pública |
-| Quem é o operador? | crm_conexao_privada | ativo | LIVE_EXTENSION | GET /api/v1/extension/bootstrap |
-| Cliente pelo telefone? | crm_cliente_resumo | ativo | LIVE_EXTENSION | GET /customer-context |
-| Histórico do cliente? | crm_cliente_360 | ativo | LIVE_EXTENSION | GET /customer-360 |
-| Prévia da proposta? | crm_previa_proposta_natal | ativo | LIVE_EXTENSION | POST /proposals/preview (pode sondar worker) |
-| Quantos ensaios Natal vendidos? | crm_natal_resumo | ativo | MOCK_ONLY | Futura API Sanctum de estatísticas |
-| Agenda privada do dia? | crm_agenda_hoje | ativo | MOCK_ONLY | Futura API Sanctum de agenda |
-| Cliente pelo nome? | crm_buscar_cliente_nome | ativo | MOCK_ONLY | Futura API Sanctum de busca |
-| KPI Natal detalhado: contratado vs recebido, agenda e pacote? | crm_natal_indicadores_mock | ativo | MOCK_ONLY | NatalForensicStatisticsService; dados fictícios |
-| Filtrar pedidos por situação/pacote/data/financeiro? | crm_pedidos_filtrar_mock | ativo | MOCK_ONLY | OrderListRequest gerencial; 10 pedidos fictícios |
-| Detalhar um pedido por ID/UUID? | crm_pedido_detalhe_mock | ativo | MOCK_ONLY | OrderResource é sensível; apenas resumo fictício |
-| Quais filtros de pedido e Natal existem? | crm_filtros_pedidos_mock | ativo | MOCK_ONLY | Metadados de manager, API legado e Extension |
-| Simular envio de proposta? | crm_simular_agendamento_proposta_natal | ativo | MOCK_ONLY | Nenhum envio real |
-| Disparar proposta REAL? | crm_agendar_proposta_natal | AUSENTE | WRITE_GATED | POST /proposals/schedule proibido até OAuth+journal+aprovação |
+Este documento separa explicitamente o **Catálogo LIVE Streamable HTTP** (`src/live-gateway.mjs`, autenticado via OAuth 2.1 + Sanctum por operador) do **Catálogo MOCK Local** (`src/server.mjs`, 100% sintético com `mock: true` e `source: "fixture"`). No modo LIVE, `crm_capacidades` publica exclusivamente as ferramentas reais do gateway Live — sem misturar ferramentas `MOCK_ONLY`.
 
-Estados: LIVE_PUBLIC público, LIVE_EXTENSION Sanctum por operador, MOCK_ACTIVE fixture, MOCK_ONLY não existe API live, WRITE_GATED operação real bloqueada, BLOCKED_AUTH sem credencial/opt-in.
+---
 
-Nunca usar /api/orders/search ou SingleAuthentication, SQL, Z-API direta, APIs de painel. Serviços NatalForensicStatisticsService e NatalStatisticsController NÃO implicam uma rota stateless autorizada. CRM referência: hypeneural/evydencia-crm HEAD auditada 995101b34d5587d5523d885e28c3070337157f6a. Revalidar HEAD antes de homologar.
+## 1. Catálogo LIVE (`src/live-gateway.mjs`)
 
-**Nova auditoria:** [CRM Natal, Cliente 360 e pedidos](AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md). O CRM HEAD foi revisto em 9749cc09f061, mas os filtros Manager não viram API Extension automaticamente. A amostra de 10 pedidos NÃO explica nem soma os 137 contratos sintéticos do cenário agregado.
+| Domínio / Pergunta | Ferramenta | `LIVE_READ_ONLY_OAUTH` | `LIVE_OPERATOR_FULL_OAUTH` | Fonte Canônica no CRM | Filtros / Paginação / Histórico |
+|---|---|---|---|---|---|
+| Inventário e `build_commit` implantado | `crm_capacidades` | `LIVE_ACTIVE` | `LIVE_ACTIVE` | Gateway Local (`BUILD_INFO`) | Não / Não / Não |
+| Saúde pública do CRM | `crm_status` | `LIVE_ACTIVE` | `LIVE_ACTIVE` | `GET /health/live` | Não / Não / Não |
+| Catálogo e disponibilidade pública | `crm_campanha_publica`, `crm_horarios_publicos` | `LIVE_ACTIVE` | `LIVE_ACTIVE` | `/api/public/v1/agenda/*` | Sim / Não / Não |
+| Operador autenticado e abilities | `crm_conexao_privada` | `LIVE_ACTIVE` | `LIVE_ACTIVE` | `GET /api/v1/extension/bootstrap` | Não / Não / Não |
+| Resumo cadastral e elegibilidade Natal | `crm_cliente_resumo` | `LIVE_ACTIVE` (sem PII sensível) | `LIVE_ACTIVE` (Forense + `/consultar`) | `crm-forensic-bridge.php` + Extension API | Sim / Não / Sim |
+| Reconstrução completa do cliente (360) | `crm_cliente_360` | `LIVE_ACTIVE` (sem PII de menores) | `LIVE_ACTIVE` (Forense + Avatar WebP + Auditoria) | `crm-forensic-bridge.php` + Extension API | Sim / Sim / Sim |
+| Estatísticas e operação de Natal (`2021–2026`, abas A–F) | `crm_estatisticas_natal` | `LIVE_ACTIVE` (se Direct Read ativo) | `LIVE_ACTIVE` | `crm-natal-bridge.php` (`NatalForensicStatisticsService` + `NatalValidOrdersQuery`) | Sim (`secoes`, `data_corte_mm_dd`, `nivel_detalhe`) / Sim / Sim |
+| Demografia, bebês, filhos, parentesco e anomalias de participantes | `crm_natal_participantes_estatisticas` | `LIVE_ACTIVE` (agregados) | `LIVE_ACTIVE` (agregados + anomalias + lista opcional) | `crm-natal-bridge.php` (`mode: natal.participants_stats`) | Sim (`ano`, `secoes`) / Sim / Sim (`2024–2026`) |
+| Busca global e filtrada de pedidos | `crm_pedidos_buscar` | `LIVE_ACTIVE` (projeção reduzida) | `LIVE_ACTIVE` (Forense completo) | `crm-forensic-bridge.php` (`orders.search`) | Sim / Sim / Sim |
+| Auditoria de pedido por UUID ou ID numérico | `crm_pedido_detalhe` | `LIVE_ACTIVE` (projeção reduzida) | `LIVE_ACTIVE` (Parcelas, Bills, Status, Calendar, Avatar WebP, Personalização) | `crm-forensic-bridge.php` (`orders.detail`) | Sim / Não / Sim |
+| Busca de clientes e leads (inclusive 0 pedidos) | `crm_clientes_buscar` | `NOT_AVAILABLE` | `LIVE_ACTIVE` | `crm-forensic-bridge.php` (`customers.search`) | Sim / Sim / Não |
+| Relatórios auxiliares legados | `crm_relatorio_itens_vendidos`, `crm_relatorio_natal_sem_participantes`, `crm_relatorio_clientes_natal` | `LIVE_ACTIVE` (se Direct Read ativo) | `LIVE_ACTIVE` | `/api/reports/*` | Sim / Sim / Parcial |
+| Prévia da proposta de Natal 2026 | `crm_previa_proposta_natal` | `NOT_AVAILABLE` | `LIVE_ACTIVE` | `POST /api/v1/extension/proposals/preview` | Sim / Não / Não |
+| Disparo / agendamento oficial da proposta Natal 2026 | `crm_enviar_proposta_natal` | `NOT_AVAILABLE` | `LIVE_ACTIVE` (**exige `confirmado_pelo_operador: true`**) | `POST /api/v1/extension/proposals/schedule` (`X-Idempotency-Key`) | Não / Não / Não |
 
-## Adaptadores de produção preparatórios — sem novas ferramentas MCP
-- `tools/export-natal-digest.php`: exportador de valores **agregados** a partir do método canônico Laravel (NÃO executado em produção).
-- `src/natal-digest-snapshot.mjs`: leitura de arquivo privado e validação estrita de valores, ano, janelas YTD e expiração; **NÃO registrado** como tool no Plugin anônimo.
-- `src/order-readiness.mjs`: interpreta o status `current_order` já retornado pela API Customer360; não consulta SQL nem cria API.
-- `scripts/validate-mvp.ps1`: homologação Windows offline, sem credenciais. Instruções em `docs/MVP_AGREGADOS_EXECUCAO_20261025.md`.
+---
 
-## Fonte histórica LEGADA (apenas OFFLINE)
-O calendário de 2021 a 2025 no repositório privado `fotosdenatal-dados` agora tem um importador estrito `src/legacy-historical.mjs` e `scripts/import-legacy-history.mjs`. O destino também é privado e NÃO é ferramenta MCP. A resposta tem `source:LEGACY_GIT_CALENDAR`, `data_status:LEGACY_UNVERIFIED` e `canonical_comparison_allowed:false`. `natal_daily_2026.json` antigo não é fonte de 2026 ao vivo. Para comparação canônica 2026 × 2025, usar o digest Laravel, após homologação.
+## 2. Garantias Semânticas e Contratos (`v0.10.0`)
+
+1. **Economia de Contexto e `outputSchema`:** Todas as ferramentas Live declaram `outputSchema` válido (JSON Schema 2020-12), entregam dados estruturados em `structuredContent` e resumo executivo conciso sem PII em `content[0].text` (eliminando duplicação de JSON).
+2. **Valores Monetários Canônicos:** Montantes são expostos simultaneamente em centavos inteiros (`*_cents`) e reais numéricos (`*_reais`), distinguindo `method_name` efetivo da parcela (ex.: `Permuta`) de `method_category_label` contábil (ex.: `Dinheiro`).
+3. **Conciliação Histórica de Natal Auditada:**
+   - **Temporada 2022:** `full_year_valid_orders` consolidado no banco atual (`374`) vs fotografia em `31/12/2022` (`season_end_snapshot_valid_orders = 379`, com `post_season_aborted_orders_count = 5` cancelados em 2023 sem ensaio agendado).
+   - **Temporada 2024:** separação explícita entre `distinct_valid_orders` (pedidos únicos), `package_order_occurrences_sum` (pedidos com mais de um pacote distinto no mesmo contrato) e `total_bundle_units` (unidades totais de pacotes).
+   - **Sessões Realizadas vs Passadas:** separação explícita entre `confirmed_realized_sessions` (status confirmado pós-sessão) e `past_scheduled_sessions` (horário de `schedule_1` já transcorrido, destacando `past_scheduled_pending_confirmation`).
+4. **Rota Canônica de Cliente e Verificação Real de Avatar WebP:**
+   - Links de clientes utilizam sempre `https://evydencia.com/gestao/clientes/{uuid}/consultar`.
+   - `probeCustomerAvatarAsset` executa verificação SSRF-safe (`HEAD` + `Range: bytes=0-31` `GET`, sem seguir redirects externos), validando status HTTP, `Content-Type` e assinatura binária `RIFF....WEBP` (`asset_check_status: validated | unavailable | restricted | not_checked`).
+5. **Indisponibilidade Explícita:** Métricas sem coluna correspondente no schema do CRM (como distribuição por gênero de participantes em `photo_participants` ou áudio personalizado do Papai Noel) retornam `{ available: false, unavailable_reason: "..." }` — nunca `0` silencioso nem inferência por nome.
+
+---
+
+## 3. Catálogo MOCK Demonstrativo (`src/server.mjs` / `src/capabilities.mjs`)
+
+Mantido intacto para desenvolvimento offline e `npm run conversation:smoke` (`EVYD_MOCK_MODE=1`), onde todas as respostas carregam `mock: true` e `source: "fixture"` e nenhuma chamada de rede ou escrita real existe.

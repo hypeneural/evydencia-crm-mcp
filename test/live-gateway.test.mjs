@@ -34,7 +34,7 @@ const env1=data=>JSON.stringify({schema_version:'1.0',generated_at:new Date(cloc
 before(async()=>{
  crm=createServer((req,res)=>{
   const u=new URL(req.url,'http://x'),auth=req.headers.authorization||'',tok=auth.replace(/^Bearer /,'');
-  crmLog.push({method:req.method,path:u.pathname,tok});
+  crmLog.push({method:req.method,path:u.pathname,tok,idempotencyKey:req.headers['x-idempotency-key']||null});
   const send=(s,b,ct='application/json')=>{res.writeHead(s,{'Content-Type':ct});res.end(b)};
   if(req.method==='POST'&&u.pathname.startsWith('/api/v1/extension/proposals/')){
    const op=OPS[tok];
@@ -57,7 +57,8 @@ before(async()=>{
    const newerOrder={id:5127,uuid:'22222222-bbbb-4222-8222-000000000202',status:{id:6,name:'Sessão Agendada'},customer:{name:'Larissa Exemplo',whatsapp:'48988881775'},created_at:'2026-10-23T17:33:09.000000Z',schedule_1:'2026-11-02 09:00:00',items:[{id:2,quantity:'1.000',total:'480.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'120.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'João Miguel Exemplo',birth:'2024-04-30',birth_for_extense:'há 2 anos e 5 meses',relation:{id:1,name:'Filho (a)'}}],summary:{total:480,received:120,remaining:360}};
    if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder,newerOrder]}));
    if(u.pathname==='/api/orders/11111111-aaaa-4111-8111-000000000101/detail')return send(200,JSON.stringify({data:sampleOrder}));
-   if(u.pathname==='/api/reports/natal-statistics')return send(200,JSON.stringify({source:'CRM_CANONICAL_NATAL_STATISTICS',reference_year:2026,cutoff_mmdd:u.searchParams.get('date')||'10-25',kpis_2026:{valid_orders:101,unique_customers:100,scheduled_sessions:91,contracted_revenue_reais:54776},ytd_comparison_at_cutoff:{'2026':{year:2026,accum_orders:101},'2025':{year:2025,accum_orders:142,diff_orders_2026_vs_year:-41},'2024':{year:2024,accum_orders:124,diff_orders_2026_vs_year:-23}}}));
+   if(u.pathname==='/api/reports/natal-statistics')return send(200,JSON.stringify({source:'CRM_CANONICAL_NATAL_STATISTICS',reference_year:2026,cutoff_mmdd:u.searchParams.get('date')||'10-25',detail_level:u.searchParams.get('detail_level')||'resumo',kpis_2026:{valid_orders:101,unique_customers:100,scheduled_sessions:91,confirmed_realized_sessions:23,past_scheduled_sessions:27,past_scheduled_pending_confirmation:4,contracted_revenue_cents:5477600,contracted_revenue_reais:54776},ytd_comparison_at_cutoff:{'2026':{year:2026,accum_orders:101},'2025':{year:2025,accum_orders:142,diff_orders_2026_vs_year:-41},'2024':{year:2024,accum_orders:124,diff_orders_2026_vs_year:-23}}}));
+   if(u.pathname==='/api/reports/natal-participants-statistics')return send(200,JSON.stringify({source:'CRM_CANONICAL_NATAL_PARTICIPANTS_ANALYTICS',year_scope:u.searchParams.get('year')||'2026',population_reconciliation:{valid_natal_orders_count:101,sessions_with_participants_count:93,valid_orders_without_participants_count:8,total_participants_count:326,children_0_17_count:134,adults_18_plus_count:186,pets_count:1,humans_without_birth_date_count:5,reconciled:true},age_distribution:{gender_distribution:{available:false,unavailable_reason:'no_gender_column'}}}));
    if(u.pathname==='/api/reports/sold-items'){if(!u.searchParams.get('order[created-start]')&&!u.searchParams.get('order[created-end]'))return send(422,JSON.stringify({message:'The given data was invalid.'}));return send(200,JSON.stringify({data:[{item:'Mini Sessao Natal',reference:'8008',year:2026,month:10,solds:12}]}))}
    if(u.pathname==='/api/reports/christmas-orders-without-participants')return send(200,JSON.stringify([{order_uuid:'11111111-aaaa-4111-8111-000000000101',customer_name:'Cliente Ficticia 7',customer_whatsapp:'48999990001',current_status:'payment_confirmed',participants:0}]));
    if(u.pathname==='/api/reports/customers-with-christmas-orders')return send(200,JSON.stringify([{name:'Cliente Ficticia 7',whatsapp:'48999990001',email:'ficticia@example.test'}]));
@@ -192,7 +193,7 @@ test('authorized read-only operator: exact tool set, customer lookup and Cliente
  try{
   const {tools}=await client.listTools();
   assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES].sort());
-  assert.ok(tools.every(t=>t.annotations?.readOnlyHint===true&&t.annotations?.destructiveHint===false));
+  assert.ok(tools.every(t=>t.annotations?.readOnlyHint===true&&t.annotations?.destructiveHint===false&&t.outputSchema?.type==='object'));
   assert.ok(!tools.some(t=>/agendar|enviar|cancel|previa|schedule|abort/.test(t.name)));
   crmLog.length=0;
   const r=await client.callTool({name:'crm_cliente_resumo',arguments:{telefone:'(11) 99999-0001'}});
@@ -207,7 +208,9 @@ test('authorized read-only operator: exact tool set, customer lookup and Cliente
   assert.ok(!JSON.stringify(h).includes('Crianca')&&!JSON.stringify(h).includes('birthday'));
   const cap=await client.callTool({name:'crm_capacidades',arguments:{}});
   assert.equal(cap.structuredContent.mode,'LIVE_READ_ONLY_OAUTH');
+  assert.equal(cap.structuredContent.version,'0.10.0');
   assert.equal(cap.structuredContent.tools.find(t=>t.tool==='crm_previa_proposta_natal').state,'NOT_AVAILABLE');
+  assert.ok(!cap.structuredContent.tools.some(t=>t.state==='MOCK_ONLY'));
  }finally{await client.close()}
 });
 
@@ -229,8 +232,13 @@ test('direct CRM read integration (replaces api.evydencia.com.br): orders and Na
   assert.ok(!JSON.stringify(s).includes('Crianca')&&!JSON.stringify(s).includes('48988881775'));
   const ns=await client.callTool({name:'crm_estatisticas_natal',arguments:{data_corte_mm_dd:'10-25'}});
   assert.equal(ns.structuredContent.kpis_2026.valid_orders,101);
+  assert.equal(ns.structuredContent.kpis_2026.confirmed_realized_sessions,23);
+  assert.equal(ns.structuredContent.kpis_2026.past_scheduled_sessions,27);
   assert.equal(ns.structuredContent.ytd_comparison_at_cutoff['2025'].accum_orders,142);
   assert.equal(ns.structuredContent.ytd_comparison_at_cutoff['2024'].accum_orders,124);
+  const npDemo=await client.callTool({name:'crm_natal_participantes_estatisticas',arguments:{ano:'2026'}});
+  assert.equal(npDemo.structuredContent.population_reconciliation.total_participants_count,326);
+  assert.equal(npDemo.structuredContent.population_reconciliation.reconciled,true);
   const byName=await client.callTool({name:'crm_cliente_360',arguments:{nome_cliente:'Larissa Exemplo'}});
   assert.equal(byName.isError,undefined);
   assert.equal(byName.structuredContent.customer.uuid,'cust-op7');
@@ -312,11 +320,12 @@ test('no write call ever reached the CRM and logs carry no secrets or PII',()=>{
  assert.ok(logs.some(l=>l.evt==='tool'&&l.ok===true&&typeof l.op==='string'));
 });
 
-test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispatch, forensic customer search, full participants and CRM order URLs',async()=>{
+test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispatch (requiring explicit confirmation), forensic customer search, full participants and CRM URLs',async()=>{
  const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
  const hz=await call(g,'/healthz');
  assert.equal(hz.status,200);
  const hzJson=await hz.json();
+ assert.equal(hzJson.version,'0.10.0');
  assert.equal(typeof hzJson.build_commit,'string');
  const {tokens}=await connect(g,'fake-op7-write-00003');
  const rawRes=await rawMcp(g,tokens.access_token);
@@ -325,9 +334,14 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
  try{
   const {tools}=await client.listTools();
   assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES].sort());
+  assert.ok(tools.every(t=>t.outputSchema?.type==='object'),'every tool publishes a valid JSON Schema outputSchema');
   const cap=await client.callTool({name:'crm_capacidades',arguments:{}});
+  assert.equal(cap.structuredContent.version,'0.10.0');
   assert.equal(cap.structuredContent.forensic_audit_enabled,true);
+  assert.equal(cap.structuredContent.write_requires_explicit_confirmation,true);
+  assert.ok(!cap.structuredContent.tools.some(t=>t.state==='MOCK_ONLY'),'live capability inventory excludes legacy MOCK_ONLY tools');
   assert.equal(typeof cap.structuredContent.build_commit,'string');
+  assert.ok(cap.content[0].text.length<260,'text content summary is concise instead of duplicating JSON');
   const s=await client.callTool({name:'crm_pedidos_buscar',arguments:{}});
   assert.equal(s.structuredContent.orders[0].crm_order_url,'https://evydencia.com/gestao/pedidos/22222222-bbbb-4222-8222-000000000202/detalhes');
   assert.equal(s.structuredContent.orders[0].participants[0].name,'João Miguel Exemplo');
@@ -342,11 +356,17 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
   assert.equal(prev.isError,undefined);
   assert.equal(prev.structuredContent.ready,true);
   assert.equal(prev.structuredContent.campaign_id,415);
+  crmLog.length=0;
+  const omittedConfirm=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano'}});
+  assert.equal(omittedConfirm.isError,true,'omitted confirmado_pelo_operador fails closed via schema');
   const blocked=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:false}});
   assert.equal(blocked.isError,true);
-  const sent=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:true}});
+  assert.equal(err(blocked),'operator_confirmation_required');
+  assert.ok(!crmLog.some(x=>x.path==='/api/v1/extension/proposals/schedule'),'zero schedule calls before explicit true confirmation');
+  const sent=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:true,request_id:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'}});
   assert.equal(sent.isError,undefined);
   assert.equal(sent.structuredContent.scheduled,true);
   assert.equal(sent.structuredContent.dispatch_uuid,'prop-uuid-901');
+  assert.equal(crmLog.find(x=>x.path==='/api/v1/extension/proposals/schedule')?.idempotencyKey,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
  }finally{await client.close()}
 });
