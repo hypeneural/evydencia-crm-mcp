@@ -38,6 +38,7 @@ export function gatewayConfig(env){
  return Object.freeze({
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
   allowedOperators:new Set(ops),redirects,internalReadToken,
+  operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
   crmTimeoutMs:int(env.CRM_REQUEST_TIMEOUT_MS,6000,100,30000),
   accessTtl:int(env.EVYD_ACCESS_TOKEN_TTL_S,3600,60,86400),

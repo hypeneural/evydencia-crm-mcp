@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {createHash,randomBytes} from 'node:crypto';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
-import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
+import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES,PROPOSAL_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
 import {gatewayConfig,createSealer,redirectAllowed} from '../src/oauth-gateway.mjs';
 
 const R=['extension:bootstrap','extension:customer-read'];
@@ -36,12 +36,25 @@ before(async()=>{
   const u=new URL(req.url,'http://x'),auth=req.headers.authorization||'',tok=auth.replace(/^Bearer /,'');
   crmLog.push({method:req.method,path:u.pathname,tok});
   const send=(s,b,ct='application/json')=>{res.writeHead(s,{'Content-Type':ct});res.end(b)};
+  if(req.method==='POST'&&u.pathname.startsWith('/api/v1/extension/proposals/')){
+   const op=OPS[tok];
+   if(!op||revoked.has(tok))return send(401,JSON.stringify({message:'Unauthenticated.'}));
+   let raw='';req.on('data',c=>raw+=c);req.on('end',()=>{
+    const body=JSON.parse(raw||'{}');
+    if(u.pathname==='/api/v1/extension/proposals/preview')
+     return send(200,env1({ready:true,variant:body.name?'with_name':'without_name',recipient:{name:body.name||null,has_name:Boolean(body.name)},campaign:{id:415,type:'christmas_proposal'},message:body.name?`Olá, ${body.name}! Proposta Natal 2026`:'Olá! Proposta Natal 2026'}));
+    if(u.pathname==='/api/v1/extension/proposals/schedule')
+     return send(200,env1({scheduled:true,proposal:{id:901,uuid:'prop-uuid-901',status:'waiting',variant:body.name?'with_name':'without_name',campaign_id:415,send_after:'2026-10-25T13:20:00-03:00',cancel_until:'2026-10-25T13:20:00-03:00'},customer:{exists:true}}));
+    send(404,'{}');
+   });
+   return;
+  }
   if(req.method!=='GET')return send(405,'{}');
   if(u.pathname==='/health/live')return send(200,JSON.stringify({status:'ok'}));
   if(u.pathname.startsWith('/api/orders/')||u.pathname.startsWith('/api/reports/')){
    if(auth!==INTERNAL_TOK)return send(401,JSON.stringify({message:'Unauthorized'}));
-   const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01T17:33:09.000000Z',schedule_1:'2026-11-10 10:00:00',items:[{id:1,quantity:'1.000',total:'450.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'200.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'Crianca Ficticia'}],summary:{total:450,received:200,remaining:250}};
-   const newerOrder={id:5127,uuid:'22222222-bbbb-4222-8222-000000000202',status:{id:6,name:'Sessão Agendada'},customer:{name:'Larissa Exemplo',whatsapp:'48988881775'},created_at:'2026-10-23T17:33:09.000000Z',schedule_1:'2026-11-02 09:00:00',items:[{id:2,quantity:'1.000',total:'480.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'120.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'Crianca Ficticia'}],summary:{total:480,received:120,remaining:360}};
+   const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01T17:33:09.000000Z',schedule_1:'2026-11-10 10:00:00',items:[{id:1,quantity:'1.000',total:'450.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'200.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'Crianca Ficticia',birthday:'2024-04-30',age:'2 anos e 5 meses',relationship:'Filho (a)'}],summary:{total:450,received:200,remaining:250}};
+   const newerOrder={id:5127,uuid:'22222222-bbbb-4222-8222-000000000202',status:{id:6,name:'Sessão Agendada'},customer:{name:'Larissa Exemplo',whatsapp:'48988881775'},created_at:'2026-10-23T17:33:09.000000Z',schedule_1:'2026-11-02 09:00:00',items:[{id:2,quantity:'1.000',total:'480.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'120.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'João Miguel Exemplo',birth:'2024-04-30',birth_for_extense:'há 2 anos e 5 meses',relation:{id:1,name:'Filho (a)'}}],summary:{total:480,received:120,remaining:360}};
    if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder,newerOrder]}));
    if(u.pathname==='/api/orders/11111111-aaaa-4111-8111-000000000101/detail')return send(200,JSON.stringify({data:sampleOrder}));
    if(u.pathname==='/api/reports/natal-statistics')return send(200,JSON.stringify({source:'CRM_CANONICAL_NATAL_STATISTICS',reference_year:2026,cutoff_mmdd:u.searchParams.get('date')||'10-25',kpis_2026:{valid_orders:101,unique_customers:100,scheduled_sessions:91,contracted_revenue_reais:54776},ytd_comparison_at_cutoff:{'2026':{year:2026,accum_orders:101},'2025':{year:2025,accum_orders:142,diff_orders_2026_vs_year:-41},'2024':{year:2024,accum_orders:124,diff_orders_2026_vs_year:-23}}}));
@@ -297,4 +310,31 @@ test('no write call ever reached the CRM and logs carry no secrets or PII',()=>{
  for(const s of secrets.filter(Boolean))assert.ok(!dump.includes(s),'secret leaked in logs');
  for(const pii of ['99999','Ficticia','Crianca','+55','cust-op'])assert.ok(!dump.includes(pii),'PII leaked: '+pii);
  assert.ok(logs.some(l=>l.evt==='tool'&&l.ok===true&&typeof l.op==='string'));
+});
+
+test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispatch, full participants and CRM order URLs',async()=>{
+ const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
+ const {tokens}=await connect(g,'fake-op7-write-00003');
+ const client=await mcp(g,tokens.access_token);
+ try{
+  const {tools}=await client.listTools();
+  assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES].sort());
+  const s=await client.callTool({name:'crm_pedidos_buscar',arguments:{}});
+  assert.equal(s.structuredContent.orders[0].crm_order_url,'https://evydencia.com/gestao/pedidos/22222222-bbbb-4222-8222-000000000202/detalhes');
+  assert.equal(s.structuredContent.orders[0].participants[0].name,'João Miguel Exemplo');
+  assert.equal(s.structuredContent.orders[0].participants[0].birth_date,'2024-04-30');
+  assert.equal(s.structuredContent.orders[0].participants[0].kinship,'Filho (a)');
+  const np=await client.callTool({name:'crm_relatorio_natal_sem_participantes',arguments:{limite:10}});
+  assert.equal(np.structuredContent.orders[0].crm_order_url,'https://evydencia.com/gestao/pedidos/11111111-aaaa-4111-8111-000000000101/detalhes');
+  const prev=await client.callTool({name:'crm_previa_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano'}});
+  assert.equal(prev.isError,undefined);
+  assert.equal(prev.structuredContent.ready,true);
+  assert.equal(prev.structuredContent.campaign_id,415);
+  const blocked=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:false}});
+  assert.equal(blocked.isError,true);
+  const sent=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:true}});
+  assert.equal(sent.isError,undefined);
+  assert.equal(sent.structuredContent.scheduled,true);
+  assert.equal(sent.structuredContent.dispatch_uuid,'prop-uuid-901');
+ }finally{await client.close()}
 });

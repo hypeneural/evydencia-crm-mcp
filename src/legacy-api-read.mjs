@@ -47,7 +47,7 @@ export function legacyFilters(filters={}){
  return params;
 }
 
-export function legacyOrderProjection(raw){
+export function legacyOrderProjection(raw,{includeParticipants=false}={}){
  const x=value(raw),s=value(x.status),c=value(x.customer),sum=value(x.summary);
  const statusId=Number.isInteger(s.id)?s.id:null;
  const rawItems=Array.isArray(x.items)?x.items:[];
@@ -67,8 +67,18 @@ export function legacyOrderProjection(raw){
   return typeof t.name==='string'?t.name:typeof m.name==='string'?m.name:null;
  }).filter(Boolean))];
  const totalCents=money(sum.total),receivedCents=money(sum.received),remainingCents=money(sum.remaining);
+ const validUuid=uuid(x.uuid)?x.uuid:null;
+ const participants=includeParticipants
+  ?(Array.isArray(x.participants)?x.participants:[]).slice(0,20).map(p=>({
+    name:typeof p?.name==='string'&&p.name.trim()?p.name.trim().slice(0,120):null,
+    birth_date:typeof p?.birth==='string'&&p.birth?p.birth:(typeof p?.birth_date==='string'&&p.birth_date?p.birth_date:(typeof p?.birthday==='string'&&p.birthday?p.birthday:null)),
+    age:typeof p?.birth_for_extense==='string'&&p.birth_for_extense.trim()?p.birth_for_extense.replace(/^h[áa]\s+/i,'').trim():(typeof p?.age==='string'?p.age:null),
+    kinship:typeof p?.relation?.name==='string'&&p.relation.name.trim()?p.relation.name.trim():(typeof p?.kinship==='string'&&p.kinship.trim()?p.kinship.trim():(typeof p?.relationship==='string'&&p.relationship.trim()?p.relationship.trim():null))
+   })).filter(p=>p.name)
+  :undefined;
  return {order_id:Number.isSafeInteger(x.id)?x.id:null,
-  order_uuid:uuid(x.uuid)?x.uuid:null,
+  order_uuid:validUuid,
+  crm_order_url:validUuid?'https://evydencia.com/gestao/pedidos/'+validUuid+'/detalhes':null,
   customer_name:typeof c.name==='string'?c.name.slice(0,100):null,
   customer_phone_masked:maskPhone(c.whatsapp||c.phone),
   status_id:statusId,
@@ -84,10 +94,11 @@ export function legacyOrderProjection(raw){
   remaining_reais:typeof sum.remaining==='number'&&Number.isFinite(sum.remaining)?sum.remaining:null,
   total_cents:totalCents,received_cents:receivedCents,remaining_cents:remainingCents,
   item_count:Array.isArray(x.items)?x.items.length:null,
-  participant_count:Array.isArray(x.participants)?x.participants.length:null};
+  participant_count:Array.isArray(x.participants)?x.participants.length:null,
+  ...(includeParticipants?{participants}:{})};
 }
 
-export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000}){
+export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,includeParticipants=false}){
  const base=baseURL(baseUrl);if(typeof token!=='string'||token.length<12)fail('missing_token');
  async function get(path,params){
   const url=new URL(base+path);
@@ -125,7 +136,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000}){
     sort:'order_id_desc_most_recent_first',
     total_in_page:rows.length,
     sampled_count:Math.min(sorted.length,max),has_more:sorted.length>max||raw?.links?.next!=null,
-    orders:sorted.slice(0,max).map(legacyOrderProjection),
+    orders:sorted.slice(0,max).map(r=>legacyOrderProjection(r,{includeParticipants})),
     warning:'Ordenado do pedido mais recente para o mais antigo (horário de emissão em created_at_brt America/Sao_Paulo).'};
   },
   async resolvePhoneByName(customerName){
@@ -147,7 +158,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000}){
    const raw=await get('/api/orders/'+id+'/detail');
    const entry=raw?.data??raw;
    if(!entry||typeof entry!=='object'||!entry.uuid)fail('invalid_order_contract');
-   return {source:'LEGACY_SINGLE_AUTH_READ',order:legacyOrderProjection(entry)};
+   return {source:'LEGACY_SINGLE_AUTH_READ',order:legacyOrderProjection(entry,{includeParticipants})};
   },
   async natalStatistics({cutoffMmDd}={}){
    let mmdd='';
@@ -195,13 +206,17 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000}){
    if(!rows)fail('invalid_report_contract');
    return {source:'CRM_DIRECT_CHRISTMAS_WITHOUT_PARTICIPANTS',total_orders:rows.length,
     sampled_count:Math.min(rows.length,max),has_more:rows.length>max,
-    orders:rows.slice(0,max).map(r=>({
-     order_uuid:uuid(r?.order_uuid)?r.order_uuid:null,
-     customer_name:typeof r?.customer_name==='string'?r.customer_name.slice(0,100):null,
-     customer_phone_masked:maskPhone(r?.customer_whatsapp),
-     current_status:typeof r?.current_status==='string'?r.current_status:null,
-     participants_count:Number.isInteger(r?.participants)?r.participants:0
-    }))};
+    orders:rows.slice(0,max).map(r=>{
+     const u=uuid(r?.order_uuid)?r.order_uuid:null;
+     return {
+      order_uuid:u,
+      crm_order_url:u?'https://evydencia.com/gestao/pedidos/'+u+'/detalhes':null,
+      customer_name:typeof r?.customer_name==='string'?r.customer_name.slice(0,100):null,
+      customer_phone_masked:maskPhone(r?.customer_whatsapp),
+      current_status:typeof r?.current_status==='string'?r.current_status:null,
+      participants_count:Number.isInteger(r?.participants)?r.participants:0
+     };
+    })};
   },
   async christmasCustomers({bought=true,search='',limit=20}={}){
    const max=Math.min(50,Math.max(1,Number(limit)||20));
