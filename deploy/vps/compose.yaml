@@ -1,0 +1,42 @@
+services:
+  mcp-tunnel:
+    build:
+      context: /srv/apps/evydencia-crm-mcp/repo
+      dockerfile: deploy/vps/Dockerfile
+    image: evydencia-crm-mcp:0.5.0-mock
+    init: true
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    environment:
+      NODE_ENV: development
+      EVYD_MOCK_MODE: "1"
+      EVYD_PRIVATE_TOOLS: "0"
+      XDG_CONFIG_HOME: /config
+    env_file:
+      - /srv/secrets/evydencia-crm-mcp/tunnel.env
+    volumes:
+      - /srv/runtime/evydencia-crm-mcp/config:/config:ro
+      - /srv/runtime/evydencia-crm-mcp/bin/tunnel-client:/usr/local/bin/tunnel-client:ro
+    ports:
+      - "127.0.0.1:18090:8080"
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=1777,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - mcp_egress
+    cpus: "0.25"
+    mem_limit: 256m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health?details=true').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+networks:
+  mcp_egress:
+    driver: bridge
