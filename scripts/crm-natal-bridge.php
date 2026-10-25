@@ -866,6 +866,55 @@ $reqSections = is_array($opts['sections'] ?? null) ? array_values(array_unique(a
 $selectedYear = isset($opts['year']) && is_numeric($opts['year']) ? max(2021, min(2026, (int) $opts['year'])) : 2026;
 $wantSec = static fn (string $sec): bool => $detailLevel === 'completo' || in_array($sec, $reqSections, true);
 
+// Opt-in fast path: canonical Natal KPI without building multi-year, scheduling or participant lists.
+// Uses only approved Laravel analytical service; no raw rows or PII leave the bridge.
+// Full backwards-compatible payload remains the default until clients adopt this profile.
+$responseProfile = (string) ($opts['response_profile'] ?? 'default');
+if ($responseProfile === 'kpi_minimal') {
+    $requestedSections = (array) ($opts['sections'] ?? []);
+    if (($requestedSections !== [] && array_diff($requestedSections, ['resumo']) !== []) || $selectedYear !== 2026) {
+        echo json_encode(['error' => 'invalid_natal_kpi_scope']);
+        exit(3);
+    }
+    $quick = $svc->getDynamic2026Data(false, $ctx);
+    foreach (['total_orders', 'total_customers', 'contracted_revenue', 'paid_revenue', 'balance_due'] as $required) {
+        if (!array_key_exists($required, $quick) || $quick[$required] === null) {
+            echo json_encode(['error' => 'invalid_natal_kpi_missing_field']);
+            exit(3);
+        }
+    }
+    $contractedQuick = nbFloatToCents($quick['contracted_revenue']);
+    $paidQuick = nbFloatToCents($quick['paid_revenue']);
+    $balanceQuick = nbFloatToCents($quick['balance_due']);
+    $reconciledQuick = $contractedQuick === $paidQuick + $balanceQuick;
+    $quickResponse = [
+        'source' => 'CRM_CANONICAL_NATAL_STATISTICS',
+        'as_of' => $ctx->asOf->toIso8601String(),
+        'reference_year' => 2026,
+        'selected_year' => 2026,
+        'cutoff_mmdd' => $targetMmDd !== '' ? $targetMmDd : $ctx->asOf->format('m-d'),
+        'detail_level' => 'resumo',
+        'response_profile' => 'kpi_minimal',
+        'loaded_sections' => ['resumo'],
+        'kpis_2026' => [
+            'valid_orders' => (int) $quick['total_orders'],
+            'unique_customers' => (int) $quick['total_customers'],
+            'contracted_revenue_cents' => $contractedQuick,
+            'contracted_revenue_reais' => nbReais($contractedQuick),
+            'paid_revenue_cents' => $paidQuick,
+            'paid_revenue_reais' => nbReais($paidQuick),
+            'balance_due_cents' => $balanceQuick,
+            'balance_due_reais' => nbReais($balanceQuick),
+        ],
+        'integrity_checks' => ['contracted_equals_paid_plus_balance' => $reconciledQuick],
+        'data_status' => $reconciledQuick ? 'verified_internal_arithmetic' : 'needs_review',
+        'warnings' => $reconciledQuick ? [] : ['canonical_financial_balance_mismatch'],
+        'methodology_note' => 'NatalValidOrdersQuery via NatalForensicStatisticsService. Valores recebidos registrados no CRM; nao comprovam liquidacao bancaria externa.',
+    ];
+    echo json_encode($quickResponse, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit(0);
+}
+
 $immutable = $svc->getHistoricalImmutableData();
 $kpis = $svc->getDynamic2026Data(false, $ctx);
 $goalCockpit = $svc->getGoalCockpit($kpis, $ctx);
