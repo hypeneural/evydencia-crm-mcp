@@ -42,3 +42,12 @@ test('legacy forbids write-like action, invalid uuid and insecure URLs',async()=
  await assert.rejects(()=>client.get('detail',{uuid:'../etc'}),/invalid_uuid/);
  assert.throws(()=>legacyReadClient({baseUrl:'http://crm.example',token:'LONG_TOKEN_EXAMPLE',allowPrivilegedGet:true}),/crm_https_required/);
 });
+
+test('schema never exposes dynamic object keys that may contain a customer name',()=>{
+ const model=shapeOnly({data:{'CLIENTE_SENSIVEL_123':{amount:1},name:'PRIVATE_REAL_NAME',phone:'48999990001'}});
+ const result=JSON.stringify(model);
+ assert.ok(!result.includes('CLIENTE_SENSIVEL_123'));
+ assert.ok(!result.includes('PRIVATE_REAL_NAME'));
+ assert.ok(!result.includes('48999990001'));
+ assert.equal(model.fields.data.redacted_dynamic_keys,1);
+});
