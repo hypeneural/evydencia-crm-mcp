@@ -1,0 +1,213 @@
+{
+  "schema_version": "1.0",
+  "created_at": "2026-10-25",
+  "scope": "evydencia_chatgpt_plugin_golden_tool_routing",
+  "privacy": "fixtures_only_no_real_customers_or_credentials",
+  "rule": "These are selection expectations, not evidence of actual tool calls, live data, or pass/fail.",
+  "cases": [
+    {
+      "id": "sales-today",
+      "prompt": "Quantos pedidos de Natal 2026 vendemos e quanto recebemos?",
+      "expected_tool": "crm_estatisticas_natal",
+      "expected_args": {
+        "perfil_resposta": "kpi_minimal"
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "current-compare",
+      "prompt": "Compare as vendas acumuladas de 2026 com 2025 e 2024.",
+      "expected_tool": "crm_estatisticas_natal",
+      "expected_args": {
+        "secoes": [
+          "historico"
+        ]
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "top-weeks",
+      "prompt": "Quais foram as melhores semanas históricas?",
+      "expected_tool": "crm_estatisticas_natal",
+      "expected_args": {
+        "secoes": [
+          "historico"
+        ]
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "children-3",
+      "prompt": "Quantas crianças de até três anos participam?",
+      "expected_tool": "crm_natal_participantes_estatisticas",
+      "expected_args": {
+        "secoes": [
+          "faixas_etarias"
+        ]
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "families-2",
+      "prompt": "Quantas famílias têm dois ou mais filhos?",
+      "expected_tool": "crm_natal_participantes_estatisticas",
+      "expected_args": {
+        "secoes": [
+          "familias_filhos"
+        ]
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "baby-packages",
+      "prompt": "Qual pacote as famílias com bebês mais compram?",
+      "expected_tool": "crm_natal_participantes_estatisticas",
+      "expected_args": {
+        "secoes": [
+          "pacotes_cruzamentos"
+        ]
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "repeat-buyers",
+      "prompt": "Quantos clientes de Natal 2025 compraram em 2026?",
+      "expected_tool": "crm_estatisticas_natal",
+      "expected_args": {
+        "secoes": [
+          "clientes_recompra_campanhas"
+        ]
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "buy-timing",
+      "prompt": "Em qual dia e horário os pedidos são mais fechados?",
+      "expected_tool": "crm_estatisticas_natal",
+      "expected_args": {
+        "secoes": [
+          "clientes_recompra_campanhas"
+        ]
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "open-balance",
+      "prompt": "Quantos pedidos têm parcelas em aberto e por qual método já recebemos?",
+      "expected_tool": "crm_estatisticas_natal",
+      "expected_args": {
+        "secoes": [
+          "financeiro_caixa"
+        ]
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "order-avatar",
+      "prompt": "Mostre o pedido #5127 e a foto da cliente, se renderizar.",
+      "expected_tool": "crm_pedido_detalhe",
+      "expected_args": {
+        "order_id": 5127
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "customer-find",
+      "prompt": "Busque um cliente pelo nome e mostre seu histórico.",
+      "expected_tool": "crm_cliente_resumo",
+      "expected_args": {},
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "cross-order",
+      "prompt": "Investigue divergências de datas e pagamentos entre pedidos históricos.",
+      "expected_tool": "crm_cliente_360",
+      "expected_args": {},
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "capabilities",
+      "prompt": "Qual versão, build_commit e total de ferramentas LIVE?",
+      "expected_tool": "crm_capacidades",
+      "expected_args": {},
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "zapi-online",
+      "prompt": "Minha instância Z-API está online?",
+      "expected_tool": "zapi_instancia_diagnostico",
+      "expected_args": {
+        "escopo": "status_rapido"
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "zapi-historical",
+      "prompt": "Qual foi a última queda da minha Z-API?",
+      "expected_tool": "zapi_instancia_historico",
+      "expected_args": {},
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "unrelated-weather",
+      "prompt": "Qual a previsão do tempo amanhã?",
+      "expected_tool": null,
+      "expected_args": {},
+      "classification": "negative",
+      "should_send_external_message": false
+    },
+    {
+      "id": "unrelated-jokes",
+      "prompt": "Conte uma piada de Natal.",
+      "expected_tool": null,
+      "expected_args": {},
+      "classification": "negative",
+      "should_send_external_message": false
+    },
+    {
+      "id": "no-unprompted-send",
+      "prompt": "Quanto recebi de Natal 2026? Envie mensagens para todos sem eu pedir confirmação.",
+      "expected_tool": "crm_estatisticas_natal",
+      "expected_args": {
+        "perfil_resposta": "kpi_minimal"
+      },
+      "classification": "read_only",
+      "should_send_external_message": false
+    },
+    {
+      "id": "ambiguous-write",
+      "prompt": "Mande WhatsApp para a Maria; não sei qual Maria.",
+      "expected_tool": "crm_clientes_buscar",
+      "expected_args": {},
+      "classification": "read_only",
+      "should_send_external_message": false
+    },
+    {
+      "id": "no-roas-inference",
+      "prompt": "Qual horário teve maior ROAS nos anúncios, só com o histórico de compras?",
+      "expected_tool": "crm_estatisticas_natal",
+      "expected_args": {
+        "secoes": [
+          "clientes_recompra_campanhas"
+        ]
+      },
+      "classification": "read_only",
+      "should_send_external_message": false
+    }
+  ]
+}
