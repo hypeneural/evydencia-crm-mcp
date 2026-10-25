@@ -45,14 +45,13 @@ npm run conversation:smoke
 
 É obrigatório que negotiation MCP seja modern, fixtures tenham mock:true/source:fixture e que a tool real de envio NÃO exista.
 
-## 3. Lockfile reprodutível (P0)
-Se package-lock.json não existir, faça:
-npm install --package-lock-only --ignore-scripts
+## 3. Lockfile reprodutível (P0 já concluído na main)
+NÃO regenere sem motivo. Execute:
 npm ci --ignore-scripts --no-audit --no-fund
 node scripts/doctor.mjs --strict-lock
 npm audit --omit=dev
 
-Revisar versões e findings, versionar package-lock.json em commit separado. Depois propor que CI remova fallback npm install e exija npm ci. Não mexer em dependências sem avaliar changelog/documentação.
+Se detectar divergência, pare e reporte; não altere package-lock.json automaticamente.
 
 ## 4. Validar conversas
 Use docs/CONVERSATION_PLAYBOOK.md. Simule perguntas:

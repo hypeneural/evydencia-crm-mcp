@@ -15,19 +15,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install dependencies (prefer immutable lockfile)
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci --ignore-scripts --no-audit --no-fund
-          else
-            npm install --ignore-scripts --no-audit --no-fund
-          fi
-      - name: Export reproducible lockfile for bootstrap (temporary)
-        run: |
-          test -f package-lock.json
-          echo 'EVYD_LOCK_B64_BEGIN'
-          base64 -w0 package-lock.json | fold -w100
-          echo 'EVYD_LOCK_B64_END'
+      - name: Reproducible install
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run doctor
       - run: npm run check
       - run: npm test

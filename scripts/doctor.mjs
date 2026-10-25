@@ -35,7 +35,7 @@ for(const p of ['natal-summary','today-agenda','customer-name-search']){
   else ok('Fixture: '+p);
  }catch{error('Invalid fixture: '+p)}
 }
-try{await access(resolve(root,'package-lock.json'));ok('package-lock.json exists')}catch{
+try{await access(resolve(root,'package-lock.json'));const trackedLock=spawnSync('git',['ls-files','--error-unmatch','package-lock.json'],{cwd:root,encoding:'utf8'});if(trackedLock.status!==0)error('Lockfile exists but is not tracked');else ok('package-lock.json tracked')}catch{
  if(process.argv.includes('--strict-lock'))error('package-lock.json missing: run npm install --package-lock-only then commit it');
  else warning('package-lock.json not yet generated; npm install --package-lock-only then commit and prefer npm ci');
 }

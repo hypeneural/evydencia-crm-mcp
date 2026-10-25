@@ -9,14 +9,9 @@ Execute .\scripts\bootstrap-mock.ps1 (cria .env somente se ausente).
 Variáveis: NODE_ENV=development, EVYD_MOCK_MODE=1, EVYD_PRIVATE_TOOLS=0, CRM_READ_TOKEN vazio.
 Execute .\scripts\validate.ps1. Em seguida npm run conversation:smoke. Para Inspector, use MCP stdio em processo próprio; não digite comandos no stdout do servidor.
 
-## Gate P0 do lockfile — pendência conhecida
-O repositório ainda não tem package-lock.json. No Windows com npm:
-npm install --package-lock-only --ignore-scripts
-npm ci --ignore-scripts --no-audit --no-fund
-node scripts/doctor.mjs --strict-lock
-npm audit --omit=dev
-
-Revise dependências e versione package-lock.json. Enquanto isso CI usa fallback npm install e doctor apresenta aviso; builds ainda não são totalmente reprodutíveis. Depois de salvar o lockfile, exigir npm ci sem fallback.
+## Gate P0 do lockfile — CONCLUÍDO NO GITHUB
+package-lock.json já é versionado. Execute npm ci --ignore-scripts --no-audit --no-fund e node scripts/doctor.mjs --strict-lock.
+Nunca regenere lockfile para 'consertar' erro sem auditar package.json, Node, npm e o diff. Execute npm audit --omit=dev e avalie vulnerabilidades de forma focada.
 
 ## Ciclos para modelo menor
 Um problema/teste/patch por vez. Nunca inventar rota a partir de serviço Laravel. Se falta API Sanctum read-only, classificar MOCK_ONLY e documentar gap. Não relaxar assertions para obter verde.

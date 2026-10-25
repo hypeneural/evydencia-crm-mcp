@@ -33,7 +33,7 @@ Veja [Matriz de capacidades](docs/CAPABILITY_MATRIX.md) e [Playbook de conversas
 - scripts/conversation-smoke.mjs: Client v2 moderno 2026-07-28, estatísticas, agenda, busca por nome e proposta simulada.
 - .github/workflows/ci.yml: executa doctor + check + testes + ambos smokes.
 
-**Lockfile pendente:** package-lock.json não está versionado. Gerar com npm install --package-lock-only --ignore-scripts e depois npm ci. Doctor adverte; doctor --strict-lock bloqueia. CI ainda usa npm install caso o arquivo não exista. Após commit do lockfile, remover fallback.
+**Lockfile versionado:** package-lock.json é gerado em Node 22 e mantido no Git. Instalação de CI e scripts Windows usam exclusivamente npm ci; doctor --strict-lock exige o arquivo rastreado.
 
 ## Conexão com ChatGPT
 
