@@ -13,6 +13,11 @@ try{
  assert.equal(client.getProtocolEra(),'modern','MCP v2 2026-07-28 negotiation required');
  const list=await client.listTools();
  const names=new Set(list.tools.map(t=>t.name));
+ const capabilitiesTool=list.tools.find(t=>t.name==='crm_capacidades');
+ assert.equal(capabilitiesTool.title,'Capacidades disponíveis');
+ const simTool=list.tools.find(t=>t.name==='crm_simular_agendamento_proposta_natal');
+ assert.match(simTool.title,/SEM ENVIO/);
+ assert.equal(simTool.annotations?.readOnlyHint,true);
  for(const n of ['crm_capacidades','crm_mock_scenarios','crm_natal_resumo','crm_agenda_hoje','crm_buscar_cliente_nome','crm_previa_proposta_natal','crm_simular_agendamento_proposta_natal'])
   assert.ok(names.has(n),'tool missing: '+n);
  assert.ok(!names.has('crm_agendar_proposta_natal'),'real schedule tool forbidden');
