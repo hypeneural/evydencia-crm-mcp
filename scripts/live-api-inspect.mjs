@@ -19,7 +19,7 @@ try {
   result=await auditExtension({baseUrl:e.CRM_BASE_URL,token:e.CRM_READ_TOKEN,
    action:e.CRM_PROBE_ACTION??'bootstrap',phoneValue:e.CRM_TEST_PHONE,
    consent:e.CRM_LIVE_CUSTOMER_CONSENT==='1',
-   previewConsent:e.CRM_LIVE_PREVIEW_PROBE_CONSENT==='1'});
+   previewConsent:e.CRM_LIVE_PREVIEW_PROBE_CONSENT==='1',publicDate:e.CRM_TEST_DATE});
  }else{
   result=await auditLegacy({baseUrl:e.CRM_BASE_URL,token:e.CRM_READ_TOKEN,
    action:e.CRM_PROBE_ACTION??'orders',uuid:e.CRM_TEST_ORDER_UUID,
