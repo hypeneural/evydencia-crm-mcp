@@ -12,7 +12,7 @@ if(args.name&&mode!=='proposal-preview')throw Error('invalid_name_argument');
 let key=(process.env.CRM_READ_TOKEN||'').trim();
 if(key.length<12||!process.env.CRM_BASE_URL||process.env.EVYD_MOCK_MODE==='1')throw Error('private_live_config_required');
 if(['customer-context','customer-360'].includes(mode)===false&&mode!=='bootstrap'&&process.env.EVYD_ALLOW_PREVIEW_DIAGNOSTIC!=='1')throw Error('preview_diagnostic_requires_optin');
-const client=crmClient({baseUrl:process.env.CRM_BASE_URL,token:key,privateEnabled:true,timeoutMs:7000});
+const client=crmClient({baseUrl:process.env.CRM_BASE_URL,token:key,privateEnabled:true,timeoutMs:7000,strictEnvelope:true});
 const modeToMethod={'bootstrap':'bootstrap','customer-context':'customer','customer-360':'history','proposal-preview':'preview'};
 try{
  const bootstrap=await client.bootstrap();
