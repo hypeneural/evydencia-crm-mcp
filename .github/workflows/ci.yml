@@ -22,4 +22,5 @@ jobs:
       - run: npm test
       - run: npm run smoke
       - run: npm run conversation:smoke
+      - run: npm run startup:smoke
       - run: test ! -f .env
