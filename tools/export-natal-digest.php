@@ -121,7 +121,7 @@ try {
     if (PHP_OS_FAMILY !== 'Windows') {
         if (!@chmod($tmp, 0600) || ((fileperms($tmp) & 0077) !== 0)) {
             @unlink($tmp);
-            throw new \\RuntimeException('snapshot_permissions_failed');
+            throw new \RuntimeException('snapshot_permissions_failed');
         }
     } else {
         // On Windows, configure private NTFS ACL on the parent directory before use.
