@@ -208,7 +208,7 @@ test('authorized read-only operator: exact tool set, customer lookup and Cliente
   assert.ok(!JSON.stringify(h).includes('Crianca')&&!JSON.stringify(h).includes('birthday'));
   const cap=await client.callTool({name:'crm_capacidades',arguments:{}});
   assert.equal(cap.structuredContent.mode,'LIVE_READ_ONLY_OAUTH');
-  assert.equal(cap.structuredContent.version,'0.10.1');
+  assert.equal(cap.structuredContent.version,'0.11.0');
   assert.equal(cap.structuredContent.tools.find(t=>t.tool==='crm_previa_proposta_natal').state,'NOT_AVAILABLE');
   assert.ok(!cap.structuredContent.tools.some(t=>t.state==='MOCK_ONLY'));
  }finally{await client.close()}
@@ -325,7 +325,7 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
  const hz=await call(g,'/healthz');
  assert.equal(hz.status,200);
  const hzJson=await hz.json();
- assert.equal(hzJson.version,'0.10.1');
+ assert.equal(hzJson.version,'0.11.0');
  assert.equal(typeof hzJson.build_commit,'string');
  const {tokens}=await connect(g,'fake-op7-write-00003');
  const rawRes=await rawMcp(g,tokens.access_token);
@@ -336,7 +336,7 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
   assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES].sort());
   assert.ok(tools.every(t=>t.outputSchema?.type==='object'),'every tool publishes a valid JSON Schema outputSchema');
   const cap=await client.callTool({name:'crm_capacidades',arguments:{}});
-  assert.equal(cap.structuredContent.version,'0.10.1');
+  assert.equal(cap.structuredContent.version,'0.11.0');
   assert.equal(cap.structuredContent.forensic_audit_enabled,true);
   assert.equal(cap.structuredContent.write_requires_explicit_confirmation,true);
   assert.ok(!cap.structuredContent.tools.some(t=>t.state==='MOCK_ONLY'),'live capability inventory excludes legacy MOCK_ONLY tools');

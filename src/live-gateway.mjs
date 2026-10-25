@@ -1,8 +1,9 @@
 // LIVE MCP gateway over Streamable HTTP. Each request is authenticated (OAuth bearer),
-// authorized per operator and served by a fresh McpServer bound to THAT operator's Sanctum token.
+// authorized per operator and served by a fresh McpServer bound to THAT operator's Sanctum token
+// (and optional per-operator Z-API MCP OAuth session).
 // Direct CRM tools (orders/reports/Natal intelligence on evydencia.com) replace api.evydencia.com.br.
 // Logs never carry tokens or raw PII.
-import {McpServer,createMcpHandler,requireBearerAuth,getOAuthProtectedResourceMetadataUrl,oauthMetadataResponse,validateHostHeader} from '@modelcontextprotocol/server';
+import {McpServer,createMcpHandler,fromJsonSchema,requireBearerAuth,getOAuthProtectedResourceMetadataUrl,oauthMetadataResponse,validateHostHeader} from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -12,8 +13,10 @@ import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE} from './oauth-gateway.mjs';
+import {createZapiBridge} from './zapi-mcp-client.mjs';
+import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME} from './zapi-mcp-tools.mjs';
 
-export const GATEWAY_VERSION='0.10.1';
+export const GATEWAY_VERSION='0.11.0';
 const REPO_ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const resolveBuildInfo=()=>{
  try{
@@ -30,11 +33,12 @@ export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
 export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
+export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GATEWAY_TOOL_NAMES]);
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
-const SAFE_ERR=/^(crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required)$/;
+const SAFE_ERR=/^(crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+)$/;
 
-const INSTRUCTIONS='EVYDÊNCIA CRM LIVE (v0.10 Forense & Analítico) — Conectado diretamente ao CRM oficial (evydencia.com). Regras obrigatórias de precisão, economia de contexto e auditoria: (1) Natal 2026 e Histórico 2021–2026: use crm_estatisticas_natal. Por padrão (nivel_detalhe="resumo"), ela retorna o cockpit enxuto com KPIs 2026, metas (goal_cockpit: R$ 300 mil base pacotes vs R$ 400 mil ampliada / 500 contratos), comparativo acumulado até o corte (ytd_comparison_at_cutoff), conciliação histórica (historical_reconciliation_invariants), separação estrita entre sessões confirmadas/realizadas (confirmed_realized_sessions) e sessões passadas aguardando baixa (past_scheduled_pending_confirmation), próxima sessão (sessions_schedule_2026.next_session) e recompra 2025->2026. Solicite secoes sob demanda conforme a pergunta: simulador_previsao, financeiro_caixa, clientes_recompra_campanhas, agenda_demanda, pacotes_produtos_bonus ou operacional_listas (paginada). (2) Demografia, Bebês, Filhos, Parentesco e Qualidade Cadastral de Participantes: use SEMPRE crm_natal_participantes_estatisticas (população reconciliada de crianças, bebês <3 anos e subfaixas em meses, adultos, pets e sem data de nascimento; famílias com 0/1/2/3+ filhos; pacote x idade infantil; comparativo 2024–2026; anomalias cadastrais). Só ative incluir_lista_participantes=true se o usuário pedir listagem nominal. (3) Links canônicos: cite crm_order_url (https://evydencia.com/gestao/pedidos/$UUID/detalhes) e crm_customer_url (https://evydencia.com/gestao/clientes/$UUID/consultar). (4) Auditoria financeira: consulte installments[] e payment_summary; diferencie method_name (ex.: "Permuta", "Pix - Pagar.me") de method_category_label (ex.: "Dinheiro", "Pix"), use montantes canônicos em *_cents / *_reais e verifique status_history[]. (5) Produtos, bônus R$ 0, agenda e personalização: verifique items[].bonus_classification (proven===true vs origin==="unknown"), schedule_details (Google Calendar e histórico de remarcações) e personalization (quando available===false, declare indisponível em vez de assumir zero). (6) Participantes e bloqueio de edição: informe participants_registration (status_label, customer_access_label, edit_lock_reason, temporary_access_label, kinship_age_anomalies), diferencie age_at_session de age_today e verifique participants_cross_order_audit no Cliente 360 sem sugerir sobrescrita automática. (7) Avatar validado e leads: verifique avatar.has_avatar, avatar.asset_accessible e avatar.asset_check_status (validated | unavailable | restricted | not_checked; ausência de foto usa initials com url: null e não é erro); para clientes com 0 pedidos use crm_clientes_buscar, crm_cliente_resumo ou crm_cliente_360. (8) Proposta Natal 2026: gere prévia com crm_previa_proposta_natal e exija confirmação explícita do operador (confirmado_pelo_operador: true) antes de crm_enviar_proposta_natal.';
+const INSTRUCTIONS='EVYDÊNCIA CRM LIVE (v0.11 Forense, Analítico & Z-API MCP) — Conectado diretamente ao CRM oficial (evydencia.com) e, quando autorizado por operador, ao MCP oficial da Z-API (mcp.z-api.io). Regras obrigatórias de precisão, economia de contexto e auditoria: (1) Natal 2026 e Histórico 2021–2026: use crm_estatisticas_natal. Por padrão (nivel_detalhe="resumo"), ela retorna o cockpit enxuto com KPIs 2026, metas (goal_cockpit: R$ 300 mil base pacotes vs R$ 400 mil ampliada / 500 contratos), comparativo acumulado até o corte (ytd_comparison_at_cutoff), conciliação histórica (historical_reconciliation_invariants), separação estrita entre sessões confirmadas/realizadas (confirmed_realized_sessions) e sessões passadas aguardando baixa (past_scheduled_pending_confirmation), próxima sessão (sessions_schedule_2026.next_session) e recompra 2025->2026. Solicite secoes sob demanda conforme a pergunta: simulador_previsao, financeiro_caixa, clientes_recompra_campanhas, agenda_demanda, pacotes_produtos_bonus ou operacional_listas (paginada). (2) Demografia, Bebês, Filhos, Parentesco e Qualidade Cadastral de Participantes: use SEMPRE crm_natal_participantes_estatisticas (população reconciliada de crianças, bebês <3 anos e subfaixas em meses, adultos, pets e sem data de nascimento; famílias com 0/1/2/3+ filhos; pacote x idade infantil; comparativo 2024–2026; anomalias cadastrais). Só ative incluir_lista_participantes=true se o usuário pedir listagem nominal. (3) Links canônicos: cite crm_order_url (https://evydencia.com/gestao/pedidos/$UUID/detalhes) e crm_customer_url (https://evydencia.com/gestao/clientes/$UUID/consultar). (4) Auditoria financeira: consulte installments[] e payment_summary; diferencie method_name (ex.: "Permuta", "Pix - Pagar.me") de method_category_label (ex.: "Dinheiro", "Pix"), use montantes canônicos em *_cents / *_reais e verifique status_history[]. (5) Produtos, bônus R$ 0, agenda e personalização: verifique items[].bonus_classification (proven===true vs origin==="unknown"), schedule_details (Google Calendar e histórico de remarcações) e personalization (quando available===false, declare indisponível em vez de assumir zero). (6) Participantes e bloqueio de edição: informe participants_registration (status_label, customer_access_label, edit_lock_reason, temporary_access_label, kinship_age_anomalies), diferencie age_at_session de age_today e verifique participants_cross_order_audit no Cliente 360 sem sugerir sobrescrita automática. (7) Avatar validado e leads: verifique avatar.has_avatar, avatar.asset_accessible e avatar.asset_check_status (validated | unavailable | restricted | not_checked; ausência de foto usa initials com url: null e não é erro); para clientes com 0 pedidos use crm_clientes_buscar, crm_cliente_resumo ou crm_cliente_360. (8) Proposta Natal 2026: gere prévia com crm_previa_proposta_natal e exija confirmação explícita do operador (confirmado_pelo_operador: true) antes de crm_enviar_proposta_natal. (9) WhatsApp Oficial Z-API MCP: use zapi_status_conexao para verificar estado OAuth/conectividade ou obter o link seguro de vinculação da instância Z-API do operador; use zapi_send_text, zapi_send_image, zapi_send_video e zapi_group_* para mensagens e grupos na instância Z-API vinculada. Se o usuário informar apenas o nome do cliente, consulte primeiro o CRM (crm_clientes_buscar ou crm_cliente_resumo) para resolver o telefone real sem inventar número; havendo homônimos ou ambiguidade, confirme antes de enviar. Resposta aceita indica submissão à Z-API (não entrega final); nunca reenvie automaticamente após timeout ou falha ambígua.';
 
 export function defaultLog(entry){process.stderr.write(JSON.stringify({ts:new Date().toISOString(),...entry})+'\n')}
 
@@ -58,18 +62,46 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false){
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null){
  const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
  });
+ if(zapiContext?.enabled){
+  tools.push({
+   tool:ZAPI_STATUS_TOOL_NAME,
+   capability:'zapi_mcp_oauth_and_status',
+   access:'read',
+   required_scope:GATEWAY_SCOPE,
+   source:'gateway_zapi_oauth',
+   supports_filters:false,
+   supports_pagination:false,
+   supports_history:false,
+   registered:true,
+   state:'LIVE_ACTIVE'
+  });
+  for(const zt of zapiContext.tools||[]){
+   tools.push({
+    tool:zt.gatewayName,
+    capability:zt.capability,
+    access:zt.access,
+    required_scope:GATEWAY_SCOPE+'+zapi.oauth',
+    source:'zapi_official_mcp',
+    supports_filters:false,
+    supports_pagination:false,
+    supports_history:false,
+    registered:true,
+    state:'LIVE_ACTIVE'
+   });
+  }
+ }
  return {
   service:'evydencia-crm-mcp-live',
   version:GATEWAY_VERSION,
   build_commit:BUILD_INFO.commit,
   repository_branch:BUILD_INFO.branch,
-  mode:operatorFullCrm?'LIVE_OPERATOR_FULL_OAUTH':'LIVE_READ_ONLY_OAUTH',
+  mode:(operatorFullCrm||zapiContext?.enabled)?'LIVE_OPERATOR_FULL_OAUTH':'LIVE_READ_ONLY_OAUTH',
   mock_mode:false,
   direct_crm_read_enabled:Boolean(directEnabled),
   forensic_audit_enabled:Boolean(directEnabled&&operatorFullCrm),
@@ -80,7 +112,13 @@ function manifest(directEnabled=false,operatorFullCrm=false){
   tools,
   ...(directEnabled?{direct_crm_tools:DIRECT_CRM_TOOL_NAMES}:{}),
   ...(directEnabled&&operatorFullCrm?{forensic_crm_tools:FORENSIC_CRM_TOOL_NAMES}:{}),
-  ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{})
+  ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{}),
+  ...(zapiContext?.enabled?{
+   zapi_mcp_enabled:true,
+   zapi_oauth_status:zapiContext.oauthStatus,
+   zapi_discovered_tools_count:(zapiContext.tools||[]).length,
+   zapi_exposed_tools:[ZAPI_STATUS_TOOL_NAME,...(zapiContext.tools||[]).map(t=>t.gatewayName)]
+  }:{})
  };
 }
 
@@ -115,6 +153,8 @@ function summarizeToolResult(tool,res){
    return `OK [crm_previa_proposta_natal]: elegivel=${Boolean(res.ready)}. Consulte structuredContent.`;
   case 'crm_enviar_proposta_natal':
    return `OK [crm_enviar_proposta_natal]: agendado=${Boolean(res.scheduled)}. Consulte structuredContent.`;
+  case ZAPI_STATUS_TOOL_NAME:
+   return `OK [${ZAPI_STATUS_TOOL_NAME}]: oauth_status=${res.oauth_status||'n/d'}, ferramentas=${res.discovered_tools_count??0}, whatsapp=${res.whatsapp_connection?.status||'n/d'}. Consulte structuredContent.`;
   default:
    return `OK [${tool}]: consulta concluída. Consulte structuredContent.`;
  }
@@ -279,15 +319,31 @@ const OUT_PROPOSAL_DISPATCH=z.looseObject({
  error_code:z.string().nullish(),
  message:z.string().nullish()
 });
+const OUT_ZAPI_STATUS=z.looseObject({
+ service:z.string(),
+ upstream_mcp_endpoint:z.string(),
+ operator_isolated:z.boolean(),
+ oauth_status:z.enum(['authorized','authorization_required','expired','revoked','unavailable']),
+ discovered_tools_count:z.number().int(),
+ whatsapp_connection:z.looseObject({
+  verifiable:z.boolean(),
+  status:z.string(),
+  detail:z.string()
+ }),
+ authorization_url:z.string().nullish(),
+ guidance:z.string().nullish()
+});
 
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
-export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH});
+export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS});
 
-function liveServer(auth,{cfg,fetchFn,operators,log}){
+async function liveServer(auth,{cfg,fetchFn,operators,log,zapi}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
  const crm=crmClient({baseUrl:cfg.crmBaseUrl,token:ex.upstream,privateEnabled:true,timeoutMs:cfg.crmTimeoutMs,fetchFn,strictEnvelope:true});
  const direct=cfg.internalReadToken?legacyReadClient({baseUrl:cfg.crmBaseUrl,token:cfg.internalReadToken,fetchFn,timeoutMs:cfg.crmTimeoutMs,includeParticipants:cfg.operatorFullCrm}):null;
+ const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
+ const zapiOauthStatus=zapi?zapi.auth.getOperatorState(ex.operatorId).oauth_status:null;
  const resolvePhone=async({telefone,nome_cliente})=>{
   if(typeof telefone==='string'&&telefone.trim()){
    const t=telefone.trim();
@@ -359,10 +415,10 @@ function liveServer(auth,{cfg,fetchFn,operators,log}){
    return {status:r.status,ok:r.ok,json};
   }finally{clearTimeout(timeout)}
  };
- const safe=(tool,fn)=>async input=>{
+ const safe=(tool,fn)=>async(input,ctx)=>{
   const t0=performance.now();
   try{
-   const result=await fn(input||{});
+   const result=await fn(input||{},ctx);
    log({evt:'tool',tool,ok:true,op:ex.operatorTag,ms:Math.round(performance.now()-t0)});
    return {content:[{type:'text',text:summarizeToolResult(tool,result)}],structuredContent:result};
   }catch(e){
@@ -373,10 +429,14 @@ function liveServer(auth,{cfg,fetchFn,operators,log}){
   }
  };
  const m=new McpServer({name:'evydencia-crm-mcp-live',version:GATEWAY_VERSION},{instructions:INSTRUCTIONS});
- const reg=(name,title,description,inputSchema,outputSchema,fn,annotations=READ)=>
+ const registeredNames=new Set();
+ const reg=(name,title,description,inputSchema,outputSchema,fn,annotations=READ)=>{
+  if(registeredNames.has(name))return;
+  registeredNames.add(name);
   m.registerTool(name,{title,description,inputSchema,outputSchema,annotations},safe(name,fn));
+ };
 
- reg('crm_capacidades','Capacidades disponíveis','Lista o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), escopos e ferramentas habilitadas na sessão atual.',z.object({}),OUT_CAPACIDADES,()=>manifest(Boolean(direct),cfg.operatorFullCrm));
+ reg('crm_capacidades','Capacidades disponíveis','Lista o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), escopos e ferramentas habilitadas na sessão atual.',z.object({}),OUT_CAPACIDADES,()=>manifest(Boolean(direct),cfg.operatorFullCrm,zapi?{enabled:true,oauthStatus:zapi.auth.getOperatorState(ex.operatorId).oauth_status,tools:zapiTools}:null));
  reg('crm_status','Estado do CRM','Liveness público do CRM.',z.object({}),OUT_GENERIC,()=>crm.status());
  reg('crm_campanha_publica','Pacotes públicos','Catálogo público de uma campanha (padrão natal).',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
  reg('crm_horarios_publicos','Horários públicos','Horários públicos de um pacote, janela máxima de 14 dias (AAAA-MM-DD). Não cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,({campanha,pacote,inicio,fim})=>crm.availability(campanha,pacote,inicio,fim));
@@ -576,6 +636,38 @@ function liveServer(auth,{cfg,fetchFn,operators,log}){
    limite:z.number().int().min(1).max(50).default(20)
   }),OUT_GENERIC,({comprou_natal,busca_nome,limite})=>direct.christmasCustomers({bought:comprou_natal,search:busca_nome||'',limit:limite}));
  }
+ if(zapi){
+  reg(
+   ZAPI_STATUS_TOOL_NAME,
+   'Estado da Autorização OAuth e Instância Z-API MCP',
+   'Consulta o estado da autorização OAuth do operador na Z-API (authorized, authorization_required, expired, revoked, unavailable), lista as ferramentas oficiais Z-API descobertas na instância vinculada, verifica conectividade do WhatsApp quando disponível e gera o link seguro (authorization_url) para vincular, reautorizar ou desvincular a instância pelo navegador.',
+   z.object({
+    atualizar_ferramentas:z.boolean().default(false),
+    incluir_link_gestao:z.boolean().default(false)
+   }),
+   OUT_ZAPI_STATUS,
+   ({atualizar_ferramentas,incluir_link_gestao},ctx)=>zapi.getConnectionStatus(ex.operatorId,{
+    refreshTools:Boolean(atualizar_ferramentas),
+    includeManageLink:Boolean(incluir_link_gestao),
+    signal:ctx?.mcpReq?.signal
+   })
+  );
+  for(const zt of zapiTools){
+   if(registeredNames.has(zt.gatewayName))continue;
+   registeredNames.add(zt.gatewayName);
+   m.registerTool(
+    zt.gatewayName,
+    {
+     title:zt.title,
+     description:zt.description,
+     inputSchema:fromJsonSchema(zt.inputSchema),
+     ...(zt.outputSchema?{outputSchema:fromJsonSchema(zt.outputSchema)}:{}),
+     annotations:zt.annotations
+    },
+    (args,ctx)=>zapi.callTool(ex.operatorId,zt,args,{signal:ctx?.mcpReq?.signal})
+   );
+  }
+ }
  return m;
 }
 
@@ -594,10 +686,20 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  const cfg=gatewayConfig(env);
  const operators=operatorVerifier(cfg,{fetchFn,now});
  const oauth=createOAuthServer(cfg,{operators,now,log});
+ let mcp;
+ const zapi=cfg.zapiEnabled?createZapiBridge(cfg,{
+  operators,
+  fetchFn,
+  now,
+  log,
+  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES],
+  gatewayVersion:GATEWAY_VERSION,
+  onToolsUpdated:()=>mcp?.notify?.toolsChanged?.()
+ }):null;
  const resourceUrl=new URL(cfg.resource);
  const resourceMetadataUrl=getOAuthProtectedResourceMetadataUrl(resourceUrl);
  const gate=requireBearerAuth({verifier:oauth.verifier,requiredScopes:[GATEWAY_SCOPE],resourceMetadataUrl,expectedResource:resourceUrl});
- const mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
+ mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:[GATEWAY_SCOPE],resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
@@ -609,7 +711,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
 
  async function route(request,{ip='unknown',host}={}){
   const path=new URL(request.url).pathname;
-  if(path==='/healthz')return plain(200,{ok:true,service:'evydencia-crm-mcp-live',version:GATEWAY_VERSION,build_commit:BUILD_INFO.commit,repository_branch:BUILD_INFO.branch});
+  if(path==='/healthz')return plain(200,{ok:true,service:'evydencia-crm-mcp-live',version:GATEWAY_VERSION,build_commit:BUILD_INFO.commit,repository_branch:BUILD_INFO.branch,zapi_mcp_enabled:Boolean(zapi)});
   if(!validateHostHeader(host??request.headers.get('host'),allowedHosts).ok)return plain(403,{error:'invalid_host'});
   const meta=oauthMetadataResponse(request,metaOpts);
   if(meta)return meta;
@@ -617,10 +719,14 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
    if(!allowed('auth:'+ip,cfg.rateAuthPerMin))return plain(429,{error:'rate_limited'},{'Retry-After':'60'});
    return oauth.handle(request,path);
   }
+  if(zapi&&(path==='/zapi/connect'||path==='/zapi/oauth/callback'||path==='/zapi/disconnect')){
+   if(!allowed('zapi-auth:'+ip,cfg.rateAuthPerMin))return plain(429,{error:'rate_limited'},{'Retry-After':'60'});
+   return zapi.handleHttp(request,path);
+  }
   if(path==='/mcp'){
    const auth=await gate(request);
    if(auth instanceof Response)return withPrivateNoStore(auth);
-   if(!allowed('op:'+auth.extra.operatorId,cfg.rateMcpPerMin))return plain(429,{error:'rate_limited'},{'Retry-After':'60'},);
+   if(!allowed('op:'+auth.extra.operatorId,cfg.rateMcpPerMin))return plain(429,{error:'rate_limited'},{'Retry-After':'60'});
    return withPrivateNoStore(await mcp.fetch(request,{authInfo:auth}));
   }
   return plain(404,{error:'not_found'});
@@ -634,7 +740,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   log({evt:'http',method:request.method,path:path.slice(0,64),status:res.status,ms:Math.round(performance.now()-t0)});
   return res;
  }
- return {cfg,handle,close:()=>mcp.close()};
+ return {cfg,zapi,handle,close:async()=>{await Promise.allSettled([mcp.close(),zapi?.close()])}};
 }
 
 // node:http bridge (the @modelcontextprotocol/node adapter is not a dependency).
