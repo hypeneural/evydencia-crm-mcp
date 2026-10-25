@@ -1,45 +1,52 @@
-# Evydência CRM MCP
-Servidor MCP independente do Laravel para conectar o ChatGPT às APIs já existentes do [Evydência CRM](https://github.com/hypeneural/evydencia-crm). **MVP somente leitura e prévia de propostas; nenhum disparo habilitado.**
-## Ferramentas
-Públicas: `crm_status`, `crm_campanha_publica`, `crm_horarios_publicos`.
-Privadas (somente após EVYD_PRIVATE_TOOLS=1 e token Sanctum): `crm_conexao_privada`, `crm_cliente_resumo`, `crm_cliente_360`, `crm_previa_proposta_natal`.
-## Windows 11
-Requisitos: Node.js >=22, Git, PowerShell. Copie `.env.example` para `.env`, configure CRM_BASE_URL com HTTPS e mantenha EVYD_PRIVATE_TOOLS=0 inicialmente.
-```powershell
-Copy-Item .env.example .env
-npm install
-npm run check
-npm test
-npm start
-```
-O transporte inicial é MCP stdio. O SDK v2 é usado conforme a documentação oficial; os resultados bem-sucedidos incluem `structuredContent` e texto JSON para compatibilidade. Nunca trate `npm start` sozinho como integração ChatGPT concluída: conecte via Inspector e solução de túnel autenticado compatível.
-## Fonte de verdade
-`docs/CONTRATOS_CRM.md` e `docs/AUDITORIA_BASES_GITHUB.md`. Revalidar o HEAD do CRM antes de liberar operações reais.
-## Segurança
-Código e configurações de exemplo somente; token nunca entra no Git. Repositório remoto criado como **public**, então obtenha visibilidade privada manualmente se este código for futuramente incluir material interno.
-## Próximas etapas
-1. Gerar e versionar `package-lock.json` no Windows com `npm install --package-lock-only`, migrar CI para `npm ci` e executar MCP Inspector.
-2. Conectar túnel privado; autenticação individual com OAuth.
-3. Implementar journal durável, confirmação vinculada à intenção, ferramenta de envio em branch separada e flag OFF.
+# Evydência CRM MCP — Gateway ChatGPT
 
-## Teste totalmente mockado (sem CRM e sem token)
-```powershell
-Copy-Item .env.example .env
-# Edite .env: EVYD_MOCK_MODE=1 e NODE_ENV=development
-npm install
-npm test
-npm run smoke
-npm start
-```
-Em modo mock, `crm_mock_scenarios` explica os números fictícios. As respostas vêm com `mock:true` e `source:'fixture'`, sem qualquer acesso ao CRM. Não use dados reais nos fixtures. `NODE_ENV=production` impede o modo mock.
+Intermediário MCP independente entre ChatGPT e o Laravel Evydência CRM. Sem acesso SQL nem Z-API direta. **MVP com ferramentas read-only e mocks sintéticos; disparo real BLOQUEADO.**
 
-## Contratos reais
-A projeção de disponibilidade lê `data.slotsByDate`, `data.googleCalendar` e `data.pagination` conforme os exemplos Scribe do Laravel. O cliente 360 omite nomes, datas de nascimento e relações de participantes. O preview pode sondar o worker do CRM, portanto não é anotado como estritamente read-only no protocolo MCP.
+## Início rápido Windows 11 com Antigravity Gemini 3.8 Flash
 
-## Robustez e limites
-- Corpo HTTP limitado a 1 MiB durante o streaming (antes de acumular toda a resposta); timeout de 100 a 60000 ms, redirect proibido, contrato JSON validado.
-- Resposta inesperada de cliente/agenda/prévia resulta em `crm_contract_invalid` (não inventar status, agenda ou elegibilidade).
-- `EVYD_MOCK_MODE=1` só inicia com `NODE_ENV=development` ou `test`; nenhuma consulta real é feita.
-- Prévia valida nome com regras do CRM e **não envia mensagem**; ferramentas de escrita não existem.
-- O repositório GitHub está **público**. Nunca versionar `.env`, tokens, números reais ou dados de clientes. Avaliar tornar privado antes da homologação.
-- Guia de auditoria oficial: [`docs/OFFICIAL_DOCS_AUDIT.md`](docs/OFFICIAL_DOCS_AUDIT.md); instruções para Antigravity: [`PROMPT_ANTIGRAVITY_START.md`](PROMPT_ANTIGRAVITY_START.md).
+Pré-requisitos: Node.js >=22, npm, PowerShell, Git. No clone da hypeneural/evydencia-crm-mcp:
+
+1. .\scripts\bootstrap-mock.ps1 — cria apenas .env local com NODE_ENV=development, EVYD_MOCK_MODE=1, EVYD_PRIVATE_TOOLS=0 e token vazio.
+2. .\scripts\validate.ps1 — instalação + doctor + sintaxe + testes + smoke MCP + conversation smoke.
+3. npm run conversation:smoke — teste determinístico de perguntas comuns e confirmação simulada.
+
+Em modo MOCK nenhum request é feito ao CRM. Todos os dados sintéticos contêm mock:true e source:fixture; resultados de negócio simulados contêm real_dispatch:false.
+
+## Capacidades
+
+- LIVE_PUBLIC: saúde do CRM, campanhas e disponibilidade pública (GET).
+- LIVE_EXTENSION (Sanctum de operador): bootstrap, contexto do cliente por telefone, Cliente 360, prévia da proposta de Natal (POST preview, não agenda).
+- MOCK_ONLY: crm_natal_resumo, crm_agenda_hoje, crm_buscar_cliente_nome e crm_simular_agendamento_proposta_natal. A API live read-only desses três primeiros **ainda não existe na Extension API**.
+- WRITE_GATED: envio real pelo CRM. Não há ferramenta de envio registrada no MCP.
+
+Veja [Matriz de capacidades](docs/CAPABILITY_MATRIX.md) e [Playbook de conversas](docs/CONVERSATION_PLAYBOOK.md).
+
+## Estrutura para agente menor e validações
+
+- AGENTS.md: proibições e ciclo verificável.
+- .agents/rules/security.md e flash-guardrails.md: frontmatter válido conforme documentação oficial Antigravity.
+- .agents/hooks.json: SessionStart e PreToolUse. Scripts em scripts/session-start.mjs e scripts/antigravity-hook.mjs.
+- src/AGENTS.md, test/AGENTS.md, fixtures/AGENTS.md: regras específicas por diretório.
+- .agents/skills/*/SKILL.md: rotinas pequenas (capability audit, preflight, security, conversation, conexão ChatGPT, desenho de proposta).
+- scripts/doctor.mjs: preflight, esquema de rules/hooks, fixtures e proibição de escrita.
+- scripts/smoke.mjs: SDK MCP stdio tradicional.
+- scripts/conversation-smoke.mjs: Client v2 moderno 2026-07-28, estatísticas, agenda, busca por nome e proposta simulada.
+- .github/workflows/ci.yml: executa doctor + check + testes + ambos smokes.
+
+**Lockfile pendente:** package-lock.json não está versionado. Gerar com npm install --package-lock-only --ignore-scripts e depois npm ci. Doctor adverte; doctor --strict-lock bloqueia. CI ainda usa npm install caso o arquivo não exista. Após commit do lockfile, remover fallback.
+
+## Conexão com ChatGPT
+
+Primeira integração: OpenAI Secure MCP Tunnel com stdio em modo MOCK, evitando HTTP aberto. Guia: [CHATGPT_TUNNEL_MOCK.md](docs/CHATGPT_TUNNEL_MOCK.md). Conexão efetiva com ChatGPT, permissões e suporte específico do modo de voz dependem de testes no usuário — CI não prova isso.
+
+Referências de comparação: [BASE_REPOSITORIES_20261024.md](docs/BASE_REPOSITORIES_20261024.md). SDK oficial v2 permanece adotado; não migrar para mcp-use/Cloudflare sem necessidade comprovada.
+
+## Segurança e limitações
+
+Repositório atualmente **público**: não adicionar qualquer dado real de cliente, token ou domínio privado. .env está excluído do Git.
+
+Ações reais (POST proposals/schedule e abort), reenvio e Z-API direta NÃO são implementadas. Para futuro envio: identidade OAuth por operador, restrições de ability Sanctum, confirmação humana independente, journal durável de UUID/idempotência, reconciliação de timeout e revisão de segurança.
+
+As APIs internas do CRM protegidas por SingleAuthentication NÃO devem ser consumidas pelo MCP. Para estatísticas, agenda privada e busca nominal, propor endpoints read-only escopados no CRM em trabalho separado — não modificar Laravel a partir deste repositório.
+
+Documentação detalhada: [ANTIGRAVITY_LOCAL.md](docs/ANTIGRAVITY_LOCAL.md), [CONTRATOS_CRM.md](docs/CONTRATOS_CRM.md), [OFFICIAL_DOCS_AUDIT.md](docs/OFFICIAL_DOCS_AUDIT.md).

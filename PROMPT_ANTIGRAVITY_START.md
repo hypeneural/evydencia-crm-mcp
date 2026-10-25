@@ -1,33 +1,83 @@
-# Prompt inicial — Google Antigravity (Evydência CRM MCP)
-Data: 24/10/2026
+# PROMPT — Antigravity Gemini 3.8 Flash — Evydência CRM MCP
 
-Você é o agente de engenharia responsável pelo repositório **hypeneural/evydencia-crm-mcp**, um servidor MCP SEPARADO do Laravel. Trabalhe LOCALMENTE no Windows 11. Não modifique, migre, execute comandos de manutenção nem crie commits em hypeneural/evydencia-crm. Antes de alterar qualquer arquivo, leia AGENTS.md, .agents/rules/security.md, docs/OFFICIAL_DOCS_AUDIT.md, docs/CONTRATOS_CRM.md, docs/MOCK_CONTRACTS.md, docs/DEPLOYMENT.md e docs/AUDITORIA_BASES_GITHUB.md.
+Você está no Windows 11, no clone hypeneural/evydencia-crm-mcp. A implementação anterior já publicou SDK MCP v2, hooks Antigravity, matrizes, fixtures e smokes. **Não começar reescrevendo.** Trabalhe em passos pequenos e verificáveis.
 
-## Estado de partida
-- SDK oficial MCP TypeScript v2.4.0, Node.js >=22, stdio, 7 ferramentas, mocks sem CRM e sem envio.
-- Fixtures sintéticos de agenda, clientes, Cliente 360 e prévia de Natal.
-- Testes de paridade e privacidade, limite HTTP streaming 1 MiB, JSON/contratos fail-closed, nome validado, structuredContent.
-- Mock exige EVYD_MOCK_MODE=1 e NODE_ENV=development/test. Não confundir mocks com agenda ou clientes reais.
-- **Sem ferramenta de agendamento, envio, cancelamento ou reenvio.**
-- O GitHub do MCP é público; NUNCA registrar dados reais, tokens, domínio privado ou capturas de tela com PII.
+## 0. Verificar HEAD sem descartar mudanças locais
+Execute exatamente:
+git status --short
+git rev-parse HEAD
+git fetch origin
+git pull --ff-only origin main
+node --version
+npm --version
 
-## Missão, nesta ordem
-1. Atualize sua cópia: git status; git fetch origin; git pull --ff-only origin main. Não sobrescreva alterações locais.
-2. Execute /crm-mcp-preflight e /crm-mcp-security-audit. Verifique versões Node e npm. Confira documentação oficial do SDK v2, Antigravity Skills e ChatGPT MCP (links em docs/OFFICIAL_DOCS_AUDIT.md).
-3. Gere o lockfile reprodutível: npm install --package-lock-only --ignore-scripts; confirme versões do SDK e Zod; npm ci --ignore-scripts --no-audit --no-fund; npm audit --omit=dev. Versione package-lock.json após revisar vulnerabilidades.
-4. Crie .env a partir de .env.example, somente LOCAL. Use NODE_ENV=development, EVYD_MOCK_MODE=1, EVYD_PRIVATE_TOOLS=0 e CRM_BASE_URL=https://crm.example.com; CRM_READ_TOKEN vazio. Não publique .env.
-5. Execute npm run check, npm test e npm run smoke. Corrija falhas com teste correlato. Use MCP Inspector para chamar crm_mock_scenarios, crm_status, crm_cliente_resumo, crm_cliente_360, crm_horarios_publicos e crm_previa_proposta_natal. Verifique que cada resposta tem mock:true/source:fixture e que não há PII de participantes.
-6. Execute /crm-mcp-contract-parity. Compare fixtures com os contratos do CRM no commit 995101b34d5587d5523d885e28c3070337157f6a e HEAD atual; documente divergências sem tocar Laravel. NÃO converter automaticamente o OpenAPI inteiro em ferramentas.
-7. Prepare um PR SEPARADO para transporte Streamable HTTP + autenticação OAuth por operador, apenas se houver requisitos claros de host/IdP e autorização. Pesquise primeiro Secure MCP Tunnel como alternativa para testes. Sem autenticação individual não publique HTTP.
-8. Para envio de Natal, SOMENTE produza arquitetura/testes de desenho em branch separada: journal durável, aprovação explícita e vinculada à intenção, UUID idempotente, proteção contra reenvio e reconciliação de timeout. **Não implemente nem habilite tools de escrita nesta etapa.**
-9. Ao terminar, apresente: versão Node/npm, SHA Git, resultados dos testes, erros, riscos, arquivos alterados, commit/PR, decisão GO_LOCAL / GO_HOMOLOG / BLOCKED e próximos passos.
+Se houver mudanças locais, NÃO faça pull sobrescrevendo-as: preserve e explique.
 
-## Regras de aceite
-- Nenhum request real ao CRM durante os testes mockados.
-- Nenhum token Sanctum de escrita, nenhum WhatsApp enviado, nenhuma reserva criada.
-- Nenhum segredo no Git ou stdout do protocolo MCP.
-- Ferramentas de cliente/agenda não podem inventar elegibilidade se o contrato divergir.
-- Não afirmar ChatGPT remoto conectado apenas porque stdio/Inspector funcionam.
-- Use as Skills modernas em .agents/skills/<nome>/SKILL.md; workflows legados não são o caminho atual.
+## 1. Leitura obrigatória e skills
+Leia na ordem:
+AGENTS.md
+docs/CAPABILITY_MATRIX.md
+docs/ANTIGRAVITY_LOCAL.md
+docs/CONVERSATION_PLAYBOOK.md
+docs/CHATGPT_TUNNEL_MOCK.md
+docs/CONTRATOS_CRM.md
+docs/BASE_REPOSITORIES_20261024.md
 
-Comece verificando o estado local e o lockfile. Pare e peça autorização antes de alterar credenciais, visibilidade do GitHub, configurações de produção ou habilitar qualquer envio.
+Depois invoque /crm-mcp-preflight e /crm-mcp-conversation-harness. Confirme que .agents/hooks.json está carregado em /hooks (ou Customizations > Hooks no IDE). Nunca desative security.md nem hooks para contornar bloqueios.
+
+## 2. Instalar e validar MOCK
+PowerShell:
+.\scripts\bootstrap-mock.ps1
+.\scripts\validate.ps1
+
+Não editar .env se já existir sem revisão; o bootstrap preserva. Exigir:
+NODE_ENV=development
+EVYD_MOCK_MODE=1
+EVYD_PRIVATE_TOOLS=0
+CRM_READ_TOKEN vazio
+
+Execute individualmente os gates:
+node scripts/doctor.mjs
+npm run check
+npm test
+npm run smoke
+npm run conversation:smoke
+
+É obrigatório que negotiation MCP seja modern, fixtures tenham mock:true/source:fixture e que a tool real de envio NÃO exista.
+
+## 3. Lockfile reprodutível (P0)
+Se package-lock.json não existir, faça:
+npm install --package-lock-only --ignore-scripts
+npm ci --ignore-scripts --no-audit --no-fund
+node scripts/doctor.mjs --strict-lock
+npm audit --omit=dev
+
+Revisar versões e findings, versionar package-lock.json em commit separado. Depois propor que CI remova fallback npm install e exija npm ci. Não mexer em dependências sem avaliar changelog/documentação.
+
+## 4. Validar conversas
+Use docs/CONVERSATION_PLAYBOOK.md. Simule perguntas:
+- Quantos ensaios de Natal vendemos?
+- Qual o faturamento sintético recebido?
+- Como está a agenda de 24/10/2026?
+- A Marina Exemplo comprou?
+- Prepare uma proposta fictícia para 48999990001.
+- Pode simular envio?
+- O que você NÃO consegue fazer de verdade?
+
+Verifique os campos exatos usando tools MCP no Inspector. Nunca reportar 137 ensaios ou 6 sessões como dados reais. real_dispatch=false e scheduled=false sempre.
+
+## 5. Conexão ChatGPT depois de GO_LOCAL
+Leia docs/CHATGPT_TUNNEL_MOCK.md. Use apenas o OpenAI Secure MCP Tunnel oficial em stdio, caso workspace/tunnel_id autorizados estejam disponíveis. Não invente credenciais, túnel, plugin ou conexão. Nunca abrir HTTP sem OAuth. Testar primeiro crm_capacidades.
+
+## 6. Guardrails permanentes
+NÃO alterar hypeneural/evydencia-crm, suas configurações, VPS ou banco.
+NÃO implementar POST /proposals/schedule, abort, Z-API direta, API manager SingleAuthentication ou SQL.
+NÃO habilitar CRM_READ_TOKEN no mock nem copiar PII para fixtures.
+Não transformar estatísticas/agenda/busca por nome em ferramentas LIVE até provar API Sanctum read-only.
+Não assumir suporte de tools no modo de voz sem teste do ChatGPT.
+Qualquer envio real requer confirmação de operador fora de prompt, OAuth, journal, idempotência, reconciliação e aprovação separada.
+
+## 7. Entrega final exigida
+Informe SHA HEAD, status git, Node/npm, package-lock presente SIM/NÃO, doctor, check, contagem de testes, smoke, conversation smoke, getProtocolEra, hooks carregados, arquivos alterados, PR/commit, gaps de API, classificação GO_LOCAL_MOCK/GO_CHATGPT_MOCK/BLOCKED. Nunca dizer '100%' sem evidência real.
+
+**Comece com o diagnóstico e não execute mudanças fora do repositório.**
