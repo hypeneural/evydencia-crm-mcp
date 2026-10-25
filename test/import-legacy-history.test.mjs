@@ -21,7 +21,9 @@ const calendar=()=>{
 test('freeze 2021-25 sanitizes data and refuses overwrite or untrusted hash',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'evyd-history-import-'));
  try{
-  const src=join(dir,'legacy.json'),outdir=join(dir,'restricted');await mkdir(outdir,{mode:0o700});
+  const input=join(dir,'private-source'),outdir=join(dir,'restricted');
+  await mkdir(input,{mode:0o700});await mkdir(outdir,{mode:0o700});
+  const src=join(input,'legacy.json');
   const out=join(outdir,'frozen.json');
   await writeFile(src,JSON.stringify(Object.fromEntries([2021,2022,2023,2024,2025].map(y=>[y,calendar()]))));
   const cmd=(other=[])=>spawnSync(process.execPath,['scripts/import-legacy-history.mjs',
