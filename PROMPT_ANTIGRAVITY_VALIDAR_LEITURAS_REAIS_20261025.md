@@ -16,3 +16,10 @@
 
 ## Entregável resumido
 HEAD, Node/PHP, testes CI/local, rota GET verificada, shape geral de cada JSON com nomes de CAMPOS e tipos (sem valores), HTTP status, quantas tools MOCK permaneceram, e quais dados não existem na API Sanctum (estatísticas Manager, busca por nome/pedidos geral). Classificar `GO_LOCAL_API_READ` somente se bootstrap e pelo menos uma consulta permitida de cliente tiverem respondido. `GO_CHATGPT_LIVE` permanece BLOQUEADO sem OAuth por operador. Envio real bloqueado.
+
+## Diagnóstico opcional de GET legados (se já existir token distinto e autorizado)
+- `src/legacy-api-read.mjs` e `scripts/verify-legacy-get.mjs` usam somente GET /api/orders/search e GET /api/orders/{uuid}/detail, com filtros fechados e resultado minimizado. Testes locais nunca tocam o CRM.
+- **SingleAuthentication NÃO é Sanctum**: `EVYDENCIA_LEGACY_TOKEN` pode autorizar status e campanhas em OUTRAS rotas; nunca adicioná-lo ao Tunnel nem ao `.env` do Plugin.
+- Em terminal privado do operador, somente se autorizado: `$env:EVYD_ALLOW_LEGACY_GET='1'`; inserir a chave legada via `Read-Host`; `npm run legacy:get:check -- --mode=search --product=natal --status=waiting_product_retrieve`. Remover as duas variáveis em seguida. A resposta no terminal mostra apenas quantidade amostrada e sucesso. NÃO interpretar amostra de pedidos como total canônico.
+- O diagnóstico Sanctum usa `strictEnvelope=true` e exige `schema_version=1.0`, `generated_at` e `data`; rejeita tokens com `extension:proposal-write`. O comando Laravel `extension:token:issue` dá permissões de escrita por padrão e não deve servir como chave read-only.
+- Nunca consultar dados reais com Plugin MOCK anônimo. Sem OAuth por operador em conexão separada, classificar `GO_CHATGPT_LIVE=BLOCKED`.
