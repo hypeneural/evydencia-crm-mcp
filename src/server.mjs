@@ -10,6 +10,8 @@ import { orderFilterContract, buscarPedidosMock, detalhePedidoMock, natalForense
 const mock=process.env.EVYD_MOCK_MODE==='1';
 assertServerSafety(process.env);
 const enabled=mock || process.env.EVYD_PRIVATE_TOOLS==='1';
+// stdio Tunnel profile currently has NO per-user OAuth. Never expose CRM PII through it.
+if(!mock && process.env.EVYD_PRIVATE_TOOLS==='1')throw Error('crm_private_requires_authenticated_gateway');
 const crm=mock ? mockCrmClient() : crmClient({baseUrl:process.env.CRM_BASE_URL||'https://invalid.example',token:process.env.CRM_READ_TOKEN||'',privateEnabled:enabled,timeoutMs:Number(process.env.CRM_REQUEST_TIMEOUT_MS||7000)});
 const read={readOnlyHint:true,destructiveHint:false,openWorldHint:false};
 const previewAnnotation={readOnlyHint:false,destructiveHint:false,openWorldHint:false};
