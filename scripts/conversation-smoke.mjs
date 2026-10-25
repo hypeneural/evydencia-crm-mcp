@@ -18,7 +18,7 @@ try{
  const simTool=list.tools.find(t=>t.name==='crm_simular_agendamento_proposta_natal');
  assert.match(simTool.title,/SEM ENVIO/);
  assert.equal(simTool.annotations?.readOnlyHint,true);
- for(const n of ['crm_capacidades','crm_mock_scenarios','crm_natal_resumo','crm_agenda_hoje','crm_buscar_cliente_nome','crm_previa_proposta_natal','crm_simular_agendamento_proposta_natal'])
+ for(const n of ['crm_capacidades','crm_mock_scenarios','crm_natal_resumo','crm_natal_indicadores_mock','crm_pedidos_filtrar_mock','crm_pedido_detalhe_mock','crm_filtros_pedidos_mock','crm_agenda_hoje','crm_buscar_cliente_nome','crm_previa_proposta_natal','crm_simular_agendamento_proposta_natal'])
   assert.ok(names.has(n),'tool missing: '+n);
  assert.ok(!names.has('crm_agendar_proposta_natal'),'real schedule tool forbidden');
  async function call(name,args={},error=false){
@@ -37,6 +37,19 @@ try{
  assert.equal(caps.tools.find(x=>x.tool==='crm_agendar_proposta_natal').state,'WRITE_GATED');
  const natal=await call('crm_natal_resumo');
  assert.equal(natal.sales.sessions_sold,137);
+ const filtros=await call('crm_filtros_pedidos_mock');
+ assert.ok(filtros.types.manager_order_list.includes('financial'));
+ const forense=await call('crm_natal_indicadores_mock',{modulo:'financeiro'});
+ assert.equal(forense.provenance.is_live,false);
+ assert.equal(forense.data.contracted_cents,12845000);
+ const searchOrders=await call('crm_pedidos_filtrar_mock',{product_slug:'natal',financial:'open',status:['payment_confirmed']});
+ assert.equal(searchOrders.total_matches,1);
+ assert.equal(searchOrders.fixture_total,10);
+ const orderDetail=await call('crm_pedido_detalhe_mock',{identificador:searchOrders.orders[0].uuid});
+ assert.equal(orderDetail.order.financial.balance_pending_cents,25000);
+ assert.equal(orderDetail.order.participants_count,2);
+ assert.equal(orderDetail.real_dispatch,false);
+ await call('crm_pedidos_filtrar_mock',{status:['inventado']},true);
  const agenda=await call('crm_agenda_hoje',{data:'2026-10-24'});
  assert.equal(agenda.total,6);
  const otherDate=await call('crm_agenda_hoje',{data:'2026-10-25'});
