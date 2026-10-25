@@ -2,7 +2,9 @@
 
 **Estado:** Plugin ChatGPT demonstrativo com 17 ferramentas MOCK. Novo adaptador OFFLINE do digest Natal canônico preparado, sem alterar o Laravel e sem expor dados reais pelo túnel anônimo.
 
-**Antigravity no Windows 11:** `.\\scripts\\validate-mvp.ps1` (Node e PHP CLI instalados). [Roteiro final](docs/MVP_AGREGADOS_EXECUCAO_20261025.md) · [Prompt Flash](PROMPT_ANTIGRAVITY_MVP_REAL_SEM_ALTERAR_CRM.md) · [Auditoria segurança/proveniência](docs/MVP_PRODUCAO_SEM_ALTERAR_CRM_20261025.md).
+**Antigravity no Windows 11:** `.\scripts\validate-mvp.ps1` (Node e PHP CLI instalados). [Roteiro final](docs/MVP_AGREGADOS_EXECUCAO_20261025.md) · [Prompt Flash](PROMPT_ANTIGRAVITY_MVP_REAL_SEM_ALTERAR_CRM.md) · [Auditoria segurança/proveniência](docs/MVP_PRODUCAO_SEM_ALTERAR_CRM_20261025.md).
+
+**Histórico 2021–2025:** o importador novo valida agregados de calendários legados privados, congela a fonte por SHA-256 e NÃO os apresenta como números certificados. Veja [auditoria do legado](docs/FORENSE_LEGADO_NATAL_20261025.md) e [prompt pronto](PROMPT_ANTIGRAVITY_LEGADO_NATAL_20261025.md). Importação opcional: `npm run history:import`, apenas com fonte/destino privados.
 
 **Produção comercial:** não habilitada. Snapshots agregados só podem ser exportados no ambiente Laravel autorizado, após avaliar custo e credenciais; dados privados exigem OAuth 2.1 individual em conexão separada do Plugin MOCK. O envio WhatsApp permanece WRITE_GATED.
 

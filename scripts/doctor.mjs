@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {resolve,dirname} from 'node:path';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const need=['AGENTS.md','src/AGENTS.md','test/AGENTS.md','fixtures/AGENTS.md',
+const need=['AGENTS.md','docs/FORENSE_LEGADO_NATAL_20261025.md','PROMPT_ANTIGRAVITY_LEGADO_NATAL_20261025.md','src/AGENTS.md','test/AGENTS.md','fixtures/AGENTS.md',
  '.agents/hooks.json','.agents/rules/security.md','.agents/rules/flash-guardrails.md',
  'src/core.mjs','src/mock-orders.mjs','src/natal-digest-snapshot.mjs','src/order-readiness.mjs','src/legacy-historical.mjs','src/server.mjs','src/capabilities.mjs','src/mock.mjs','src/mock-business.mjs',
  'scripts/smoke.mjs','scripts/conversation-smoke.mjs','scripts/check-private-snapshot.mjs','scripts/import-legacy-history.mjs','scripts/validate-mvp.ps1','tools/export-natal-digest.php','scripts/antigravity-hook.mjs',

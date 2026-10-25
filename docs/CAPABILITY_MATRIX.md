@@ -30,3 +30,6 @@ Nunca usar /api/orders/search ou SingleAuthentication, SQL, Z-API direta, APIs d
 - `src/natal-digest-snapshot.mjs`: leitura de arquivo privado e validação estrita de valores, ano, janelas YTD e expiração; **NÃO registrado** como tool no Plugin anônimo.
 - `src/order-readiness.mjs`: interpreta o status `current_order` já retornado pela API Customer360; não consulta SQL nem cria API.
 - `scripts/validate-mvp.ps1`: homologação Windows offline, sem credenciais. Instruções em `docs/MVP_AGREGADOS_EXECUCAO_20261025.md`.
+
+## Fonte histórica LEGADA (apenas OFFLINE)
+O calendário de 2021 a 2025 no repositório privado `fotosdenatal-dados` agora tem um importador estrito `src/legacy-historical.mjs` e `scripts/import-legacy-history.mjs`. O destino também é privado e NÃO é ferramenta MCP. A resposta tem `source:LEGACY_GIT_CALENDAR`, `data_status:LEGACY_UNVERIFIED` e `canonical_comparison_allowed:false`. `natal_daily_2026.json` antigo não é fonte de 2026 ao vivo. Para comparação canônica 2026 × 2025, usar o digest Laravel, após homologação.
