@@ -24,13 +24,18 @@
     "natal_2026": {
       "purchased": false,
       "mode": "sales",
-      "recommended_action": "SEND_VIP_PROPOSAL"
+      "recommended_action": "SEND_VIP_PROPOSAL",
+      "loyalty_level": "LOYAL_CHRISTMAS",
+      "years_attended": [
+        2025
+      ],
+      "active_order_uuid": "22222222-2222-4222-8222-222222222222"
     },
     "orders": [
       {
         "uuid": "22222222-2222-4222-8222-222222222222",
         "package_name": "Natal MOCK",
-        "status_label": "Agendado",
+        "status_label": "Sessão Agendada",
         "total_amount": 450,
         "balance_pending": 150,
         "session_date": "2026-11-15T10:00:00-03:00",
@@ -43,17 +48,25 @@
               "label": "Filho"
             }
           }
-        ]
+        ],
+        "campaign_key": "natal_2026",
+        "title": "Natal MOCK",
+        "status": "session_schedule",
+        "created_at": "2026-10-20T10:00:00-03:00"
       },
       {
         "uuid": "44444444-4444-4444-8444-444444444444",
         "package_name": "Natal anterior MOCK",
-        "status_label": "Concluído",
+        "status_label": "Pedido Concluído",
         "total_amount": 300,
         "balance_pending": 0,
         "session_date": "2025-11-20T10:00:00-03:00",
         "payment_status": "paid",
-        "participants": []
+        "participants": [],
+        "campaign_key": "natal_2025",
+        "title": "Natal anterior MOCK",
+        "status": "order_completed",
+        "created_at": "2025-10-20T10:00:00-03:00"
       }
     ],
     "history": {
@@ -61,6 +74,20 @@
       "per_page": 5,
       "total": 2,
       "has_more": false
+    },
+    "current_order": {
+      "uuid": "22222222-2222-4222-8222-222222222222",
+      "package_name": "Natal MOCK",
+      "session_at": "2026-11-15T10:00:00-03:00",
+      "created_at": "2026-10-20T10:00:00-03:00",
+      "balance_pending": 150,
+      "participants_count": 1,
+      "gallery_available": false,
+      "status": {
+        "code": "session_schedule",
+        "label": "Sessão Agendada",
+        "stage": "scheduled"
+      }
     }
   },
   "schema_version": "1.0"

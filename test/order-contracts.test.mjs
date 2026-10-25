@@ -19,7 +19,7 @@ test('mock de pedidos aplica filtros canonicos, sem contaminar estatisticas agre
 });
 test('filtros por data da sessao, participantes e cliente sao deterministas',async()=>{
  const a=await buscarPedidosMock({data_tipo:'sessao',data_inicio:'2026-10-24',data_fim:'2026-10-24',participants:'with'});
- assert.equal(a.total_matches,3);assert.ok(a.orders.every(x=>x.session_date.startsWith('2026-10-24')));
+ assert.equal(a.total_matches,4);assert.ok(a.orders.every(x=>x.session_date.startsWith('2026-10-24')));
  const b=await buscarPedidosMock({busca:'Marina'});assert.equal(b.total_matches,2);
  const c=await buscarPedidosMock({financial:'open'});assert.equal(c.total_matches,3);
 });

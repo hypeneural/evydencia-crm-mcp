@@ -17,7 +17,7 @@ const read=async()=>JSON.parse(await readFile(new URL('../fixtures/order-catalog
 const displayOrder=o=>({
  id:o.id,uuid:o.uuid,customer_name:o.name,package_name:o.package_name,product_slug:o.product_slug,
  status_key:o.status,status_label:statuses[o.status]??'Desconhecido',payment_status:o.payment_status,
- created_at:o.created_at,session_date:o.session_date,total_cents:o.total_cents,
+ created_at:o.created_at,updated_at:o.updated_at,session_date:o.session_date,total_cents:o.total_cents,
  balance_cents:o.balance_cents,participants_count:o.participants_count
 });
 export function orderFilterContract(){
@@ -55,6 +55,7 @@ export async function buscarPedidosMock(input={}){
  });
  matching.sort((a,b)=>sort==='schedule_asc'
   ?(a.session_date??'9999').localeCompare(b.session_date??'9999')||a.id.localeCompare(b.id)
+  :sort==='updated_desc' ?b.updated_at.localeCompare(a.updated_at)||b.id.localeCompare(a.id)
   :b.created_at.localeCompare(a.created_at)||b.id.localeCompare(a.id));
  const start=(page-1)*limit;
  return mark({search_scope:'FIXTURE_SAMPLE_NOT_CRM',total_matches:matching.length,fixture_total:f.orders.length,
