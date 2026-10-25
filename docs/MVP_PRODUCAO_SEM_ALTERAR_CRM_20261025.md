@@ -44,3 +44,6 @@ MySQL 8.4 timeout hints: https://dev.mysql.com/doc/refman/8.4/en/optimizer-hints
 MySQL replication async: https://dev.mysql.com/doc/refman/8.4/en/replication.html
 OpenAI OAuth per tool: https://developers.openai.com/plugins/build/auth
 OpenAI MCP tool annotations: https://developers.openai.com/plugins/build/mcp-server
+
+## Implementação posterior à auditoria (código publicado no MCP)
+Foi implementado exportador CLI `tools/export-natal-digest.php` sem modificar o Laravel; validação privada `src/natal-digest-snapshot.mjs`; módulo puro `src/order-readiness.mjs`; suíte `test/natal-digest-snapshot.test.mjs` e `test/order-readiness.test.mjs`. **Não são tools MCP registradas** e não liberam dados reais em ChatGPT. Veja `docs/MVP_AGREGADOS_EXECUCAO_20261025.md` e `PROMPT_ANTIGRAVITY_MVP_REAL_SEM_ALTERAR_CRM.md` para execução Windows.

@@ -24,3 +24,9 @@ Estados: LIVE_PUBLIC público, LIVE_EXTENSION Sanctum por operador, MOCK_ACTIVE 
 Nunca usar /api/orders/search ou SingleAuthentication, SQL, Z-API direta, APIs de painel. Serviços NatalForensicStatisticsService e NatalStatisticsController NÃO implicam uma rota stateless autorizada. CRM referência: hypeneural/evydencia-crm HEAD auditada 995101b34d5587d5523d885e28c3070337157f6a. Revalidar HEAD antes de homologar.
 
 **Nova auditoria:** [CRM Natal, Cliente 360 e pedidos](AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md). O CRM HEAD foi revisto em 9749cc09f061, mas os filtros Manager não viram API Extension automaticamente. A amostra de 10 pedidos NÃO explica nem soma os 137 contratos sintéticos do cenário agregado.
+
+## Adaptadores de produção preparatórios — sem novas ferramentas MCP
+- `tools/export-natal-digest.php`: exportador de valores **agregados** a partir do método canônico Laravel (NÃO executado em produção).
+- `src/natal-digest-snapshot.mjs`: leitura de arquivo privado e validação estrita de valores, ano, janelas YTD e expiração; **NÃO registrado** como tool no Plugin anônimo.
+- `src/order-readiness.mjs`: interpreta o status `current_order` já retornado pela API Customer360; não consulta SQL nem cria API.
+- `scripts/validate-mvp.ps1`: homologação Windows offline, sem credenciais. Instruções em `docs/MVP_AGREGADOS_EXECUCAO_20261025.md`.

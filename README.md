@@ -1,3 +1,12 @@
+# Evydência CRM MCP
+
+**Estado:** Plugin ChatGPT demonstrativo com 17 ferramentas MOCK. Novo adaptador OFFLINE do digest Natal canônico preparado, sem alterar o Laravel e sem expor dados reais pelo túnel anônimo.
+
+**Antigravity no Windows 11:** `.\\scripts\\validate-mvp.ps1` (Node e PHP CLI instalados). [Roteiro final](docs/MVP_AGREGADOS_EXECUCAO_20261025.md) · [Prompt Flash](PROMPT_ANTIGRAVITY_MVP_REAL_SEM_ALTERAR_CRM.md) · [Auditoria segurança/proveniência](docs/MVP_PRODUCAO_SEM_ALTERAR_CRM_20261025.md).
+
+**Produção comercial:** não habilitada. Snapshots agregados só podem ser exportados no ambiente Laravel autorizado, após avaliar custo e credenciais; dados privados exigem OAuth 2.1 individual em conexão separada do Plugin MOCK. O envio WhatsApp permanece WRITE_GATED.
+
+---
 # Evydência CRM MCP — Gateway ChatGPT
 
 Intermediário MCP independente entre ChatGPT e o Laravel Evydência CRM. Sem acesso SQL nem Z-API direta. **MVP com ferramentas read-only e mocks sintéticos; disparo real BLOQUEADO.**

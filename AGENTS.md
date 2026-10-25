@@ -28,3 +28,9 @@ Leia docs/AUDITORIA_CRM_NATAL_360_PEDIDOS_20261024.md apenas quando a tarefa env
 - Stdio suporta apenas uma instância `tunnel-client` por Tunnel ID. Parar a antiga antes de qualquer restart.
 - Manter dados sintéticos e ferramentas WRITE_GATED ausentes. A conexão sem autenticação individual NUNCA recebe dados reais.
 - Consultar `docs/AUDITORIA_FORENSE_TUNNEL_CHATGPT_20261024.md` quando a tarefa for Tunnel/ChatGPT.
+
+## Novo gate de produção, estritamente offline (25/10)
+- Quando a tarefa mencionar Natal REAL, comparar 2026/2025, status para retirada ou exportador PHP, leia **somente** `docs/MVP_AGREGADOS_EXECUCAO_20261025.md` e rode `.\\scripts\\validate-mvp.ps1`.
+- O exportador `tools/export-natal-digest.php` e o leitor `src/natal-digest-snapshot.mjs` **não** são ferramentas MCP públicas. O Plugin MOCK anônimo deve continuar com 17 tools fictícias.
+- Proibido rodar exportador contra CRM de produção ou criar usuário MySQL durante validação local; precisa de autorização operacional explícita e teste de carga.
+- Regras do negócio: comparação YTD somente janelas 01/08 equivalentes; `data_status_2025=UNCONFIRMED` não autoriza delta certificado; RECORDED_GROSS não equivale a caixa líquido; status 10 é aguardando retirar, 11 é entregue.
