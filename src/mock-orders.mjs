@@ -24,8 +24,11 @@ export function orderFilterContract(){
  return mark({types:{
   manager_order_list:['buscar','product_slug','status','data-tipo','data-inicio','data-fim','financial','participants','sort','limit','page'],
   integration_search:['order.id','order.uuid','order.created-start','order.created-end','order.session-start','order.session-end','order.selection-start','order.selection-end','order.status','product.uuid','product.name','product.slug','product.reference','customer.id','customer.uuid','customer.name','customer.email','customer.document','customer.whatsapp'],
-  extension_customer360:['phone','page','per_page']
- },statuses,warning:'Contratos de três SUPERFÍCIES diferentes; somente Extension Customer360 está autorizada no MCP real. A busca por pedidos e os filtros abaixo são simulação.'});
+  extension_customer360:['phone','page','per_page'],
+  natal_transactions_manager:['year','search','status','type','limit','offset'],
+  natal_nonbuyers_manager:['sort','search','limit','offset'],
+  natal_loyal_manager:['sort','search','limit']
+ },natal_segments:{nonbuyers_sort:['natal_spend','natal_orders','total_spend','total_orders'],loyal_sort:['recent_natal_spend','total_all_spend','total_all_orders','total_natal_spend']},statuses,warning:'Contratos de três SUPERFÍCIES diferentes; somente Extension Customer360 está autorizada no MCP real. A busca por pedidos e os filtros abaixo são simulação.'});
 }
 export async function buscarPedidosMock(input={}){
  if(!input||typeof input!=='object'||Array.isArray(input))throw Error('invalid_filters');
