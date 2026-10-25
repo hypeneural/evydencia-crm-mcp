@@ -486,6 +486,17 @@ before(async()=>{
 
   if(u.pathname==='/api/reports/natal-statistics'){
    const secStr=u.searchParams.get('sections')||'';
+   if(u.searchParams.get('date')==='12-31'){
+    // Production PHP shape (json_encode of lists): annual evolution & package matrix are JSON arrays, empty maps are [].
+    const base=SYNTH_NATAL_STATS({cutoff:'12-31',detailLevel:'resumo',sections:[]});
+    return send(200,{...base,
+     annual_evolution_full_season:[{year:2022,orders:374},{year:2024,orders:397},{year:2025,orders:375}],
+     packages_matrix_by_year:[{year:2024,distinct_valid_orders:397,package_order_occurrences_sum:398,total_bundle_units:399}],
+     monthly_cumulative_to_cutoff:[{month:10,orders_2026:102}],
+     goal_cockpit_2026:[],
+     historical_reconciliation_invariants:[],
+     loaded_sections:[]});
+   }
    return send(200,SYNTH_NATAL_STATS({
     cutoff:u.searchParams.get('date')||'10-25',
     detailLevel:u.searchParams.get('detail_level')||'resumo',
@@ -820,6 +831,21 @@ test('Scenario 7 — Natal 2026 historical invariants (2022/2024), confirmed vs 
   assert.equal(demo.structuredContent.data_quality_anomalies.parent_or_adult_kinship_with_child_age[0].order_id,5001);
   assert.equal(demo.structuredContent.data_quality_anomalies.parent_or_adult_kinship_with_child_age[0].participant_name,'Sofia Exemplo Invertida');
   assert.equal(demo.structuredContent.data_quality_anomalies.parent_or_adult_kinship_with_child_age[0].birth_date,'2024-06-15');
+ }finally{await client.close()}
+});
+
+test('Scenario 7b — Production PHP array shapes (annual evolution, package matrix, empty maps as []) pass outputSchema validation',async()=>{
+ const {client}=await makeAuthorizedClient({EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
+ try{
+  const stats=await client.callTool({name:'crm_estatisticas_natal',arguments:{data_corte_mm_dd:'12-31'}});
+  assert.equal(stats.isError,undefined,JSON.stringify(stats.content));
+  const sc=stats.structuredContent;
+  assert.ok(Array.isArray(sc.annual_evolution_full_season));
+  assert.equal(sc.annual_evolution_full_season[0].orders,374);
+  assert.ok(Array.isArray(sc.packages_matrix_by_year));
+  assert.equal(sc.packages_matrix_by_year[0].total_bundle_units,399);
+  assert.deepEqual(sc.goal_cockpit_2026,[]);
+  assert.match(stats.content[0].text,/pedidos_validos_2026=/);
  }finally{await client.close()}
 });
 

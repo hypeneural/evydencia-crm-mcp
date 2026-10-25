@@ -1,4 +1,4 @@
-# Evydência CRM MCP (`v0.10.0`)
+# Evydência CRM MCP (`v0.10.1`)
 
 Servidor e gateway MCP independente entre o ChatGPT (OpenAI Connectors / Apps SDK) e o **Evydência CRM** (Laravel 10 / PHP 8.3 / MySQL / Sanctum), operando em dois modos estritamente isolados:
 
@@ -13,7 +13,7 @@ Servidor e gateway MCP independente entre o ChatGPT (OpenAI Connectors / Apps SD
 
 ---
 
-## Catálogo de Ferramentas LIVE (`v0.10.0` — 17 ferramentas)
+## Catálogo de Ferramentas LIVE (`v0.10.1` — 17 ferramentas)
 
 | Ferramenta | Escopo / Modo | Acesso | Descrição resumida |
 |---|---|---|---|
