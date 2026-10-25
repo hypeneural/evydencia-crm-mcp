@@ -14,7 +14,14 @@ if(['customer-context','customer-360'].includes(mode)===false&&mode!=='bootstrap
 const client=crmClient({baseUrl:process.env.CRM_BASE_URL,token:key,privateEnabled:true,timeoutMs:7000});
 const modeToMethod={'bootstrap':'bootstrap','customer-context':'customer','customer-360':'history','proposal-preview':'preview'};
 try{
- const result=mode==='bootstrap'?await client.bootstrap():mode==='customer-context'?await client.customer(args.phone):
+ const bootstrap=await client.bootstrap();
+ const abilities=bootstrap.token?.abilities;
+ const allowed=new Set(['extension:bootstrap','extension:customer-read','extension:proposal-read']);
+ if(!Array.isArray(abilities)||abilities.length===0||abilities.some(x=>!allowed.has(x))||
+    !abilities.includes('extension:bootstrap')||
+    (mode!=='bootstrap'&&!abilities.includes(mode==='proposal-preview'?'extension:proposal-read':'extension:customer-read')))
+   throw Error('crm_overprivileged_or_missing_scope');
+ const result=mode==='bootstrap'?bootstrap:mode==='customer-context'?await client.customer(args.phone):
   mode==='customer-360'?await client.history(args.phone,1):await client.preview(args.phone,args.name);
  // The client projections already enforce minimal fields, which are checked without persisting payload.
  const looksValid=mode==='bootstrap'?!!(result.operator&&result.server):
