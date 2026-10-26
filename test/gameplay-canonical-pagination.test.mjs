@@ -9,7 +9,7 @@ const U=[
 ];
 const row=(n)=>({
  id:7200+n,uuid:U[n],created_at:'2026-10-26T12:00:00Z',
- status:{id:12,key:'order_completed',name:'Pedido Concluído'},
+ status:{id:12,name:'Pedido Concluído'}, // real Laravel resource has no status.key
  customer:{name:'Cliente Sintetico '+n},items:[],installments:[]
 });
 const clientWith=fetchFn=>legacyReadClient({
@@ -39,10 +39,21 @@ test('Laravel meta proves canonical server-side pages without PHP bridge',async(
  assert.deepEqual(queried,[1,2]);
  assert.equal(one.source,'CRM_API_SERVER_PAGINATED');
  assert.equal(one.orders.length,2);
+ assert.equal(one.orders[0].status_key,'order_completed');
  assert.equal(one.pagination.has_more,true);
  assert.equal(two.orders.length,1);
  assert.equal(two.orders[0].order_uuid,U[2]);
  assert.equal(two.pagination.has_more,false);
+});
+test('Laravel status 11 stays ineligible even when returned by the server',async()=>{
+ const original=row(0);
+ original.status={id:11,name:'Entrega Realizada'};
+ const client=clientWith(async()=>new Response(JSON.stringify({
+  data:[original],meta:{current_page:1,per_page:1,total:1,last_page:1}
+ }),{status:200}));
+ const result=await client.search(filters,opts);
+ assert.equal(result.orders[0].status_key,'product_retrieve_confirmed');
+ assert.notEqual(result.orders[0].status_key,'order_completed');
 });
 test('canonical fallback refuses unpaged Laravel response',async()=>{
  const client=clientWith(async()=>new Response(JSON.stringify({data:[row(0)]}),{status:200}));
