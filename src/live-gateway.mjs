@@ -63,6 +63,9 @@ function classifyToolError(code){
  if(['insufficient_operator_scope','insufficient_operator_write_scope','operator_token_revoked','operator_confirmation_required','legacy_read_missing_operator_context','crm_http_401','crm_http_403'].includes(code)){
   return {error_category:'UNAUTHORIZED'};
  }
+ if(code==='legacy_read_canonical_pagination_unavailable'){
+  return {error_category:'UNAVAILABLE',hint:'A busca completa requer o bridge forense com paginação canônica. Não conclua que não existem pendências: validar EVYD_CRM_APP_PATH e o bridge privado no host MCP.'};
+ }
  if(code.endsWith('_timeout')){
   return {error_category:'TIMEOUT'};
  }
