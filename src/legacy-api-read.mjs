@@ -1139,6 +1139,12 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const max=Math.min(25,Math.max(1,Number(opts?.limit)||10));
    const page=Math.max(1,Number(opts?.page)||1);
    const detailLevel=['resumo','padrao','forense'].includes(opts?.detailLevel)?opts.detailLevel:'padrao';
+   const canonicalPaginationRequired=opts?.canonicalPaginationRequired===true;
+   if(canonicalPaginationRequired&&(!fullProfile||!canUseForensicBridge())){
+    // Legacy /api/orders/search is projected and paginated client-side;
+    // it cannot prove complete coverage of a Christmas publication audit.
+    fail('canonical_pagination_unavailable');
+   }
    if(fullProfile&&canUseForensicBridge()){
     const bridgeFilters={};
     const keyMap={'customer.name':'customer_name','customer.whatsapp':'customer_whatsapp','customer.uuid':'customer_uuid','order.uuid':'order_uuid','order.id':'order_id','order.status':'order_status','product.slug':'product_slug','order.created-start':'created_start','order.created-end':'created_end','order.session-start':'session_start','order.session-end':'session_end','payment_method_name':'payment_method_name','has_open_balance':'has_open_balance'};
