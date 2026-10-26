@@ -1173,7 +1173,13 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      detail_level:detailLevel,
      pagination:{page,per_page:perPage,returned_count:rows.length,
       total_matching_orders:total,total_pages:lastPage,has_more:page<lastPage},
-     orders:rows.map(r=>forensicOrderProjection(r,{includeParticipants,fullProfile,detailLevel})),
+     orders:rows.map(r=>{
+      const projected=forensicOrderProjection(r,{includeParticipants,fullProfile,detailLevel});
+      // Laravel OrderResource.status exposes {id,name}, not enum key.
+      // These IDs are pinned to App/Enums/OrderStatus.php on CRM main.
+      const byId={10:'waiting_product_retrieve',11:'product_retrieve_confirmed',12:'order_completed'};
+      return {...projected,status_key:projected.status_key||byId[projected.status_id]||null};
+     }),
     };
    }
    const cleanFilters={};
