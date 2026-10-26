@@ -1,38 +1,44 @@
-# Antigravity — ETAPA 3 (Avell Windows 11, Gemini 3.8 Flash)
+# Antigravity — continuação P0 pós-walkthrough no Avell (Gemini 3.8 Flash)
 
-**Contexto já cumprido:** clones MCP `crm-mcp-dev` e Gameplay `gameplay-code` criados em AppData; última rodada do Antigravity registrou MCP 179/179, gateway 17/17 e Gameplay remoto CI verde. **NÃO CLONAR, REINSTALAR, TROCAR NODE, MEXER NA IMPRESSORA OU REFAZER A AUDITORIA.**
+**MISSÃO ÚNICA:** sincronizar as duas cópias já existentes, executar dois testes direcionados novos e fechar relatório. O walkthrough anterior já comprovou localmente 12/12 contratos e 24/24 testes cirúrgicos, conforme o relato do operador. **NÃO repita essas suítes nem instale pacotes.**
 
-**Nova entrega pronta:** PR MCP #11 corrigida para aproveitar `GET /api/orders/search?page=N` do Laravel com paginação servidor (`paginate(200)`) quando a ponte PHP não está instalada no mesmo host. Testes de contrato com status 10/11/12 e contagens consistentes. Gameplay PR #43 não foi alterada. O acesso real de cliente continua NÃO liberado.
+**Arquivos e PRs:** MCP `hypeneural/evydencia-crm-mcp` PR #11, branch `feat/gameplay-read-client-20261026`; Gameplay `hypeneural/gameplay` PR #43, branch `feat/gameplay-status-read-api-20261026` (base PR #30). O Gameplay não precisa ser compilado no Avell.
 
-## Passo 1 — atualizar somente os clones já existentes
+**É PROIBIDO:** mexer no MCP operacional, impressora/printserver, serviços Windows, Laravel, EvydFlow, Z-API, Caddy, VPS, credenciais, fotos de clientes, variáveis globais ou readiness; clonar de novo; instalar Node 24; fazer deploy.
 
-Execute uma única vez no PowerShell 5.1, como usuário normal:
+## 1 — Executar um único bloco PowerShell 5.1
 
 ```powershell
-$ErrorActionPreference='Stop'
-$w=Join-Path $env:LOCALAPPDATA 'Evydencia\Antigravity\gameplay-mcp-20261026'
-$m=Join-Path $w 'crm-mcp-dev'
-$g=Join-Path $w 'gameplay-code'
-foreach($p in @($m,$g)){
-  if(-not (Test-Path (Join-Path $p '.git'))){throw "WORKSPACE_AUSENTE: $p"}
-  $dirty=git -C $p status --porcelain
-  if($LASTEXITCODE -ne 0 -or $dirty){throw "WORKTREE_SUJA_OU_INVALIDA: $p"}
+$ErrorActionPreference = 'Stop'
+$w = Join-Path $env:LOCALAPPDATA 'Evydencia\Antigravity\gameplay-mcp-20261026'
+$m = Join-Path $w 'crm-mcp-dev'
+$g = Join-Path $w 'gameplay-code'
+foreach ($p in @($m,$g)) {
+  if (-not (Test-Path (Join-Path $p '.git'))) { throw "REPOSITORIO_AUSENTE: $p" }
+  $dirty = git -C $p status --porcelain
+  if ($LASTEXITCODE -ne 0 -or $dirty) { throw "ARVORE_SUJA_OU_INVALIDA: $p" }
 }
 node (Join-Path $m 'scripts\antigravity\prepare-avell.mjs') --workspace $w --refresh
-if($LASTEXITCODE -ne 0){throw 'FALHA_ATUALIZACAO: parar e inspecionar erro'}
+if ($LASTEXITCODE -ne 0) { throw 'STOP: atualização falhou' }
 Push-Location $m
-try{
-  node --test test/gameplay-canonical-pagination.test.mjs test/inspect-canonical-bridge.test.mjs test/live-gateway.test.mjs
-  if($LASTEXITCODE -ne 0){throw 'TESTES_CIRURGICOS_FALHARAM'}
-  node scripts/antigravity/inspect-canonical-bridge.mjs --json
-  if($LASTEXITCODE -ne 0){throw 'PROBE_FILESYSTEM_FALHOU'}
-} finally {Pop-Location}
+try {
+  node --test test/gameplay-canonical-pagination.test.mjs test/vps-readonly-preflight.test.mjs
+  if ($LASTEXITCODE -ne 0) { throw 'STOP: testes direcionados falharam' }
+} finally { Pop-Location }
+git -C $m rev-parse HEAD
+git -C $g rev-parse HEAD
 Get-Content (Join-Path $w 'antigravity-preflight.json')
 ```
 
-**IMPORTANTE:** sem `--run-mcp-tests` aqui. O Antigravity já rodou `npm ci`, `npm test` e `gateway:test` antes. Rodar os testes específicos acima UMA VEZ e usar CI GitHub para suíte integral. Se o script mostrar que faltam arquivos PHP no Avell, anotar `local_php_bridge_absent_expected`; isso NÃO demonstra que o host VPS não tenha acesso à API Laravel canônica.
+`--refresh` deve usar `git merge --ff-only`, verificar remoto/branch e preservar dados locais. Se houver falha, PARE. NÃO usar `--run-mcp-tests` nesta etapa, nem refazer `npm ci`, `npm test` ou `gateway:test`.
 
-## Passo 2 — validar a CI atual
+## 2 — Inspecionar documentação já atualizada
+
+Ler exclusivamente `$m/docs/AUDITORIA_FORENSE_AVELL_ETAPA4_20261026.md`.
+
+Confirmar em `src/legacy-api-read.mjs` que a projeção HTTP paginada agora traduz os 13 IDs do enum Laravel para status_key, incluindo status 4 em consulta por nome e status 11 inelegível para cobrança de publicação. A auditoria só considera os estados atuais 10 e 12, com mês/ano de 2026 e o filtro de produto Natal. A consulta em lote ao Gameplay nunca pode retornar capability URLs.
+
+## 3 — Confirmar CI do HEAD, não do relatório antigo
 
 ```powershell
 gh pr view 11 -R hypeneural/evydencia-crm-mcp --json headRefOid,isDraft,baseRefName,url
@@ -41,16 +47,23 @@ gh pr view 43 -R hypeneural/gameplay --json headRefOid,isDraft,baseRefName,url
 gh pr checks 43 -R hypeneural/gameplay --json name,state,bucket,link
 ```
 
-Não reaproveitar SHAs antigos. Se `gh` não estiver disponível, consultar o site autenticado sem instalar ferramentas. Não editar o arquivo de ambiente real do MCP.
+Se o gh estiver indisponível, anotar e conferir links do GitHub no navegador autenticado; não instalar aplicativos ou autenticar com token exposto.
 
-## Passo 3 — registrar resultado e ENCERRAR
+## 4 — Próximo gate, estritamente LEITURA (fora do Avell)
 
-Apresente somente:
-1. Diretórios, branches e SHAs atuais, árvore limpa.
-2. Resumo TAP real de cada teste da Etapa 1.
-3. Workflows GitHub correspondentes EXATAMENTE aos SHAs das PRs.
-4. `CRM_CANONICAL_SEARCH_AVELL=synthetic_contract_passed` ou erro; `CRM_CANONICAL_SEARCH_VPS=not_verified` até teste autorizado de produção.
-5. `GAMEPLAY_RUNTIME=not_verified` e `PRINTER_BASELINE=not_measured`.
-6. **GO apenas para desenvolvimento isolado**; **NO-GO para publicação de clientes e deploy** enquanto `readiness.json` tiver flags falsas ou Caddy, autorização de mídia, backup SQLite WAL e piloto não forem comprovados.
+O relatório já comprovou `crm_laravel_autoload_present=false` no Avell; isso é esperado. Não repetir essa checagem como se fosse erro.
 
-**PROIBIDO:** clonar novamente, instalar Laravel/Node 24, usar tokens reais no Avell, chamar Z-API, ativar opções de produção, enviar fotos, alterar CRM Laravel, Caddy, EvydFlow ou Printserver, fazer deploy ou criar novas PRs. Pare após entregar o relatório.
+O próximo objetivo é comprovar **na VPS autorizada**, separadamente, a presença dos pré-requisitos e o estado do serviço MCP sem modificar a operação. Existe script novo `scripts/antigravity/vps-readonly-preflight.mjs` para rodar em ambiente Linux onde a branch já esteja acessível, **somente** com acesso existente e autorização de leitura; não copiar arquivos para produção nem abrir SSH novo por conta própria. Se não for possível executar, deixar `VPS_FILESYSTEM=not_verified`. Mesmo após esse script, `CRM_CANONICAL_SEARCH_VPS`, `GAMEPLAY_PRIVATE_API`, `CADDY_ACL` e `BROWSER_RUNTIME` continuam `not_verified` até provas independentes.
+
+## 5 — Entrega e FIM
+
+Trazer SOMENTE:
+- SHAs e estado Git dos clones (não reportar clean sem comando real);
+- TAP dos dois arquivos afetados;
+- CI GitHub por SHA dos dois PRs, com link e resultados;
+- `VPS_FILESYSTEM`: `verified_files_present` ou `not_verified`; sem inventar SSH;
+- `CRM_CANONICAL_SEARCH_VPS=not_verified` até smoke autenticado explicitamente aprovado;
+- `PRINTER_BASELINE=not_measured` sem aferição;
+- Decisão **GO código e testes isolados / NO-GO dados reais e deploy** até Gameplay PR #43 ser reconciliada, Caddy privado, SQLite WAL backup/restauração, grant de mídia e piloto real autorizados.
+
+**Não criar novas PRs, scripts ou fluxos. Não iniciar loops de testes. Encerrar após essas evidências.**
