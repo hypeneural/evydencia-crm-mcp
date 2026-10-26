@@ -714,16 +714,18 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   const eligibleStatus=new Set(['waiting_product_retrieve','order_completed']);
   const findOrders=async(filter)=>{
    const orders=[],seen=new Set();
-   for(let page=1;page<=25;page++){
-    const result=await direct.search(filter,{page,limit:25});
+   for(let page=1;page<=80;page++){
+    const result=await direct.search(filter,{page,limit:25,detailLevel:'resumo'});
     if(!Array.isArray(result?.orders))throw Error('gameplay_crm_invalid');
     for(const o of result.orders){
      const uuid=String(o.order_uuid||o.uuid||'').toLowerCase();
-     if(!/^[0-9a-f-]{36}$/.test(uuid)||seen.has(uuid))continue;
+     if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(uuid))
+       throw Error('gameplay_crm_invalid');
+     if(seen.has(uuid))continue;
      seen.add(uuid);orders.push(o);
     }
     if(!result.pagination?.has_more)break;
-    if(page===25)throw Error('gameplay_crm_pagination_limit');
+    if(page===80)throw Error('gameplay_crm_pagination_limit');
    }
    return orders;
   };
@@ -738,20 +740,32 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
       ...(nome_cliente?{'customer.name':nome_cliente}:{})};
      const orders=await findOrders(f);
      if(!orders.length)return {source:'crm_gameplay_join',orders:[],total:0};
-     const rows=await gameplay.lookup(orders.map(o=>o.order_uuid||o.uuid));
-     const byUuid=new Map(rows.results.map(r=>[r.crm_order_uuid,r]));
-     return {source:'crm_gameplay_join',total:orders.length,verified_at:rows.verified_at,
-      orders:orders.map(o=>({order_id:o.order_id,crm_order_url:o.crm_order_url,
-       customer_name:o.customer_name,status_key:o.status_key,
-       gameplay:byUuid.get(String(o.order_uuid||o.uuid).toLowerCase())||null}))};
+     // Never retrieve capability links for a broad name search.
+     if(orders.length>10)return {source:'crm_gameplay_join',selection_required:true,
+      total:orders.length,orders:orders.slice(0,20).map(o=>({
+       order_id:o.order_id,customer_name:o.customer_name,status_key:o.status_key,
+       crm_order_url:o.crm_order_url}))};
+     const snapshots=await Promise.all(orders.map(async o=>{
+       const uuid=String(o.order_uuid||o.uuid).toLowerCase();
+       const res=await gameplay.lookup([uuid],{includeLinks:true});
+       return {order_id:o.order_id,crm_order_url:o.crm_order_url,
+        customer_name:o.customer_name,status_key:o.status_key,
+        expected_now:eligibleStatus.has(o.status_key),gameplay:res.results[0]};
+     }));
+     return {source:'crm_gameplay_join',total:orders.length,
+      orders:snapshots};
    });
   reg('crm_gameplay_auditoria','Pendências de galeria e jogos Natal 2026',
-   'Use para auditar apenas pedidos com status ATUAL Aguardando Retirada ou Pedido Concluído, cruzando com a publicação real do Gameplay. Falha do Gameplay não equivale a publicação ausente.',
-   z.object({}),OUT_GENERIC,async()=>{
+   'Use para auditar apenas pedidos com status ATUAL Aguardando Retirada ou Pedido Concluído. Retorna contagens e uma página de pedidos com pendências. Para ver revisões publicadas ainda não homologadas no navegador, use incluir_publicados=true. Não devolve links secretos em lote.',
+   z.object({pagina:z.number().int().min(1).max(100).default(1),
+    limite:z.number().int().min(1).max(50).default(20),
+    incluir_publicados:z.boolean().default(false)}),OUT_GENERIC,async({pagina,limite,incluir_publicados})=>{
      const orders=[],seen=new Set();
      for(const status of eligibleStatus){
        const found=await findOrders({...natalFilter,'order.status':status});
        for(const o of found){
+        // The filter must not silently turn an ineligible order into a missing-link alert.
+        if(o.status_key!==status)throw Error('gameplay_crm_invalid');
         const id=String(o.order_uuid||o.uuid).toLowerCase();
         if(!seen.has(id)){orders.push(o);seen.add(id)}
        }
@@ -766,7 +780,16 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
       gameplay:map.get(String(o.order_uuid||o.uuid).toLowerCase())||null}));
      const counts={total:entries.length};
      for(const e of entries){const state=e.gameplay?.state||'not_verified';counts[state]=(counts[state]||0)+1}
-     return {source:'crm_gameplay_join',year:2026,statuses:[...eligibleStatus],counts,orders:entries};
+     counts.pending_publication=['not_found','not_published','partial','revoked']
+       .reduce((sum,state)=>sum+(counts[state]||0),0);
+     counts.published_without_browser_proof=counts.published_unverified||0;
+     const selected=incluir_publicados?entries:
+       entries.filter(e=>e.gameplay?.state!=='published_unverified');
+     const start=(pagina-1)*limite;
+     return {source:'crm_gameplay_join',year:2026,statuses:[...eligibleStatus],counts,
+      pagination:{page:pagina,per_page:limite,total_matching:selected.length,
+       has_more:start+limite<selected.length},
+      orders:selected.slice(start,start+limite)};
    });
  }
  reg('crm_status','Estado do CRM','Use quando precisar verificar rapidamente o liveness público do servidor CRM (evydencia.com). NÃO use para diagnóstico de WhatsApp/Z-API.',z.object({}),OUT_GENERIC,()=>crm.status());
