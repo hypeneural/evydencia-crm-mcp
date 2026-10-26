@@ -612,7 +612,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
  // A missing/misconfigured optional Gameplay integration must never bring down CRM and Z-API.
  let gameplay=null;
- if(direct){
+ if(direct&&cfg.operatorFullCrm){
   try{
    const readConfig=gameplayReadConfig(process.env);
    if(readConfig)gameplay=createGameplayReadClient(readConfig,{fetchFn});
@@ -768,7 +768,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      if(seen.has(uuid))continue;
      seen.add(uuid);orders.push(o);
     }
-    if(!result.pagination?.has_more)break;
+    if(typeof result.pagination?.has_more!=='boolean')throw Error('gameplay_crm_pagination_invalid');
+    if(!result.pagination.has_more)break;
     if(page===80)throw Error('gameplay_crm_pagination_limit');
    }
    return orders;
@@ -783,6 +784,12 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
       ...(order_uuid?{'order.uuid':order_uuid}:{}),
       ...(nome_cliente?{'customer.name':nome_cliente}:{})};
      const orders=await findOrders(f);
+     // A broken CRM filter must never return links for another order.
+     if(order_id!==undefined&&orders.some(o=>Number(o.order_id)!==order_id))
+      throw Error('gameplay_crm_filter_mismatch');
+     if(order_uuid!==undefined&&orders.some(o=>
+       String(o.order_uuid||o.uuid).toLowerCase()!==order_uuid.toLowerCase()))
+      throw Error('gameplay_crm_filter_mismatch');
      if(!orders.length)return {source:'crm_gameplay_join',orders:[],total:0};
      // Never retrieve capability links for a broad name search.
      if((nome_cliente && orders.length>1) || orders.length>10)return {source:'crm_gameplay_join',selection_required:true,
