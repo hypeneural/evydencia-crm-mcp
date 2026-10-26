@@ -775,7 +775,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   };
   const natalFilter={'order.created-start':'2026-01-01','order.created-end':'2026-12-31','product.slug':'natal'};
   reg('crm_gameplay_links','Galeria e jogos de Natal 2026 por nome ou pedido',
-   'Consulta somente leitura. Use para encontrar os links de jogos e galeria de um pedido Natal 2026, por order_id, UUID ou nome. Em nomes repetidos devolve todos os pedidos separados. Não envia WhatsApp nem cria sessão.',
+   'Consulta somente leitura. Use para encontrar os links de jogos e galeria de um pedido Natal 2026, por order_id, UUID ou nome. Para nomes com múltiplos pedidos devolve identificadores SEM links e solicita selecionar o pedido por ID; não escolhe homônimos nem divulga capability tokens em massa. Não envia WhatsApp nem cria sessão.',
    z.object({order_id:z.number().int().positive().optional(),order_uuid:z.string().uuid().optional(),
     nome_cliente:z.string().min(2).max(100).optional()}),OUT_GAMEPLAY_LINKS,async({order_id,order_uuid,nome_cliente})=>{
      if([order_id,order_uuid,nome_cliente].filter(x=>x!==undefined).length!==1)throw Error('gameplay_locator_invalid');
@@ -785,7 +785,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      const orders=await findOrders(f);
      if(!orders.length)return {source:'crm_gameplay_join',orders:[],total:0};
      // Never retrieve capability links for a broad name search.
-     if(orders.length>10)return {source:'crm_gameplay_join',selection_required:true,
+     if((nome_cliente && orders.length>1) || orders.length>10)return {source:'crm_gameplay_join',selection_required:true,
       total:orders.length,orders:orders.slice(0,20).map(o=>({
        order_id:o.order_id,customer_name:o.customer_name,status_key:o.status_key,
        crm_order_url:o.crm_order_url}))};
