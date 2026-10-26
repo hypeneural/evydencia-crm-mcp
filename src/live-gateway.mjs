@@ -826,7 +826,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   };
   const natalFilter={'order.created-start':'2026-01-01','order.created-end':'2026-12-31','product.slug':'natal'};
   reg('crm_gameplay_links','Galeria e jogos de Natal 2026 por nome ou pedido',
-   'Consulta somente leitura. Use para encontrar os links de jogos e galeria de um pedido Natal 2026, por order_id, UUID ou nome. Para nomes com múltiplos pedidos devolve identificadores SEM links e solicita selecionar o pedido por ID; não escolhe homônimos nem divulga capability tokens em massa. Não envia WhatsApp nem cria sessão.',
+   'Consulta somente leitura por order_id, UUID ou nome no CRM Natal 2026. Relaciona pedido ao Gameplay por UUID e mostra status atual CRM, fotos publicadas, fotos em preparação e situação do álbum. Publicação não comprova jogos Phaser funcionando no celular. Com nome ambíguo devolve identificadores sem links e exige selecionar o ID. Nunca cria sessão ou envia WhatsApp.',
    z.object({order_id:z.number().int().positive().optional(),order_uuid:z.string().uuid().optional(),
     nome_cliente:z.string().min(2).max(100).optional()}),OUT_GAMEPLAY_LINKS,async({order_id,order_uuid,nome_cliente})=>{
      if([order_id,order_uuid,nome_cliente].filter(x=>x!==undefined).length!==1)throw Error('gameplay_locator_invalid');
@@ -866,7 +866,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
       orders:snapshots};
    });
   reg('crm_gameplay_auditoria','Pendências de galeria e jogos Natal 2026',
-   'Use para auditar apenas pedidos com status ATUAL Aguardando Retirada ou Pedido Concluído. Retorna contagens e uma página de pedidos com pendências. Para ver revisões publicadas ainda não homologadas no navegador, use incluir_publicados=true. Não devolve links secretos em lote.',
+   'Cruza pedidos Natal 2026 com status ATUAL Aguardando Retirada ou Pedido Concluído com o Gameplay pelo UUID. Conta pedidos sem sessão, em preparação e publicados; totaliza fotos publicadas e em preparação separadamente. Não comprova a execução dos jogos em navegadores. Para ver publicados use incluir_publicados=true; nunca retorna links de acesso em lote.',
    z.object({pagina:z.number().int().min(1).max(100).default(1),
     limite:z.number().int().min(1).max(50).default(20),
     incluir_publicados:z.boolean().default(false)}),OUT_GAMEPLAY_AUDIT,async({pagina,limite,incluir_publicados})=>{
