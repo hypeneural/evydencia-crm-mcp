@@ -533,6 +533,7 @@ const OUT_GAMEPLAY_OPERATIONAL=z.looseObject({
   'album_in_preparation','preparation_invalid'
  ]),
  publication_pending:z.boolean(),published_photo_count:z.number().int().nonnegative().nullable(),
+ active_revision_manifest_photo_count:z.number().int().nonnegative().nullable(),
  preparing_photo_count:z.number().int().nonnegative().nullable(),
  published_variants_ready:z.number().int().nonnegative().nullable(),
  preparing_variants_ready:z.number().int().nonnegative().nullable(),
