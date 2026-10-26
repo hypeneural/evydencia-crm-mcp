@@ -481,7 +481,10 @@ before(async()=>{
   }
 
   if(auth!==INTERNAL_TOK)return send(401,{message:'Unauthorized'});
-  const allOrders=[...makeAvatarOrders(),ORDER_5001_ANOMALY_SYNTH,ORDER_4510_SYNTH,ORDER_3369_SYNTH];
+  const orderAmb1a={id:4101,uuid:'41014101-4101-4101-8101-000000004101',status:{id:12,key:'order_completed',name:'Pedido Concluído'},customer:CUST_AMBIGUOUS_1,created_at:'2025-10-01 10:00:00',items:[],installments:[],statuses:[],participants:[],summary:{total:390,received:390,remaining:0}};
+  const orderAmb1b={id:4102,uuid:'41024102-4102-4102-8102-000000004102',status:{id:12,key:'order_completed',name:'Pedido Concluído'},customer:CUST_AMBIGUOUS_1,created_at:'2025-11-01 10:00:00',items:[],installments:[],statuses:[],participants:[],summary:{total:450,received:450,remaining:0}};
+  const orderAmb2={id:4201,uuid:'42014201-4201-4201-8201-000000004201',status:{id:12,key:'order_completed',name:'Pedido Concluído'},customer:CUST_AMBIGUOUS_2,created_at:'2025-10-15 10:00:00',items:[],installments:[],statuses:[],participants:[],summary:{total:390,received:390,remaining:0}};
+  const allOrders=[...makeAvatarOrders(),ORDER_5001_ANOMALY_SYNTH,ORDER_4510_SYNTH,orderAmb2,orderAmb1b,orderAmb1a,ORDER_3369_SYNTH];
   const allCustomers=[CUST_ZERO_ORDER_LEAD,makeCustAvatar(),CUST_FAMILY,CUST_AMBIGUOUS_1,CUST_AMBIGUOUS_2];
 
   if(u.pathname==='/api/reports/natal-statistics'){
@@ -564,6 +567,8 @@ before(async()=>{
     orders:custOrders
    });
   }
+  if(u.pathname==='/api/reports/customers-with-christmas-orders')return send(200,allCustomers);
+  if(u.pathname==='/api/reports/customers-without-christmas-orders')return send(200,[]);
   return send(404,{});
  });
  await new Promise(r=>crm.listen(0,'127.0.0.1',r));
@@ -925,5 +930,20 @@ test('Scenario 8 — All 10 mandatory negative, edge, SSRF and write-confirmatio
   // 10. Missing write confirmation fails closed before hitting CRM
   const noConfirm=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'48991000202',nome:'Teste'}});
   assert.equal(noConfirm.isError,true);
+
+  // 11. Visual Card homonym lookup fails with AMBIGUOUS instead of picking first homonym
+  const ambCard=await client.callTool({name:'crm_renderizar_card_visual',arguments:{tipo:'cliente_360',nome_cliente:'Camila Sintetica Homonima'}});
+  assert.equal(ambCard.isError,true);
+  assert.equal(JSON.parse(ambCard.content[0].text).error_category,'AMBIGUOUS');
  }finally{await client.close()}
+
+ // 12. Read-only mode resolvePhoneByName homonym safety (returns lookup.status=ambiguous, never picks first phone)
+ const {client:roClient}=await makeAuthorizedClient({});
+ try{
+  const roAmb=await roClient.callTool({name:'crm_cliente_resumo',arguments:{nome_cliente:'Camila Sintetica Homonima'}});
+  assert.equal(roAmb.isError,undefined);
+  assert.equal(roAmb.structuredContent.lookup.status,'ambiguous');
+  assert.equal(roAmb.structuredContent.lookup.match_count,2);
+  assert.equal(roAmb.structuredContent.customer,null);
+ }finally{await roClient.close()}
 });

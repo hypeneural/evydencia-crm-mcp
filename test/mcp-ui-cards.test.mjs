@@ -8,9 +8,11 @@ import {createHash,randomBytes} from 'node:crypto';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
 import {
  createBridgeSingleFlightCache,
+ buildScopedBridgeCacheKey,
  classifyBridgeExecError,
  buildAvatarRenderContract,
- probeCustomerAvatarAsset
+ probeCustomerAvatarAsset,
+ legacyReadClient
 } from '../src/legacy-api-read.mjs';
 import {
  MCP_UI_CARD_RESOURCE_URI,
@@ -173,9 +175,16 @@ before(async()=>{
   if(u.pathname==='/api/customers/forensic-360'){
    return send(200,{
     lookup:{status:'matched',match_count:1},
-    customer:{uuid:'cust-op7',name:'Larissa Exemplo',city:'Florianópolis',state:'SC'},
-    kpis:{total_orders_registered:1,total_contracted_reais:890,total_received_reais:890,open_balance_reais:0},
-    orders:[{id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:'session_scheduled',total:890,
+    customer:{uuid:'cust-op7',name:'Larissa Exemplo',address:{city:'Florianópolis',state:'SC'}},
+    kpis:{
+     total_orders_registered:3,
+     valid_orders_count:3,
+     completed_sessions_count:2,
+     lifetime_contracted_valid_cents:267000,
+     lifetime_received_cents:178000,
+     lifetime_remaining_valid_cents:89000
+    },
+    orders:[{id:5001,order_uuid:'11111111-aaaa-4111-8111-000000000101',status:'session_scheduled',total:890,
      items:[{name:'Experiência Natal',quantity:1,total:890}],installments:[{total:890,payment_at:'2026-10-10 10:00:00',method:{name:'Pix'}}]}]
    });
   }
@@ -261,4 +270,335 @@ test('MCP Apps resource, CSP allowlist, decoupled tool metadata and kill-switch 
  assert.equal(snap.calls_total,2);
  assert.equal(snap.cache_hit_rate,0.5);
  assert.equal(snap.error_rate,0);
+});
+
+test('Regression P0 — Order #5128 & #5127 contractual fixtures: installments cents/paid/open/partial, Google Calendar sync_enabled=false vs is_synced=true, omitted calendar=unknown, bonus provenance, chronological status_history, and centsOrNull',()=>{
+ assert.equal(MCP_UI_CARD_RESOURCE_URI,'ui://evydencia/crm-visual-card-v2.html');
+
+ const card5128=buildVisualCardPayload({
+  tipo:'pedido',
+  detailResult:{
+   source:'CRM_FORENSIC_READ_ONLY_BRIDGE',
+   as_of:'2026-10-25T22:00:00-03:00',
+   order:{
+    order_id:5128,
+    order_uuid:'51285128-aaaa-4128-8128-000000005128',
+    status_key:'session_schedule',
+    status_label:'Sessão Agendada',
+    package_name:'Experiência Ho-Ho-Ho',
+    crm_order_url:'https://evydencia.com/gestao/pedidos/51285128-aaaa-4128-8128-000000005128/detalhes',
+    crm_customer_url:'https://evydencia.com/gestao/clientes/cust-synth-5128/consultar',
+    created_at_brt:'2026-10-24 14:20:00',
+    session_at:'2026-11-08 10:30:00',
+    total_cents:19600,
+    received_cents:9800,
+    remaining_cents:9800,
+    payment_summary:{
+     subtotal_cents:19600,
+     total_discounts_cents:0,
+     coupon_code:null,
+     total_cents:19600,
+     received_cents:9800,
+     remaining_cents:9800,
+     installments_count:2,
+     paid_installments_count:1,
+     open_installments_count:1,
+     effective_paid_methods:['Pix - Pagar.me'],
+     payment_needs_review:false
+    },
+    schedule_details:{
+     session_at_brt:'2026-11-08 10:30:00',
+     selection_at_brt:null,
+     google_calendar:{
+      available:true,
+      sync_enabled:false,
+      order_session:{
+       is_synced:true,
+       status:'synced',
+       synced_at_label:'24/10/2026 14:23',
+       html_link:'https://calendar.google.com/calendar/event?eid=synth5128'
+      },
+      schedule_change_history:[{action:'synced',at:'2026-10-24 14:23:00'}]
+     }
+    },
+    status_history:[
+     {event_id:20,status_key:'session_schedule',status_label:'Sessão Agendada',recorded_at_brt:'2026-10-24 14:23:00',is_current:true},
+     {event_id:17,status_key:'order_created',status_label:'Pedido Criado',recorded_at_brt:'2026-10-24 14:20:00',is_current:false},
+     {event_id:18,status_key:'waiting_payment',status_label:'Aguardando Pagamento',recorded_at_brt:'2026-10-24 14:20:05',is_current:false},
+     {event_id:19,status_key:'payment_confirmed',status_label:'Pagamento Confirmado',recorded_at_brt:'2026-10-24 14:22:10',is_current:false}
+    ],
+    items:[
+     {
+      item_id:1,
+      product_name:'Experiência Ho-Ho-Ho',
+      quantity:1,
+      is_bundle:true,
+      unit_amount_cents:19600,
+      discount_cents:0,
+      net_total_cents:19600,
+      bonus_classification:{classification:'package_bundle',origin:'catalog_bundle',proven:true}
+     }
+    ],
+    installments:[
+     {
+      sequence:1,
+      total_cents:9800,
+      paid_cents:9800,
+      is_paid:true,
+      expiry_at_brt:'2026-10-24 23:59:59',
+      paid_at_brt:'2026-10-24 14:22:10',
+      method_name:'Pix - Pagar.me',
+      card_split_count:1
+     },
+     {
+      sequence:2,
+      total_cents:9800,
+      paid_cents:0,
+      is_paid:false,
+      expiry_at_brt:null,
+      paid_at_brt:null,
+      method_name:null,
+      card_split_count:1
+     }
+    ],
+    participant_count:0,
+    customer:{
+     name:'Titular Sintética 5128',
+     uuid:'cust-synth-5128',
+     phone_masked:'(**) *****-5128',
+     address:{city:'Tijucas',state:'SC'},
+     registration_completeness:{is_complete_for_card:false,missing_field_labels:['CPF','CEP']},
+     avatar:{has_avatar:false,url:null,initials:'TS',asset_accessible:false,asset_check_status:'not_checked'}
+    }
+   }
+  }
+ });
+
+ assert.equal(card5128.header.order_uuid,'51285128-aaaa-4128-8128-000000005128');
+ assert.equal(card5128.customer.city,'Tijucas');
+ assert.equal(card5128.customer.state,'SC');
+ assert.equal(card5128.financial.total_cents,19600);
+ assert.equal(card5128.financial.received_cents,9800);
+ assert.equal(card5128.financial.remaining_cents,9800);
+ assert.equal(card5128.installments.length,2);
+ assert.equal(card5128.installments[0].total_cents,9800);
+ assert.equal(card5128.installments[0].paid_cents,9800);
+ assert.equal(card5128.installments[0].paid_reais,98,'paid_reais must never be 0 when paid_cents=9800');
+ assert.equal(card5128.installments[0].remaining_cents,0);
+ assert.equal(card5128.installments[0].status,'paid');
+ assert.equal(card5128.installments[0].expiry_at_brt,'2026-10-24 23:59:59');
+ assert.equal(card5128.installments[0].paid_at_brt,'2026-10-24 14:22:10');
+ assert.equal(card5128.installments[0].method_name,'Pix - Pagar.me');
+ assert.equal(card5128.installments[1].total_cents,9800);
+ assert.equal(card5128.installments[1].paid_cents,0);
+ assert.equal(card5128.installments[1].remaining_cents,9800);
+ assert.equal(card5128.installments[1].status,'open');
+ assert.equal(card5128.installments[1].expiry_at_brt,null);
+ assert.equal(card5128.schedule.google_calendar.state,'synced');
+ assert.equal(card5128.schedule.google_calendar.is_synced,true);
+ assert.equal(card5128.schedule.google_calendar.auto_sync_enabled,false);
+ assert.equal(card5128.schedule.google_calendar.html_link,'https://calendar.google.com/calendar/event?eid=synth5128');
+ assert.equal(card5128.status_timeline.length,4);
+ assert.deepEqual(card5128.status_timeline.map(e=>e.status_key),['order_created','waiting_payment','payment_confirmed','session_schedule']);
+
+ const card5127=buildVisualCardPayload({
+  tipo:'pedido',
+  detailResult:{
+   order:{
+    order_id:5127,
+    order_uuid:'51275127-bbbb-4127-8127-000000005127',
+    status_key:'session_schedule',
+    status_label:'Sessão Agendada',
+    package_name:'Experiência Então é Natal',
+    total_cents:48000,
+    received_cents:12000,
+    remaining_cents:36000,
+    schedule_details:{
+     session_at_brt:'2026-11-02 09:00:00',
+     google_calendar:{available:false,unavailable_reason:'omitted_in_list_level_use_order_detail'}
+    },
+    items:[
+     {product_name:'Experiência Então é Natal',quantity:1,is_bundle:true,unit_amount_cents:48000,discount_cents:0,net_total_cents:48000,bonus_classification:{classification:'package_bundle',origin:'catalog_bundle',proven:true}},
+     {product_name:'Calendário Extra Pré-venda',quantity:1,is_bundle:false,unit_amount_cents:5000,discount_cents:5000,net_total_cents:0,bonus_classification:{classification:'campaign_bonus',origin:'automatic_rule',proven:true,benefit_key:'brinde-prevenda-calendario'}},
+     {product_name:'Item R$ 0 Legado Sem Regra',quantity:1,is_bundle:false,unit_amount_cents:5700,discount_cents:5700,net_total_cents:0,bonus_classification:{classification:'zero_net_untracked',origin:'unknown',proven:false}}
+    ],
+    installments:[
+     {sequence:1,total_cents:12000,paid_cents:12000,is_paid:true,expiry_at_brt:'2026-10-23 23:59:59',paid_at_brt:'2026-10-23 17:35:00',method_name:'Pix - Pagar.me',card_split_count:1},
+     {sequence:2,total_cents:36000,paid_cents:10000,is_paid:false,expiry_at_brt:'2026-11-02 09:00:00',paid_at_brt:null,method_name:'Cartão de Crédito',card_split_count:3}
+    ],
+    customer:{name:'Titular Sintética 5127',avatar:{has_avatar:false,url:null,initials:'T5'}}
+   }
+  }
+ });
+ assert.equal(card5127.installments.length,2,'card_split_count=3 must never inflate order installments count');
+ assert.equal(card5127.installments[0].paid_cents,12000);
+ assert.equal(card5127.installments[0].paid_reais,120);
+ assert.equal(card5127.installments[1].status,'partial');
+ assert.equal(card5127.installments[1].remaining_cents,26000);
+ assert.equal(card5127.installments[1].card_split_count,3);
+ assert.equal(card5127.schedule.google_calendar.state,'unknown');
+ assert.equal(card5127.schedule.google_calendar.is_synced,null);
+ assert.equal(card5127.items[1].is_proven_bonus,true);
+ assert.equal(card5127.items[1].bonus_kind,'campaign_bonus');
+ assert.equal(card5127.items[2].is_proven_bonus,false);
+ assert.equal(card5127.items[2].bonus_kind,'zero_net_untracked');
+
+ const missingFin=buildVisualCardPayload({
+  tipo:'pedido',
+  detailResult:{order:{order_id:9999,status_label:'Criado',customer:{name:'Sem Valores'}}}
+ });
+ assert.equal(missingFin.financial.total_cents,null);
+ assert.equal(missingFin.financial.total_reais,null);
+ assert.equal(missingFin.data_status,'unavailable');
+ assert.match(formatVisualCardTextFallback(missingFin),/Não informado/);
+});
+
+test('Regression P0 — Cliente 360 contractual fixtures: canonical lifetime cents vs paginated slice, Natal 2026 3-state (true/false/null), order_uuid, and missing KPI handling',()=>{
+ const c360UnverifiedNatal=buildVisualCardPayload({
+  tipo:'cliente_360',
+  customerResult:{
+   source:'CRM_FORENSIC_READ_ONLY_BRIDGE',
+   customer:{
+    uuid:'cust-multi-01',
+    name:'Cliente Multi Pedidos Sintética',
+    phone_masked:'(**) *****-1234',
+    address:{city:'Itapema',state:'SC'},
+    avatar:{has_avatar:false,url:null,initials:'CM'}
+   },
+   kpis:{
+    lifecycle_stage:'recurring',
+    total_orders_registered:5,
+    valid_orders_count:4,
+    reversed_or_aborted_orders_count:1,
+    completed_sessions_count:3,
+    lifetime_contracted_valid_cents:215000,
+    lifetime_received_cents:179000,
+    lifetime_remaining_valid_cents:36000
+   },
+   current_order:{
+    order_id:5127,
+    order_uuid:'51275127-bbbb-4127-8127-000000005127',
+    package_name:'Experiência Então é Natal',
+    status_label:'Sessão Agendada',
+    total_cents:48000,
+    session_at:'2026-11-02 09:00:00'
+   },
+   orders:[
+    {
+     order_id:5127,
+     order_uuid:'51275127-bbbb-4127-8127-000000005127',
+     package_name:'Experiência Então é Natal',
+     status_label:'Sessão Agendada',
+     total_cents:48000,
+     session_at:'2026-11-02 09:00:00',
+     crm_order_url:'https://evydencia.com/gestao/pedidos/51275127-bbbb-4127-8127-000000005127/detalhes'
+    }
+   ]
+  }
+ });
+
+ assert.equal(c360UnverifiedNatal.financial.total_contracted_cents,215000);
+ assert.equal(c360UnverifiedNatal.financial.total_received_cents,179000);
+ assert.equal(c360UnverifiedNatal.financial.open_balance_cents,36000);
+ assert.equal(c360UnverifiedNatal.financial.orders_count,5);
+ assert.equal(c360UnverifiedNatal.financial.valid_orders_count,4);
+ assert.equal(c360UnverifiedNatal.financial.completed_sessions_count,3);
+ assert.equal(c360UnverifiedNatal.customer.city,'Itapema');
+ assert.equal(c360UnverifiedNatal.customer.state,'SC');
+ assert.equal(c360UnverifiedNatal.recent_orders[0].order_uuid,'51275127-bbbb-4127-8127-000000005127');
+ assert.equal(c360UnverifiedNatal.natal_2026.purchased,null);
+ assert.equal(c360UnverifiedNatal.natal_2026.status,'unverified');
+ assert.equal(c360UnverifiedNatal.natal_2026.label,'Não verificado');
+
+ const c360Buyer=buildVisualCardPayload({
+  tipo:'cliente_360',
+  customerResult:{
+   customer:{uuid:'c-buy',name:'Compradora Natal'},
+   kpis:{total_orders_registered:1,valid_orders_count:1,completed_sessions_count:0,lifetime_contracted_valid_cents:48000,lifetime_received_cents:12000,lifetime_remaining_valid_cents:36000},
+   natal_2026:{purchased:true,order_id:5127}
+  }
+ });
+ assert.equal(c360Buyer.natal_2026.purchased,true);
+ assert.equal(c360Buyer.natal_2026.status,'purchased');
+
+ const c360Prospect=buildVisualCardPayload({
+  tipo:'cliente_360',
+  customerResult:{
+   customer:{uuid:'c-pro',name:'Prospecto Natal'},
+   kpis:{total_orders_registered:1,valid_orders_count:1,completed_sessions_count:1,lifetime_contracted_valid_cents:45000,lifetime_received_cents:45000,lifetime_remaining_valid_cents:0},
+   natal_2026:{purchased:false}
+  }
+ });
+ assert.equal(c360Prospect.natal_2026.purchased,false);
+ assert.equal(c360Prospect.natal_2026.status,'not_purchased');
+
+ const c360MissingKpi=buildVisualCardPayload({
+  tipo:'cliente_360',
+  customerResult:{
+   customer:{uuid:'c-miss',name:'Sem KPI Canônico'},
+   kpis:{},
+   orders:[{order_id:1,order_uuid:'u-1',total_cents:48000}]
+  }
+ });
+ assert.equal(c360MissingKpi.financial.total_contracted_cents,null);
+ assert.equal(c360MissingKpi.financial.total_received_cents,null);
+ assert.equal(c360MissingKpi.financial.open_balance_cents,null);
+ assert.equal(c360MissingKpi.data_status,'unavailable');
+});
+
+test('Regression P0 — operator cache isolation (2 synthetic operators, same order/params, distinct auth contexts), homonym resolution, and typed timeout/contract errors',async()=>{
+ const secret=Buffer.alloc(32,7);
+ const keyOp7Full=buildScopedBridgeCacheKey({
+  cacheSecret:secret,
+  operatorId:'7',
+  authScope:'crm.read crm.proposal.write|full',
+  upstreamGrantHash:'grant-op7-a',
+  kind:'forensic',
+  base:'https://evydencia.com',
+  appPath:'/var/www/evydencia/current',
+  payload:{action:'orders.detail',order_id:5128,nome_cliente:'Segredo PII'}
+ });
+ const keyOp9Read=buildScopedBridgeCacheKey({
+  cacheSecret:secret,
+  operatorId:'9',
+  authScope:'crm.read|restricted',
+  upstreamGrantHash:'grant-op9-b',
+  kind:'forensic',
+  base:'https://evydencia.com',
+  appPath:'/var/www/evydencia/current',
+  payload:{action:'orders.detail',order_id:5128,nome_cliente:'Segredo PII'}
+ });
+ const keyOp7Rotated=buildScopedBridgeCacheKey({
+  cacheSecret:secret,
+  operatorId:'7',
+  authScope:'crm.read crm.proposal.write|full',
+  upstreamGrantHash:'grant-op7-revoked-new',
+  kind:'forensic',
+  base:'https://evydencia.com',
+  appPath:'/var/www/evydencia/current',
+  payload:{action:'orders.detail',order_id:5128,nome_cliente:'Segredo PII'}
+ });
+
+ assert.notEqual(keyOp7Full,keyOp9Read,'two operators querying identical order/params never share cache key');
+ assert.notEqual(keyOp7Full,keyOp7Rotated,'rotated/revoked upstream grant never reuses prior cached entry');
+ assert.ok(!keyOp7Full.includes('Segredo')&&!keyOp7Full.includes('5128')&&!keyOp7Full.includes('grant-op7'),'cache key hashes PII and tokens via HMAC');
+
+ // Homonymous customer resolution in legacyReadClient.resolvePhoneByName MUST return status='ambiguous'
+ const homonymFetch=async url=>{
+  const u=new URL(url);
+  if(u.pathname==='/api/orders/search'){
+   return new Response(JSON.stringify({
+    data:[
+     {id:101,uuid:'u-101',created_at:'2026-10-20 10:00:00',customer:{uuid:'c-401',name:'Camila Sintetica Homonima',whatsapp:'48991000401'}},
+     {id:102,uuid:'u-102',created_at:'2026-10-21 10:00:00',customer:{uuid:'c-402',name:'Camila Sintetica Homonima',whatsapp:'48991000402'}}
+    ]
+   }),{status:200,headers:{'content-type':'application/json'}});
+  }
+  return new Response('{}',{status:404});
+ };
+ const reader=legacyReadClient({baseUrl:'https://evydencia.com',token:'tok-internal-test-1234',fetchFn:homonymFetch});
+ const ambRes=await reader.resolvePhoneByName('Camila Sintetica Homonima');
+ assert.equal(ambRes.status,'ambiguous','never arbitrarily picks first homonym phone');
+ assert.equal(ambRes.phone,null);
+ assert.equal(ambRes.match_count,2);
 });

@@ -11,6 +11,17 @@ import {baseURL,crmClient} from './core.mjs';
 import {assertOperatorAbilities} from './live-abilities.mjs';
 
 export const GATEWAY_SCOPE='crm.read';
+export const SCOPE_PROPOSAL_WRITE='crm.proposal.write';
+export const SCOPE_ZAPI_SEND='zapi.message.send';
+export const SCOPE_ZAPI_GROUP='zapi.group.manage';
+export const ALL_WRITE_SCOPES=Object.freeze([SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]);
+export function supportedGatewayScopes(cfg){
+ return [
+  GATEWAY_SCOPE,
+  ...(cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_PROPOSAL_WRITE]:[]),
+  ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[])
+ ];
+}
 // ChatGPT uses the stable redirect when the AS advertises RFC 9207 `iss`; otherwise a per-connection callback.
 const DEFAULT_REDIRECTS='https://chatgpt.com/connector_platform_oauth_redirect,https://chatgpt.com/connector/oauth/*';
 const DEFAULT_ZAPI_MCP_URL='https://mcp.z-api.io/mcp';
@@ -133,7 +144,7 @@ export function redirectAllowed(uri,allow){
 
 export function deriveKeys(master){
  const d=info=>Buffer.from(hkdfSync('sha256',master,Buffer.from('evydencia-crm-mcp-gateway'),Buffer.from(info),32));
- return {aead:d('aead-v1'),mac:d('mac-v1'),log:d('log-v1'),zapiStore:d('zapi-store-v1'),zapiDiagObs:d('zapi-diag-obs-v1')};
+ return {aead:d('aead-v1'),mac:d('mac-v1'),log:d('log-v1'),bridgeCache:d('bridge-cache-v1'),zapiStore:d('zapi-store-v1'),zapiDiagObs:d('zapi-diag-obs-v1')};
 }
 
 // AAD = token type, so a code can never be replayed as an access token and vice versa.
@@ -183,7 +194,10 @@ export function operatorVerifier(cfg,{fetchFn=fetch,now=()=>Date.now()}={}){
   if(!cfg.allowedOperators.has(op))throw Error('operator_not_authorized');
   const exp=b.token?.expires_at?Date.parse(b.token.expires_at):NaN;
   if(Number.isFinite(exp)&&exp<=now())throw Error('upstream_token_invalid');
-  const value={operatorId:op,upstreamExpiresAt:Number.isFinite(exp)?Math.floor(exp/1000):null};
+  const abilities=Object.freeze(Array.isArray(b.token?.abilities)?b.token.abilities.filter(x=>typeof x==='string'):[]);
+  const canReadProposal=abilities.includes('extension:proposal-read');
+  const canWriteProposal=!cfg.strictReadOnlyToken&&abilities.includes('extension:proposal-write');
+  const value=Object.freeze({operatorId:op,upstreamExpiresAt:Number.isFinite(exp)?Math.floor(exp/1000):null,abilities,canReadProposal,canWriteProposal});
   if(cfg.operatorCacheMs>0){
    if(cache.size>=1000)cache.delete(cache.keys().next().value);
    cache.set(k,{value,until:now()+cfg.operatorCacheMs});
@@ -202,7 +216,23 @@ const MSG={
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}}){
- const seal=createSealer(cfg.key),{mac}=deriveKeys(cfg.key),tag=operatorTagger(cfg.key);
+ const seal=createSealer(cfg.key),{mac,bridgeCache}=deriveKeys(cfg.key),tag=operatorTagger(cfg.key);
+ const upstreamGrantHash=up=>createHmac('sha256',bridgeCache).update('grant:'+String(up)).digest('base64url').slice(0,24);
+ const scopesSupported=Object.freeze(supportedGatewayScopes(cfg));
+ const supportedWriteScopes=scopesSupported.filter(s=>ALL_WRITE_SCOPES.includes(s));
+ const eligibleScopesForOperator=v=>[
+  GATEWAY_SCOPE,
+  ...(cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canWriteProposal)?[SCOPE_PROPOSAL_WRITE]:[]),
+  ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[])
+ ];
+ const computeGrantedScopes=(v,narrowWriteScopes=null)=>{
+  const eligible=eligibleScopesForOperator(v);
+  if(Array.isArray(narrowWriteScopes)&&narrowWriteScopes.length>0){
+   const allow=new Set([GATEWAY_SCOPE,...narrowWriteScopes]);
+   return {scopes:eligible.filter(s=>allow.has(s)),narrow:true};
+  }
+  return {scopes:eligible,narrow:false};
+ };
  const usedCodes=new Map();
  const sec=()=>Math.floor(now()/1000);
  const json=(status,body,extra={})=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Pragma':'no-cache',...extra}});
@@ -216,7 +246,7 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
  const metadata=Object.freeze({
   issuer:cfg.issuer,authorization_endpoint:cfg.origin+'/authorize',token_endpoint:cfg.origin+'/token',registration_endpoint:cfg.origin+'/register',
   response_types_supported:['code'],grant_types_supported:['authorization_code','refresh_token'],code_challenge_methods_supported:['S256'],
-  token_endpoint_auth_methods_supported:['none','client_secret_post','client_secret_basic'],scopes_supported:[GATEWAY_SCOPE],
+  token_endpoint_auth_methods_supported:['none','client_secret_post','client_secret_basic'],scopes_supported:scopesSupported,
   authorization_response_iss_parameter_supported:true
  });
  const htmlHeaders=extraCsp=>({'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff',
@@ -262,8 +292,11 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
   if(params.get('code_challenge_method')!=='S256'||!/^[A-Za-z0-9_-]{43}$/.test(cc))return redirect(ru,{error:'invalid_request',state,iss:cfg.issuer});
   const res=params.get('resource');
   if(res&&norm(res)!==norm(cfg.resource))return redirect(ru,{error:'invalid_target',state,iss:cfg.issuer});
-  // Unknown requested scopes are ignored; only crm.read is ever granted (RFC 6749 §3.3).
-  const txn=seal.seal('evt',{cid,ru,st:state,cc,exp:sec()+600});
+  // Unknown requested scopes are ignored (RFC 6749 §3.3); explicit partial write scopes narrow the grant.
+  const rawReqScopes=String(params.get('scope')||'').split(/\s+/).filter(Boolean);
+  const reqWriteScopes=rawReqScopes.filter(s=>supportedWriteScopes.includes(s));
+  const sw=reqWriteScopes.length>0&&reqWriteScopes.length<supportedWriteScopes.length?reqWriteScopes:null;
+  const txn=seal.seal('evt',{cid,ru,st:state,cc, ...(sw?{sw}:{}),exp:sec()+600});
   return page({txn,ru});
  }
 
@@ -280,7 +313,8 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
    log({evt:'authorize_denied',reason});
    return page({txn,ru:t.ru,error:MSG[reason],status:reason==='crm_unavailable'?503:403});
   }
-  const code=seal.seal('evk',{cid:t.cid,ru:t.ru,cc:t.cc,op:v.operatorId,up,uexp:v.upstreamExpiresAt,exp:sec()+60,jti:randomBytes(12).toString('base64url')});
+  const grant=computeGrantedScopes(v,t.sw||null);
+  const code=seal.seal('evk',{cid:t.cid,ru:t.ru,cc:t.cc,op:v.operatorId,up,uexp:v.upstreamExpiresAt,sc:grant.scopes.join(' '),...(grant.narrow?{sc_narrow:true}:{}),exp:sec()+60,jti:randomBytes(12).toString('base64url')});
   log({evt:'authorize_granted',op:tag(v.operatorId)});
   return redirect(t.ru,{code,state:t.st,iss:cfg.issuer});
  }
@@ -297,14 +331,14 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
   return {cid,client};
  }
 
- function issue({cid,op,up,uexp}){
+ function issue({cid,op,up,uexp,scopeStr=GATEWAY_SCOPE,narrow=false}){
   const t=sec(),cap=Number.isInteger(uexp)?uexp:Infinity;
   const aexp=Math.min(t+cfg.accessTtl,cap),rexp=Math.min(t+cfg.refreshTtl,cap);
   if(aexp<=t)return oauthErr(400,'invalid_grant');
-  const access_token=seal.seal('eva',{cid,op,up,sc:GATEWAY_SCOPE,aud:cfg.resource,iat:t,exp:aexp});
-  const refresh_token=seal.seal('evr',{cid,op,up,uexp,exp:rexp});
+  const access_token=seal.seal('eva',{cid,op,up,sc:scopeStr,...(narrow?{sc_narrow:true}:{}),aud:cfg.resource,iat:t,exp:aexp});
+  const refresh_token=seal.seal('evr',{cid,op,up,uexp,...(narrow?{sc:scopeStr,sc_narrow:true}:{}),exp:rexp});
   log({evt:'token_issued',op:tag(op)});
-  return json(200,{access_token,token_type:'Bearer',expires_in:aexp-t,refresh_token,scope:GATEWAY_SCOPE});
+  return json(200,{access_token,token_type:'Bearer',expires_in:aexp-t,refresh_token,scope:scopeStr});
  }
 
  async function token(req){
@@ -323,7 +357,7 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
    for(const [j,e] of usedCodes)if(e<sec())usedCodes.delete(j);
    if(usedCodes.has(k.jti))return oauthErr(400,'invalid_grant');
    usedCodes.set(k.jti,k.exp);
-   return issue({cid:c.cid,op:k.op,up:k.up,uexp:k.uexp});
+   return issue({cid:c.cid,op:k.op,up:k.up,uexp:k.uexp,scopeStr:k.sc||GATEWAY_SCOPE,narrow:Boolean(k.sc_narrow)});
   }
   if(gt==='refresh_token'){
    const r=seal.open('evr',f.get('refresh_token'));
@@ -334,7 +368,9 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
     log({evt:'refresh_denied',reason:MSG[e?.message]?e.message:'invalid'});return oauthErr(400,'invalid_grant');
    }
    if(v.operatorId!==r.op)return oauthErr(400,'invalid_grant');
-   return issue({cid:c.cid,op:r.op,up:r.up,uexp:v.upstreamExpiresAt});
+   const narrowReq=r.sc_narrow?String(r.sc||'').split(/\s+/).filter(s=>ALL_WRITE_SCOPES.includes(s)):null;
+   const grant=computeGrantedScopes(v,narrowReq);
+   return issue({cid:c.cid,op:r.op,up:r.up,uexp:v.upstreamExpiresAt,scopeStr:grant.scopes.join(' '),narrow:grant.narrow});
   }
   return oauthErr(400,'unsupported_grant_type');
  }
@@ -345,15 +381,36 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
    const a=seal.open('eva',tok);
    if(!a||typeof a.exp!=='number'||typeof a.op!=='string')throw new OAuthError(OAuthErrorCode.InvalidToken,'invalid_token');
    if(a.exp<=sec())throw new OAuthError(OAuthErrorCode.InvalidToken,'token_expired');
+   const sealedScopes=String(a.sc||'').split(/\s+/).filter(Boolean);
+   if(!sealedScopes.includes(GATEWAY_SCOPE))throw new OAuthError(OAuthErrorCode.InsufficientScope,'insufficient_scope');
    if(!cfg.allowedOperators.has(a.op))throw new OAuthError(OAuthErrorCode.InsufficientScope,'operator_not_authorized');
-   let degraded=false;
-   try{const v=await operators.verify(a.up);if(v.operatorId!==a.op)throw Error('upstream_token_invalid')}
+   let degraded=false,v=null;
+   try{v=await operators.verify(a.up);if(v.operatorId!==a.op)throw Error('upstream_token_invalid')}
    catch(e){
     if(e?.message==='upstream_token_invalid')throw new OAuthError(OAuthErrorCode.InvalidToken,'upstream_revoked');
     if(e?.message==='crm_unavailable')degraded=true; // CRM down: CRM calls fail closed anyway.
     else throw new OAuthError(OAuthErrorCode.InsufficientScope,e?.message==='operator_not_authorized'?'operator_not_authorized':'upstream_scope_rejected');
    }
-   return {token:tok,clientId:a.cid,scopes:[a.sc],expiresAt:a.exp,resource:new URL(a.aud),extra:{operatorId:a.op,operatorTag:tag(a.op),upstream:a.up,degraded}};
+   const eligible=degraded?[GATEWAY_SCOPE]:eligibleScopesForOperator(v);
+   const effectiveScopes=a.sc_narrow?sealedScopes.filter(s=>eligible.includes(s)):eligible;
+   return {
+    token:tok,
+    clientId:a.cid,
+    scopes:effectiveScopes,
+    expiresAt:a.exp,
+    resource:new URL(a.aud),
+    extra:{
+     operatorId:a.op,
+     operatorTag:tag(a.op),
+     upstream:a.up,
+     upstreamGrantHash:upstreamGrantHash(a.up),
+     abilities:v?.abilities||[],
+     canReadProposal:Boolean(v?.canReadProposal),
+     canWriteProposal:!degraded&&Boolean(v?.canWriteProposal),
+     cacheSecret:bridgeCache,
+     degraded
+    }
+   };
   }
  };
 

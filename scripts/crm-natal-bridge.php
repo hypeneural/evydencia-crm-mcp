@@ -22,8 +22,13 @@ if (!is_file($autoload) || !is_file($bootstrap)) {
 }
 
 $rawArg = isset($argv[1]) ? trim((string) $argv[1]) : '';
-if ($rawArg === '-') {
-    $rawArg = trim((string) stream_get_contents(STDIN));
+if ($rawArg === '' || $rawArg === '-') {
+    $stdinRaw = stream_get_contents(STDIN, 65537);
+    if ($stdinRaw !== false && strlen($stdinRaw) > 65536) {
+        fwrite(STDERR, json_encode(['error' => 'crm_natal_input_too_large']) . "\n");
+        exit(3);
+    }
+    $rawArg = trim((string) ($stdinRaw ?: ''));
 }
 
 $opts = [
@@ -1012,11 +1017,8 @@ if ($responseProfile === 'kpi_minimal') {
     exit(0);
 }
 
-$explicitNonHistOnly = $reqSections !== []
-    && !in_array('resumo', $reqSections, true)
-    && !in_array('historico', $reqSections, true)
-    && $detailLevel !== 'completo';
-$needHistoricalOverview = !$explicitNonHistOnly;
+$needHistoricalOverview = ($reqSections === [] || in_array('historico', $reqSections, true) || $detailLevel === 'completo');
+$needSummary2026 = ($reqSections === [] || in_array('resumo', $reqSections, true) || $needHistoricalOverview || $detailLevel === 'completo');
 $needImmutableHistory = $needHistoricalOverview || $wantSec('simulador_previsao') || $wantSec('clientes_recompra_campanhas') || $wantSec('agenda_demanda') || $wantSec('pacotes_produtos_bonus');
 $needFullOrderHydration = $wantSec('operacional_listas') || ($reqSections === [] && $detailLevel === 'padrao') || $detailLevel === 'completo';
 
@@ -1669,26 +1671,28 @@ if ($needHistoricalOverview) {
 // Fast 2025 -> 2026 repurchase KPI via 1 direct canonical SQL query (~12ms vs 1.84s full winback hydration).
 // Full getWinbackCohortData() runs ONLY when `clientes_recompra_campanhas` is explicitly requested.
 $winbackQuick = null;
-try {
-    $cust2025 = $validQuery->validNatalOrders(
-        $now,
-        CarbonImmutable::parse('2025-01-01 00:00:00', 'America/Sao_Paulo'),
-        CarbonImmutable::parse('2025-12-31 23:59:59', 'America/Sao_Paulo'),
-        'natal'
-    )->distinct()->pluck('o.customer_id')->map(static fn ($v) => (int) $v)->all();
-    $cust2026 = array_values(array_unique($validRows2026->pluck('customer_id')->map(static fn ($v) => (int) $v)->all()));
-    $c2025Total = count($cust2025);
-    $rep2026 = count(array_intersect($cust2025, $cust2026));
-    $winbackQuick = [
-        'cohort_year' => 2025,
-        'target_year' => 2026,
-        'customers_2025_count' => $c2025Total,
-        'repurchased_in_2026_count' => $rep2026,
-        'repurchase_rate_pct' => $c2025Total > 0 ? round(($rep2026 / $c2025Total) * 100, 1) : 0.0,
-        'not_yet_repurchased_count' => max(0, $c2025Total - $rep2026),
-    ];
-} catch (Throwable) {
-    $winbackQuick = null;
+if ($needSummary2026 || $wantSec('clientes_recompra_campanhas')) {
+    try {
+        $cust2025 = $validQuery->validNatalOrders(
+            $now,
+            CarbonImmutable::parse('2025-01-01 00:00:00', 'America/Sao_Paulo'),
+            CarbonImmutable::parse('2025-12-31 23:59:59', 'America/Sao_Paulo'),
+            'natal'
+        )->distinct()->pluck('o.customer_id')->map(static fn ($v) => (int) $v)->all();
+        $cust2026 = array_values(array_unique($validRows2026->pluck('customer_id')->map(static fn ($v) => (int) $v)->all()));
+        $c2025Total = count($cust2025);
+        $rep2026 = count(array_intersect($cust2025, $cust2026));
+        $winbackQuick = [
+            'cohort_year' => 2025,
+            'target_year' => 2026,
+            'customers_2025_count' => $c2025Total,
+            'repurchased_in_2026_count' => $rep2026,
+            'repurchase_rate_pct' => $c2025Total > 0 ? round(($rep2026 / $c2025Total) * 100, 1) : 0.0,
+            'not_yet_repurchased_count' => max(0, $c2025Total - $rep2026),
+        ];
+    } catch (Throwable) {
+        $winbackQuick = null;
+    }
 }
 
 // Fast acquisition / best historical weeks summary (~2ms from cache), with explicit peak-date cumulative semantics.
@@ -1711,7 +1715,7 @@ if ($needHistoricalOverview || $wantSec('simulador_previsao')) {
     }
 }
 
-$loadedSections = $needHistoricalOverview ? ['resumo', 'historico'] : [];
+$loadedSections = $needHistoricalOverview ? ['resumo', 'historico'] : ($needSummary2026 ? ['resumo'] : []);
 $compactOperationalPreview = ($detailLevel !== 'completo' && !$wantSec('operacional_listas'));
 
 $out = [
@@ -1844,10 +1848,56 @@ if ($wantSec('simulador_previsao')) {
 // Tab C: Financeiro, Caixa, Aging, Parcelas Abertas & Gateways
 if ($wantSec('financeiro_caixa')) {
     $loadedSections[] = 'financeiro_caixa';
-    $finSit = $svc->getFinancialSituation2026($kpis, $ctx);
-    if (is_array($finSit)) {
-        unset($finSit['transactions_summary']['data'], $finSit['glossary']);
-    }
+    // Reuse already-computed $kpis + single $cashAuditSelected instead of getFinancialSituation2026()
+    // (avoids redundant 2025 full scans, discarded getTransactionsData, and duplicate getCashAuditConciliation).
+    $cashAuditSelected = $svc->getCashAuditConciliation($selectedYear, $ctx);
+    $finCustomerCreditCents = (int) ($kpis['customer_credit_cents'] ?? max(0, $paidRevenueCents - $contractedCents));
+    $finNetBalanceCents = $contractedCents - $paidRevenueCents;
+    $finOrdersCount = (int) ($kpis['total_orders'] ?? 0);
+    $finExtrasProjectedCents = (int) ($kpis['incremental_future_photo_extras_cents'] ?? $projectedExtrasCents);
+    $finTotalProjectedCents = (int) ($kpis['total_projected_revenue_cents'] ?? ($contractedCents + $finExtrasProjectedCents));
+    $finGoalRevCents = 40000000;
+    $finSit = [
+        'year' => 2026,
+        'as_of' => $now->toIso8601String(),
+        'contracted_revenue' => nbReais($contractedCents),
+        'contracted_revenue_cents' => $contractedCents,
+        'received_revenue' => nbReais($paidRevenueCents),
+        'received_revenue_cents' => $paidRevenueCents,
+        'balance_due' => nbReais($balanceDueCents),
+        'balance_due_cents' => $balanceDueCents,
+        'customer_credit' => nbReais($finCustomerCreditCents),
+        'customer_credit_cents' => $finCustomerCreditCents,
+        'net_balance' => nbReais($finNetBalanceCents),
+        'net_balance_cents' => $finNetBalanceCents,
+        'paid_pct' => $contractedCents > 0 ? round(($paidRevenueCents / $contractedCents) * 100, 1) : 0.0,
+        'open_pct' => $contractedCents > 0 ? round(($balanceDueCents / $contractedCents) * 100, 1) : 0.0,
+        'total_orders' => $finOrdersCount,
+        'ticket_medio' => $finOrdersCount > 0 ? round(($contractedCents / 100) / $finOrdersCount, 2) : 0.0,
+        'extras_projected' => nbReais($finExtrasProjectedCents),
+        'extras_projected_cents' => $finExtrasProjectedCents,
+        'total_projected' => nbReais($finTotalProjectedCents),
+        'total_projected_cents' => $finTotalProjectedCents,
+        'goal_revenue' => 400000.0,
+        'goal_revenue_cents' => $finGoalRevCents,
+        'goal_revenue_progress_pct' => round(($finTotalProjectedCents / $finGoalRevCents) * 100, 1),
+        'bank_statement_integrated' => false,
+        'financial_labels' => [
+            'received_label' => 'Recebido registrado no CRM',
+            'integrity_label' => 'Integridade interna de parcelas',
+            'balance_label' => 'Saldo registrado a receber',
+            'credit_label' => 'Crédito do cliente',
+            'conciliation_label' => 'Conciliação bancária externa: NÃO INTEGRADA',
+        ],
+        'package_breakdown' => $svc->getPackageRevenueBreakdown(2026, $ctx),
+        'cash_audit' => $selectedYear === 2026 ? $cashAuditSelected : $svc->getCashAuditConciliation(2026, $ctx),
+        ...($needHistoricalOverview ? [
+            'historical_2025' => [
+                'package_breakdown' => $svc->getPackageRevenueBreakdown(2025, $ctx),
+                'cash_audit' => $selectedYear === 2025 ? $cashAuditSelected : $svc->getCashAuditConciliation(2025, $ctx),
+            ],
+        ] : []),
+    ];
 
     // Direct forensic SQL rollup on valid 2026 Natal orders for exact open installments, effective paid methods & aging face-vs-paid reconciliation
     $instRows2026 = $validIds2026 !== []
@@ -2041,7 +2091,7 @@ if ($wantSec('financeiro_caixa')) {
         ],
         'effective_paid_methods_2026' => $effectiveMethodsList,
         'financial_situation_2026' => $finSit,
-        'cash_audit_conciliation' => $svc->getCashAuditConciliation($selectedYear, $ctx),
+        'cash_audit_conciliation' => $cashAuditSelected,
         'financial_aging' => $agingDataForMcp,
         'financial_aging_vs_canonical' => $agingReconciliationForMcp,
         'gateway_health_and_recovery' => $svc->getGatewayHealthAndRecoveryData($selectedYear, false, $ctx),

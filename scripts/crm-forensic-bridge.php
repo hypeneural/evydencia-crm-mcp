@@ -19,7 +19,15 @@ if (!is_file($autoload) || !is_file($bootstrap)) {
 
 $rawInput = $argv[1] ?? '';
 if ($rawInput === '' || $rawInput === '-') {
-    $rawInput = stream_get_contents(STDIN) ?: '{}';
+    $rawInput = stream_get_contents(STDIN, 65537);
+    if ($rawInput === false) {
+        $rawInput = '{}';
+    } elseif (strlen($rawInput) > 65536) {
+        fwrite(STDERR, json_encode(['error' => 'crm_forensic_input_too_large']) . "\n");
+        exit(3);
+    } elseif ($rawInput === '') {
+        $rawInput = '{}';
+    }
 }
 $payload = json_decode($rawInput, true);
 if (!is_array($payload)) {
@@ -270,6 +278,10 @@ function projectCustomer(?Customer $c, bool $fullProfile, PagarmeCardProfileServ
             'missing_fields' => $missingFields,
             'missing_field_labels' => $missingLabels,
         ],
+        'address' => [
+            'city' => $c->city?->name ?: null,
+            'state' => $c->city?->state?->abbr ?: null,
+        ],
     ];
 
     if ($fullProfile) {
@@ -326,14 +338,15 @@ function projectOrdersBatch(
     bool $fullProfile,
     PagarmeCardProfileService $cardSvc,
     CarbonImmutable $todayBrt,
-    string $detailLevel = 'forense'
+    string $detailLevel = 'forense',
+    ?bool $includeCalendarSyncOverride = null
 ): array {
     if ($orders->isEmpty()) {
         return [];
     }
 
     $isSummaryOnly = ($detailLevel === 'resumo');
-    $includeCalendarSync = ($detailLevel === 'forense');
+    $includeCalendarSync = $includeCalendarSyncOverride ?? ($detailLevel === 'forense');
 
     $orders->loadMissing([
         'customer.city.state',
@@ -421,7 +434,8 @@ function projectOrdersBatch(
             ];
         })->all();
 
-        $currentStatusEnum = $order->currentStatus();
+        $lastStatusRow = $statusCollection->last();
+        $currentStatusEnum = $lastStatusRow !== null ? OrderStatus::coerce($lastStatusRow->status) : $order->currentStatus();
         $currentStatusKey = $currentStatusEnum?->key ?? ($statusHistory ? end($statusHistory)['status_key'] : null);
 
         // Financial review checks (same invariants as OrderListRowProjectionService)
@@ -748,7 +762,7 @@ function projectOrdersBatch(
                     $histEntries = is_array($calRaw['history']['entries'] ?? null) ? array_slice($calRaw['history']['entries'], 0, 20) : [];
                     $googleCalendarState = [
                         'available' => true,
-                        'sync_enabled' => (bool) ($calRaw['enabled'] ?? false),
+                        'sync_enabled' => (bool) ($calRaw['syncEnabled'] ?? $calRaw['enabled'] ?? false),
                         'order_session' => [
                             'is_synced' => (bool) ($sessPurpose['isSynced'] ?? false),
                             'status' => $sessPurpose['status'] ?? null,
@@ -1044,7 +1058,10 @@ if ($action === 'orders.detail') {
     }
 
     $effDetailLevel = $requestedDetailLevel ?? 'forense';
-    $batch = projectOrdersBatch(new Collection([$order]), $fullProfile, $cardSvc, $todayBrt, $effDetailLevel);
+    $includeCalDetail = array_key_exists('include_calendar_sync', $payload)
+        ? (bool) $payload['include_calendar_sync']
+        : ($effDetailLevel === 'forense');
+    $batch = projectOrdersBatch(new Collection([$order]), $fullProfile, $cardSvc, $todayBrt, $effDetailLevel, $includeCalDetail);
     emitForensicJson([
         'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
         'detail_level' => $effDetailLevel,
@@ -1300,12 +1317,46 @@ if ($action === 'customers.forensic360') {
     $customer = $matches->first();
     $custOut = projectCustomer($customer, $fullProfile, $cardSvc);
 
-    $allOrders = Order::query()
+    // Layer A: Lightweight canonical aggregates across ALL customer orders (zero N+1 status/calendar/relations)
+    $allLightOrders = Order::query()
         ->where('customer_id', $customer->id)
         ->orderByDesc('id')
-        ->get();
+        ->with([
+            'items:id,order_id,quantity,amount,discount,total,entry',
+            'installments.paymentMethod',
+        ])
+        ->get(['id', 'uuid', 'customer_id', 'coupon_amount', 'schedule_1', 'created_at']);
+    $allOrderIds = $allLightOrders->modelKeys();
+    $totalOrdersRegistered = count($allOrderIds);
 
-    $ordersProjected = projectOrdersBatch($allOrders, $fullProfile, $cardSvc, $todayBrt);
+    $latestStatusByOrder = [];
+    $openByOrder360 = collect();
+    if ($allOrderIds !== []) {
+        $stRows = DB::table('orders_status')
+            ->whereIn('order_id', $allOrderIds)
+            ->orderBy('id')
+            ->get(['order_id', 'status']);
+        foreach ($stRows as $sr) {
+            $latestStatusByOrder[(int) $sr->order_id] = $sr->status;
+        }
+        try {
+            $openByOrder360 = (new OrderListOpenInstallmentCondition())->apply(
+                DB::table('orders_installments')->whereIn('order_id', $allOrderIds)
+            )->selectRaw('order_id, COUNT(*) as open_count, SUM(total) as open_total')
+                ->groupBy('order_id')
+                ->get()
+                ->keyBy('order_id');
+        } catch (Throwable) {
+            $openByOrder360 = DB::table('orders_installments')
+                ->whereIn('order_id', $allOrderIds)
+                ->whereNull('payment_at')
+                ->where('total', '>', 0)
+                ->selectRaw('order_id, COUNT(*) as open_count, SUM(total) as open_total')
+                ->groupBy('order_id')
+                ->get()
+                ->keyBy('order_id');
+        }
+    }
 
     $validOrdersCount = 0;
     $reversedOrAbortedCount = 0;
@@ -1316,41 +1367,113 @@ if ($action === 'customers.forensic360') {
     $receivedByMethodCents = [];
     $yearsAttended = [];
     $ordersNeedingReview = [];
+    $lightOrderMetaById = [];
 
-    foreach ($ordersProjected as $ord) {
-        $stKey = $ord['status_key'];
+    foreach ($allLightOrders as $lo) {
+        $oid = (int) $lo->id;
+        $rawSt = $latestStatusByOrder[$oid] ?? null;
+        $coercedSt = $rawSt !== null ? OrderStatus::coerce($rawSt) : null;
+        $stKey = $coercedSt?->key ?? ($rawSt !== null ? (string) $rawSt : null);
+
+        $calc = new OrderCalculator($lo);
+        $commercialCents = centsOf($calc->total());
+        $receivedCents = $lo->installments->sum(static fn ($i) => centsOf($i->payment_total));
+        $remainingCents = centsOf($calc->total_remaining());
+        $openRow = $openByOrder360->get($oid);
+        $openCents = centsOf($openRow->open_total ?? 0);
+
         $isReversed = in_array($stKey, ['order_aborted', 'payment_chargeback', 'payment_refunded'], true);
         $isWaiting = ($stKey === 'waiting_payment');
 
-        $receivedAllCents += (int) $ord['received_cents'];
-        foreach ($ord['installments'] as $inst) {
-            if (!empty($inst['is_paid']) && (int) $inst['paid_cents'] > 0) {
-                $mk = $inst['method_name'] ?? 'Método não informado';
-                $receivedByMethodCents[$mk] = ($receivedByMethodCents[$mk] ?? 0) + (int) $inst['paid_cents'];
+        $receivedAllCents += (int) $receivedCents;
+        $reviewReasons = [];
+        if ($lo->installments->isEmpty()) {
+            $reviewReasons[] = 'no_installments';
+        }
+        foreach ($lo->installments as $inst) {
+            $tCents = centsOf($inst->total);
+            $pCents = centsOf($inst->payment_total);
+            if ($inst->total === null || $tCents < 0 || $pCents < 0) {
+                $reviewReasons[] = 'invalid_amount';
+            }
+            if (($pCents > 0 && $inst->payment_at === null)
+                || ($tCents > 0 && $inst->payment_at !== null && $pCents <= 0)) {
+                $reviewReasons[] = 'payment_date_amount_mismatch';
+            }
+            $paidAtBrt = formatBrt($inst->payment_at);
+            if ($paidAtBrt !== null && $pCents > 0) {
+                $pm = $inst->paymentMethod;
+                $enum = resolvePaymentEnum($pm);
+                $mk = ($pm && is_string($pm->name) && trim($pm->name) !== '')
+                    ? trim($pm->name)
+                    : ($enum?->description ?? 'Método não informado');
+                $receivedByMethodCents[$mk] = ($receivedByMethodCents[$mk] ?? 0) + $pCents;
             }
         }
+        if ($commercialCents < 0 || $commercialCents !== ($receivedCents + $openCents)) {
+            $reviewReasons[] = 'commercial_balance_mismatch';
+        }
+        if ($openCents > 0 && $isReversed) {
+            $reviewReasons[] = 'reversed_order_with_balance';
+        }
+        $reviewReasons = array_values(array_unique($reviewReasons));
+        if ($reviewReasons !== [] || $isReversed) {
+            $ordersNeedingReview[] = [
+                'order_id' => $oid,
+                'order_uuid' => $lo->uuid,
+                'reasons' => $reviewReasons,
+            ];
+        }
 
+        $sessBrt = formatBrt($lo->schedule_1);
+        $creatBrt = formatBrt($lo->created_at);
         if ($isReversed) {
             $reversedOrAbortedCount++;
         } elseif (!$isWaiting) {
             $validOrdersCount++;
-            $contractedValidCents += (int) $ord['total_cents'];
-            $remainingValidCents += (int) $ord['remaining_cents'];
+            $contractedValidCents += (int) $commercialCents;
+            $remainingValidCents += (int) $remainingCents;
             if (in_array($stKey, ['session_schedule_confirmed', 'selection_schedule', 'selection_schedule_confirmed', 'waiting_product_retrieve', 'product_retrieve_confirmed', 'order_completed'], true)) {
                 $completedSessionsCount++;
             }
-            $refDateStr = $ord['session_at'] ?: $ord['created_at_brt'];
+            $refDateStr = $sessBrt ?: $creatBrt;
             if ($refDateStr && preg_match('/^(\d{4})-/', $refDateStr, $ym)) {
                 $yearsAttended[] = (int) $ym[1];
             }
         }
 
-        if (!empty($ord['payment_summary']['payment_needs_review'])) {
-            $ordersNeedingReview[] = [
-                'order_id' => $ord['order_id'],
-                'order_uuid' => $ord['order_uuid'],
-                'reasons' => $ord['payment_summary']['financial_review_reasons'],
+        $lightOrderMetaById[$oid] = [
+            'order_id' => $oid,
+            'order_uuid' => $lo->uuid,
+            'crm_order_url' => $lo->uuid ? safeOrderUrl($lo->uuid) : null,
+            'session_at' => $sessBrt,
+            'session_date_ref' => toCarbonBrt($lo->schedule_1)?->startOfDay(),
+            'status_key' => $stKey,
+        ];
+    }
+
+    // Canonical Natal 2026 purchase check via NatalValidOrdersQuery (never inferred from paginated orders)
+    $natal2026Block = null;
+    if (class_exists(\App\Services\Reports\NatalValidOrdersQuery::class)) {
+        try {
+            $nvq = new \App\Services\Reports\NatalValidOrdersQuery();
+            $nowRef = CarbonImmutable::now('America/Sao_Paulo');
+            $n2026Row = $nvq->validNatalOrders(
+                $nowRef,
+                CarbonImmutable::parse('2026-01-01 00:00:00', 'America/Sao_Paulo'),
+                CarbonImmutable::parse('2026-12-31 23:59:59', 'America/Sao_Paulo'),
+                'natal'
+            )->where('o.customer_id', $customer->id)
+                ->orderByDesc('o.id')
+                ->first(['o.id', 'o.uuid']);
+            $natal2026Block = [
+                'purchased' => $n2026Row !== null,
+                'mode' => $n2026Row !== null ? 'buyer_2026' : 'prospect',
+                'active_order_id' => $n2026Row !== null ? (int) $n2026Row->id : null,
+                'active_order_uuid' => $n2026Row !== null ? (string) $n2026Row->uuid : null,
             ];
+        } catch (Throwable) {
+            $natal2026Block = null;
         }
     }
 
@@ -1362,19 +1485,134 @@ if ($action === 'customers.forensic360') {
         $receivedByMethodReais[$mk] = reaisOfCents($mc);
     }
 
-    $lifecycleStage = count($ordersProjected) === 0
+    $lifecycleStage = $totalOrdersRegistered === 0
         ? 'lead'
         : ($validOrdersCount <= 1 ? 'first_time' : 'recurring');
-    $custOut['orders_count'] = count($ordersProjected);
+    $custOut['orders_count'] = $totalOrdersRegistered;
     $custOut['lifecycle_stage'] = $lifecycleStage;
 
-    $participantAudit = $fullProfile
-        ? buildParticipantCrossOrderAudit($ordersProjected)
-        : ['unique_named_participants_count' => 0, 'has_discrepancies' => false, 'birth_date_discrepancies' => []];
-
+    // Layer B: True SQL-paginated orders hydration (hydrates ONLY requested page + latest current_order)
     $page = max(1, (int) ($payload['page'] ?? 1));
     $perPage = min(20, max(1, (int) ($payload['per_page'] ?? 10)));
-    $pagedOrders = array_slice($ordersProjected, ($page - 1) * $perPage, $perPage);
+    $pagedIds = array_slice($allOrderIds, ($page - 1) * $perPage, $perPage);
+    $latestOrderId = $allOrderIds[0] ?? null;
+    $idsToHydrate = $pagedIds;
+    if ($latestOrderId !== null && !in_array($latestOrderId, $idsToHydrate, true)) {
+        $idsToHydrate[] = $latestOrderId;
+    }
+
+    $eff360DetailLevel = $requestedDetailLevel ?? 'padrao';
+    $incCal360 = array_key_exists('include_calendar_sync', $payload)
+        ? (bool) $payload['include_calendar_sync']
+        : ($eff360DetailLevel === 'forense');
+
+    $hydratedById = [];
+    if ($idsToHydrate !== []) {
+        $hydratedModels = Order::query()
+            ->whereIn('id', $idsToHydrate)
+            ->orderByDesc('id')
+            ->get();
+        foreach (projectOrdersBatch($hydratedModels, $fullProfile, $cardSvc, $todayBrt, $eff360DetailLevel, $incCal360) as $po) {
+            $hydratedById[(int) $po['order_id']] = $po;
+        }
+    }
+    $pagedOrders = [];
+    foreach ($pagedIds as $pid) {
+        if (isset($hydratedById[$pid])) {
+            $pagedOrders[] = $hydratedById[$pid];
+        }
+    }
+    $currentOrderOut = ($latestOrderId !== null && isset($hydratedById[$latestOrderId]))
+        ? $hydratedById[$latestOrderId]
+        : null;
+
+    // Layer C: On-demand single-SQL cross-order participant audit (avoids hydrating all historical Eloquent orders)
+    $includeCrossOrderAudit = array_key_exists('include_cross_order_audit', $payload)
+        ? (bool) $payload['include_cross_order_audit']
+        : $fullProfile;
+
+    $participantAudit = [
+        'skipped' => !$includeCrossOrderAudit,
+        'unique_named_participants_count' => 0,
+        'has_discrepancies' => false,
+        'birth_date_discrepancies' => [],
+    ];
+    if ($includeCrossOrderAudit && $fullProfile && $allOrderIds !== []) {
+        $partRowsAll = DB::table('photo_participants as pp')
+            ->leftJoin('relations as rel', 'rel.id', '=', 'pp.relation_id')
+            ->whereIn('pp.order_id', $allOrderIds)
+            ->orderByDesc('pp.order_id')
+            ->orderBy('pp.id')
+            ->get(['pp.id', 'pp.order_id', 'pp.name', 'pp.birth', 'rel.name as kinship']);
+
+        $adultKinshipNorms = ['mae', 'pai', 'vo', 'avo', 'esposo (a)', 'marido', 'esposa', 'titular'];
+        $syntheticByOrder = [];
+        foreach ($allOrderIds as $oid) {
+            $meta = $lightOrderMetaById[$oid];
+            $syntheticByOrder[$oid] = [
+                'order_id' => $oid,
+                'order_uuid' => $meta['order_uuid'],
+                'crm_order_url' => $meta['crm_order_url'],
+                'session_at' => $meta['session_at'],
+                'status_key' => $meta['status_key'],
+                'participants_registration' => ['kinship_age_anomalies' => []],
+                'participants' => [],
+            ];
+        }
+        foreach ($partRowsAll as $pr) {
+            $oid = (int) $pr->order_id;
+            if (!isset($syntheticByOrder[$oid])) {
+                continue;
+            }
+            $meta = $lightOrderMetaById[$oid];
+            $sessRef = $meta['session_date_ref'];
+            $birthYmd = ($pr->birth !== null && $pr->birth !== '' && !str_starts_with((string) $pr->birth, '0000-'))
+                ? substr((string) $pr->birth, 0, 10)
+                : null;
+            $pName = $pr->name ? trim((string) $pr->name) : null;
+            $kinship = $pr->kinship ? trim((string) $pr->kinship) : null;
+            $ageToday = humanAgeAt($birthYmd, $todayBrt);
+            $ageSession = $sessRef ? humanAgeAt($birthYmd, $sessRef) : null;
+            $yearsAtRef = yearsAt($birthYmd, $sessRef ?? $todayBrt);
+
+            if ($kinship !== null && $yearsAtRef !== null && $yearsAtRef < 14) {
+                $kinNorm = Str::ascii(mb_strtolower($kinship));
+                if (in_array($kinNorm, $adultKinshipNorms, true)) {
+                    $syntheticByOrder[$oid]['participants_registration']['kinship_age_anomalies'][] = [
+                        'order_id' => $oid,
+                        'participant_id' => (int) $pr->id,
+                        'participant_name' => $pName,
+                        'kinship' => $kinship,
+                        'birth_date' => $birthYmd,
+                        'age_years_at_reference' => $yearsAtRef,
+                        'age_at_session' => $ageSession,
+                        'anomaly_code' => 'parent_or_adult_kinship_with_child_age',
+                        'advisory' => 'Parentesco adulto registrado com data de nascimento infantil (< 14 anos). Provável inversão cadastral; confirmar com o titular antes de alterar.',
+                    ];
+                }
+            }
+            $syntheticByOrder[$oid]['participants'][] = [
+                'participant_id' => (int) $pr->id,
+                'name' => $pName,
+                'birth_date' => $birthYmd,
+                'kinship' => $kinship,
+                'age_at_session' => $ageSession,
+                'age_today' => $ageToday,
+            ];
+        }
+        $participantAudit = buildParticipantCrossOrderAudit(array_values($syntheticByOrder));
+    } elseif ($includeCrossOrderAudit && $allOrderIds === []) {
+        $participantAudit = [
+            'unique_named_participants_count' => 0,
+            'has_discrepancies' => false,
+            'birth_date_discrepancies_count' => 0,
+            'birth_date_discrepancies' => [],
+            'kinship_discrepancies' => [],
+            'kinship_age_anomalies_count' => 0,
+            'kinship_age_anomalies' => [],
+            'participants_timeline' => [],
+        ];
+    }
 
     emitForensicJson([
         'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
@@ -1382,7 +1620,7 @@ if ($action === 'customers.forensic360') {
         'customer' => $custOut,
         'kpis' => [
             'lifecycle_stage' => $lifecycleStage,
-            'total_orders_registered' => count($ordersProjected),
+            'total_orders_registered' => $totalOrdersRegistered,
             'valid_orders_count' => $validOrdersCount,
             'reversed_or_aborted_orders_count' => $reversedOrAbortedCount,
             'completed_sessions_count' => $completedSessionsCount,
@@ -1403,12 +1641,13 @@ if ($action === 'customers.forensic360') {
             'orders_needing_financial_review' => $ordersNeedingReview,
         ],
         'participants_cross_order_audit' => $participantAudit,
-        'current_order' => $ordersProjected[0] ?? null,
+        ...($natal2026Block !== null ? ['natal_2026' => $natal2026Block] : []),
+        'current_order' => $currentOrderOut,
         'history' => [
             'page' => $page,
             'per_page' => $perPage,
-            'total' => count($ordersProjected),
-            'has_more' => ($page * $perPage) < count($ordersProjected),
+            'total' => $totalOrdersRegistered,
+            'has_more' => ($page * $perPage) < $totalOrdersRegistered,
         ],
         'orders' => $pagedOrders,
     ], $forensicStartedMs);

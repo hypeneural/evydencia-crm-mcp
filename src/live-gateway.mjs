@@ -12,11 +12,11 @@ import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
-import {MCP_UI_CARD_RESOURCE_URI,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
-import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE} from './oauth-gateway.mjs';
+import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
+import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
 import {createZapiBridge} from './zapi-mcp-client.mjs';
-import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME} from './zapi-mcp-tools.mjs';
+import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME,getZapiRequiredScopes} from './zapi-mcp-tools.mjs';
 
 export const GATEWAY_VERSION='0.12.0';
 const REPO_ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'..');
@@ -40,7 +40,35 @@ export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GA
 export {ZAPI_INSTANCE_TOOL_NAMES};
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
-const SAFE_ERR=/^(crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+)$/;
+const SAFE_ERR=/^(crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
+
+function classifyToolError(code){
+ if(code==='crm_public_package_or_campaign_not_found'){
+  return {
+   error_category:'NOT_FOUND',
+   hint:'Campanha ou pacote público não encontrado em /api/public/v1/agenda. Consulte crm_campanha_publica primeiro e informe o slug público (ex.: "entao-e-natal", "ho-ho-ho", "boas-festas"), nunca a referência interna ("enatal").'
+  };
+ }
+ if(['crm_customer_not_matched','legacy_read_customer_not_found','legacy_read_order_not_found','legacy_read_http_404','crm_http_404'].includes(code)){
+  return {error_category:'NOT_FOUND'};
+ }
+ if(code==='crm_customer_ambiguous'){
+  return {
+   error_category:'AMBIGUOUS',
+   hint:'Foram encontrados múltiplos clientes homônimos. Solicite telefone, CPF, e-mail ou UUID antes de prosseguir.'
+  };
+ }
+ if(['insufficient_operator_scope','insufficient_operator_write_scope','operator_token_revoked','operator_confirmation_required','legacy_read_missing_operator_context','crm_http_401','crm_http_403'].includes(code)){
+  return {error_category:'UNAUTHORIZED'};
+ }
+ if(code.endsWith('_timeout')){
+  return {error_category:'TIMEOUT'};
+ }
+ if(['crm_contract_invalid','crm_invalid_json','crm_extension_envelope_invalid','legacy_read_contract_invalid','legacy_read_invalid_json','natal_bridge_invalid_json','forensic_bridge_invalid_json'].includes(code)){
+  return {error_category:'CONTRACT_MISMATCH'};
+ }
+ return {error_category:'UNAVAILABLE'};
+}
 
 const INSTRUCTIONS='EVYDÊNCIA CRM LIVE (v0.12 Forense, Analítico, MCP UI & Z-API) — ROTEAMENTO CRÍTICO: (1) Vendas/recebidos/saldo Natal 2026 simples -> crm_estatisticas_natal(perfil_resposta="kpi_minimal"); NUNCA chame zapi_send_* em consultas de vendas/caixa/CRM. (2) orders.created_at mede criação do pedido (NÃO horário pago nem ROAS de anúncios). (3) Avatar HTTP 200 ("validated") prova asset no servidor, NÃO foto exibida (só onload do card visual confirma image_loaded). Regras completas: (4) Natal 2026 e Histórico 2021–2026: crm_estatisticas_natal(nivel_detalhe="resumo") traz KPIs, metas (R$ 300k base vs R$ 400k ampliada / 500 contratos), corte YTD, invariantes históricos, sessões confirmadas vs passadas aguardando baixa e loaded_sections; use secoes sob demanda (simulador_previsao, financeiro_caixa com reconciliação oi.total vs oi.payment_total e Permuta non_cash_barter vs Stone Débito debit_card, clientes_recompra_campanhas, agenda_demanda, pacotes_produtos_bonus, operacional_listas). (5) Demografia/Bebês/Famílias: use crm_natal_participantes_estatisticas (em ano="todos", a população detalhada é 2026 e o histórico cobre 2024–2026; incluir_lista_participantes=false salvo pedido nominal). (6) Links canônicos: cite crm_order_url (/gestao/pedidos/$UUID/detalhes) e crm_customer_url (/gestao/clientes/$UUID/consultar). (7) Card Visual ChatGPT Web (MCP App): use crm_renderizar_card_visual APENAS quando o operador pedir card/ficha visual de pedido ou cliente 360; demais consultas permanecem em JSON puro rápido. (8) Proposta Natal 2026: gere prévia em crm_previa_proposta_natal e exija confirmado_pelo_operador=true em crm_enviar_proposta_natal. (9) Z-API Diagnóstico/Histórico (leitura): use zapi_instancia_diagnostico (escopo="status_rapido" | "perfil_dispositivo" | "assinatura_configuracoes" | "completo") e zapi_instancia_historico (occurred_at_brt vs poll_detected_at_brt; nunca trate connection_state="unknown" como desconectada). (10) Z-API MCP Oficial: use zapi_status_conexao e zapi_send_*/zapi_group_* somente mediante pedido explícito de WhatsApp, resolvendo nomes no CRM antes, confirmando homônimos e sem reenvio automático em falha ambígua.';
 
@@ -131,7 +159,7 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_relatorio_clientes_natal',capability:'natal_customers_segmentation',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_legacy_api',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct})=>direct},
  {tool:'crm_clientes_buscar',capability:'customers_and_leads_search',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct,full})=>Boolean(direct&&full)},
  {tool:'crm_previa_proposta_natal',capability:'natal_proposal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:true,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
- {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
+ {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PROPOSAL_WRITE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)}
 ]);
 
@@ -220,7 +248,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   ...(directEnabled?{direct_crm_tools:DIRECT_CRM_TOOL_NAMES}:{}),
   ...(directEnabled&&operatorFullCrm?{forensic_crm_tools:FORENSIC_CRM_TOOL_NAMES}:{}),
   ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{}),
-  ...(mcpUiActive?{ui_crm_tools:UI_CRM_TOOL_NAMES,ui_resource_uri:MCP_UI_CARD_RESOURCE_URI}:{}),
+  ...(mcpUiActive?{ui_crm_tools:UI_CRM_TOOL_NAMES,ui_resource_uri:MCP_UI_CARD_RESOURCE_URI,ui_fallback_resource_uri:MCP_UI_CARD_V1_FALLBACK_URI}:{}),
   ...(zapiContext?.diagEnabled?{
    zapi_diagnostics_enabled:true,
    zapi_diagnostics_configured_for_operator:Boolean(zapiContext.diagConfigured),
@@ -449,23 +477,7 @@ const OUT_NATAL_PARTICIPANTS=z.looseObject({
  data_quality_anomalies:FLEX,
  bridge_telemetry:OUT_BRIDGE_TELEMETRY
 });
-const OUT_VISUAL_CARD=z.looseObject({
- source:z.string(),
- card_type:z.enum(['pedido','cliente_360']),
- ui_resource_uri:z.string(),
- supported_avatar_states:z.array(z.string()),
- avatar:z.looseObject({
-  initial_state:z.string(),
-  allow_img_tag:z.boolean(),
-  url:z.string().nullable(),
-  initials:z.string(),
-  asset_check_status:z.string()
- }),
- header:z.looseObject({title:z.string()}),
- links:z.looseObject({}),
- financial:z.looseObject({}),
- bridge_telemetry:OUT_BRIDGE_TELEMETRY
-});
+const OUT_VISUAL_CARD=OUT_VISUAL_CARD_OBJECT_SCHEMA;
 const OUT_PROPOSAL_PREVIEW=z.looseObject({
  ready:z.boolean(),
  variant:z.string().nullish(),
@@ -541,16 +553,38 @@ export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTO
 async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
+ const grantedScopes=new Set(Array.isArray(auth?.scopes)&&auth.scopes.length?auth.scopes:[GATEWAY_SCOPE]);
  const crm=crmClient({baseUrl:cfg.crmBaseUrl,token:ex.upstream,privateEnabled:true,timeoutMs:cfg.crmTimeoutMs,fetchFn,strictEnvelope:true});
- const direct=cfg.internalReadToken?legacyReadClient({baseUrl:cfg.crmBaseUrl,token:cfg.internalReadToken,fetchFn,timeoutMs:cfg.crmTimeoutMs,includeParticipants:cfg.operatorFullCrm}):null;
+ const direct=cfg.internalReadToken?legacyReadClient({
+  baseUrl:cfg.crmBaseUrl,
+  token:cfg.internalReadToken,
+  fetchFn,
+  timeoutMs:cfg.crmTimeoutMs,
+  includeParticipants:cfg.operatorFullCrm,
+  operatorContext:{
+   requireOperator:true,
+   operatorId:ex.operatorId,
+   authScope:[...grantedScopes].sort().join(' '),
+   upstreamGrantHash:ex.upstreamGrantHash||'',
+   cacheSecret:ex.cacheSecret||null
+  }
+ }):null;
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
- const resolvePhone=async({telefone,nome_cliente})=>{
+ const resolvePhone=async({telefone,nome_cliente},{allowLookupMiss=false}={})=>{
+  const handleLookup=r=>{
+   if(typeof r==='string')return {status:'matched',phone:r};
+   if(r?.status==='matched'&&r.phone)return r;
+   if(allowLookupMiss&&(r?.status==='ambiguous'||r?.status==='not_found'))return r;
+   throw Error(r?.status==='ambiguous'?'crm_customer_ambiguous':'legacy_read_customer_not_found');
+  };
   if(typeof telefone==='string'&&telefone.trim()){
    const t=telefone.trim();
-   if(/\d{8,}/.test(t.replace(/\D/g,''))||!direct)return t;
-   return await direct.resolvePhoneByName(t);
+   if(/\d{8,}/.test(t.replace(/\D/g,''))||!direct)return {status:'matched',phone:t};
+   return handleLookup(await direct.resolvePhoneByName(t));
   }
-  if(typeof nome_cliente==='string'&&nome_cliente.trim()&&direct)return await direct.resolvePhoneByName(nome_cliente.trim());
+  if(typeof nome_cliente==='string'&&nome_cliente.trim()&&direct){
+   return handleLookup(await direct.resolvePhoneByName(nome_cliente.trim()));
+  }
   throw Error('invalid_mobile');
  };
  const enrichOrderWithDirect=async ord=>{
@@ -649,9 +683,10 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
    const gwMs=+(performance.now()-t0).toFixed(2);
    let code=SAFE_ERR.test(e?.message||'')?e.message:'crm_unavailable';
    if(code==='crm_http_401'){code='operator_token_revoked';operators.forget(ex.upstream)}
+   const errMeta=classifyToolError(code);
    perf?.record({tool,ok:false,gatewayMs:gwMs,responseBytes:0});
-   log({evt:'tool',tool,ok:false,err:code,op:ex.operatorTag,ms:Math.round(gwMs),gateway_ms:gwMs});
-   return {isError:true,content:[{type:'text',text:JSON.stringify({error:code})}]};
+   log({evt:'tool',tool,ok:false,err:code,err_cat:errMeta.error_category,op:ex.operatorTag,ms:Math.round(gwMs),gateway_ms:gwMs});
+   return {isError:true,content:[{type:'text',text:JSON.stringify({error:code,error_category:errMeta.error_category,...(errMeta.hint?{hint:errMeta.hint}:{})})}]};
   }
  };
  const m=new McpServer({name:'evydencia-crm-mcp-live',version:GATEWAY_VERSION},{instructions:INSTRUCTIONS});
@@ -659,7 +694,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
  const reg=(name,title,description,inputSchema,outputSchema,fn,annotations=READ,extraConfig=null)=>{
   if(registeredNames.has(name))return;
   registeredNames.add(name);
-  m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...(extraConfig||{})},safe(name,fn));
+  const {requiredScopes=[GATEWAY_SCOPE],_meta:extraMeta,...restExtra}=extraConfig||{};
+  const mergedMeta={...(extraMeta||{}),securitySchemes:[{type:'oauth2',scopes:[...requiredScopes]}]};
+  m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,_meta:mergedMeta},safe(name,fn));
  };
 
  reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({}),OUT_CAPACIDADES,()=>manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
@@ -671,9 +708,12 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
  }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null}));
  reg('crm_status','Estado do CRM','Use quando precisar verificar rapidamente o liveness público do servidor CRM (evydencia.com). NÃO use para diagnóstico de WhatsApp/Z-API.',z.object({}),OUT_GENERIC,()=>crm.status());
  reg('crm_campanha_publica','Pacotes públicos','Use quando precisar consultar o catálogo público de pacotes e preços de uma campanha (padrão "natal"). NÃO use para relatórios de vendas ou estatísticas internas.',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
- reg('crm_horarios_publicos','Horários públicos','Use quando precisar verificar disponibilidade pública de horários de um pacote em janela de até 14 dias (AAAA-MM-DD). NÃO cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,({campanha,pacote,inicio,fim})=>crm.availability(campanha,pacote,inicio,fim));
+ reg('crm_horarios_publicos','Horários públicos','Use quando precisar verificar disponibilidade pública de horários de um pacote em janela de até 14 dias (AAAA-MM-DD). ATENÇÃO DE SLUG: informe o slug público da campanha/pacote retornado por crm_campanha_publica (ex.: "entao-e-natal", "ho-ho-ho", "boas-festas"), NUNCA a referência interna de produto ("enatal"). NÃO cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,async({campanha,pacote,inicio,fim})=>{
+  try{return await crm.availability(campanha,pacote,inicio,fim)}
+  catch(e){if(e?.message==='crm_http_404')throw Error('crm_public_package_or_campaign_not_found');throw e}
+ });
  reg('crm_conexao_privada','Identidade do operador','Use quando precisar validar a identidade do operador autenticado no CRM, fuso do servidor e abilities do token Sanctum.',z.object({}),OUT_GENERIC,()=>crm.bootstrap());
- reg('crm_cliente_resumo','Cliente por telefone, nome, CPF, e-mail ou UUID (Resumo Rápido)','Use quando precisar localizar rapidamente um cliente ou lead (inclusive com 0 pedidos) por telefone, nome_cliente, customer_uuid, email ou documento: retorna titular, avatar validado/iniciais (render_contract), completude cadastral, resumo financeiro em centavos e reais, pedido atual, link canônico (/gestao/clientes/$UUID/consultar) e elegibilidade Natal 2026. NÃO use quando precisar de todos os pedidos históricos paginados (use crm_cliente_360).',z.object({
+ reg('crm_cliente_resumo','Cliente por telefone, nome, CPF, e-mail ou UUID (Resumo Rápido)','Use quando precisar localizar rapidamente um cliente ou lead (inclusive com 0 pedidos) por telefone, nome_cliente, customer_uuid, email ou documento: retorna titular, avatar validado/iniciais (render_contract), completude cadastral, resumo financeiro em centavos e reais, pedido atual, link canônico (/gestao/clientes/$UUID/consultar) e elegibilidade Natal 2026. Em homônimos, retorna lookup.status="ambiguous" com candidates para confirmação sem escolher arbitrariamente. NÃO use quando precisar de todos os pedidos históricos paginados (use crm_cliente_360).',z.object({
   telefone:z.string().min(8).max(30).optional(),
   nome_cliente:z.string().min(2).max(100).optional(),
   customer_uuid:z.string().min(36).max(36).optional(),
@@ -682,9 +722,10 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
  }),OUT_CUSTOMER,async input=>{
   if(cfg.operatorFullCrm&&direct){
    try{
-    const f360=await direct.customerForensic360({...input,pagina:1,por_pagina:3});
+    const f360=await direct.customerForensic360({...input,pagina:1,por_pagina:3,includeCrossOrderAudit:false});
     if(f360?.lookup?.status!=='matched')return f360;
     const ext=await tryExtensionEligibility(f360.customer?.whatsapp||f360.customer?.phone||input?.telefone);
+    const natal2026=ext?.natal_2026||f360.natal_2026||null;
     return {
      source:f360.source,
      lookup:f360.lookup,
@@ -693,7 +734,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      financial_audit_summary:f360.financial_audit_summary,
      participants_cross_order_audit:f360.participants_cross_order_audit,
      current_order:f360.current_order,
-     ...(ext?.natal_2026?{natal_2026:ext.natal_2026}:{}),
+     ...(natal2026?{natal_2026:natal2026}:{}),
      ...(ext?.capabilities?{capabilities:ext.capabilities}:{}),
      ...(f360.bridge_telemetry?{bridge_telemetry:f360.bridge_telemetry}:{})
     };
@@ -701,11 +742,15 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
     if(e?.message!=='legacy_read_http_404')throw e;
    }
   }
-  const res=await crm.customer(await resolvePhone(input));
+  const resolved=await resolvePhone(input,{allowLookupMiss:true});
+  if(resolved.status!=='matched'){
+   return {lookup:{status:resolved.status,match_count:resolved.match_count??0,...(resolved.candidates?{candidates:resolved.candidates}:{})},customer:null,orders:[]};
+  }
+  const res=await crm.customer(resolved.phone);
   if(!cfg.operatorFullCrm||!res?.current_order)return res;
   return {...res,current_order:await enrichOrderWithDirect(res.current_order)};
  });
- reg('crm_cliente_360','Cliente 360 Forense (histórico completo, pagamentos, avatar e auditoria)','Use quando precisar da reconstrução 360 completa do cliente (inclusive leads com 0 pedidos): perfil do titular, avatar verificado via HTTP/WebP com contrato explícito (render_contract: HTTP 200 != foto renderizada), completude cadastral (registration_completeness), KPIs, resumo financeiro por meio efetivo, auditoria cruzada de divergências de participantes entre pedidos (participants_cross_order_audit) e histórico completo de pedidos com parcelas, status_history, agenda e bônus. NÃO abre widget visual pesado por padrão (para card visual use crm_renderizar_card_visual).',z.object({
+ reg('crm_cliente_360','Cliente 360 Forense (histórico completo, pagamentos, avatar e auditoria)','Use quando precisar da reconstrução 360 completa do cliente (inclusive leads com 0 pedidos): perfil do titular, avatar verificado via HTTP/WebP com contrato explícito (render_contract: HTTP 200 != foto renderizada), completude cadastral (registration_completeness), KPIs canônicos lifetime em centavos, resumo financeiro por meio efetivo, auditoria cruzada de divergências de participantes entre pedidos (participants_cross_order_audit) e histórico paginado de pedidos com parcelas, status_history, agenda e bônus. Em homônimos, retorna lookup.status="ambiguous" sem escolher arbitrariamente. NÃO abre widget visual pesado por padrão (para card visual use crm_renderizar_card_visual).',z.object({
   telefone:z.string().min(8).max(30).optional(),
   nome_cliente:z.string().min(2).max(100).optional(),
   customer_uuid:z.string().min(36).max(36).optional(),
@@ -719,16 +764,21 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
     const f360=await direct.customerForensic360(input);
     if(f360?.lookup?.status!=='matched')return f360;
     const ext=await tryExtensionEligibility(f360.customer?.whatsapp||f360.customer?.phone||input?.telefone);
+    const natal2026=ext?.natal_2026||f360.natal_2026||null;
     return {
      ...f360,
-     ...(ext?.natal_2026?{natal_2026:ext.natal_2026}:{}),
+     ...(natal2026?{natal_2026:natal2026}:{}),
      ...(ext?.capabilities?{capabilities:ext.capabilities}:{})
     };
    }catch(e){
     if(e?.message!=='legacy_read_http_404')throw e;
    }
   }
-  const res=await crm.history(await resolvePhone(input),input.pagina);
+  const resolved=await resolvePhone(input,{allowLookupMiss:true});
+  if(resolved.status!=='matched'){
+   return {lookup:{status:resolved.status,match_count:resolved.match_count??0,...(resolved.candidates?{candidates:resolved.candidates}:{})},customer:null,orders:[]};
+  }
+  const res=await crm.history(resolved.phone,input.pagina);
   if(!cfg.operatorFullCrm)return res;
   const current_order=res?.current_order?await enrichOrderWithDirect(res.current_order):null;
   const orders=Array.isArray(res?.orders)?await Promise.all(res.orders.map(enrichOrderWithDirect)):[];
@@ -739,6 +789,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
    telefone:z.string().min(8).max(30),
    nome:z.string().max(80).optional()
   }),OUT_PROPOSAL_PREVIEW,async({telefone,nome})=>{
+   if(!ex.canReadProposal)throw Error('insufficient_operator_scope');
    const normPhone=phone(telefone);
    const normName=proposalName(nome)??null;
    const {ok,status,json}=await callExtensionPost('/api/v1/extension/proposals/preview',{phone:normPhone,name:normName});
@@ -748,13 +799,14 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
    }
    return {...proposalProjection(json),variant:json?.data?.variant??json?.data?.selection?.variant??null,campaign_id:json?.data?.campaign_id??json?.data?.campaign?.id??null,message_preview:json?.data?.message_preview??json?.data?.message??null,phone_formatted:json?.data?.phone_formatted??null};
   });
-  reg('crm_enviar_proposta_natal','Disparar / Agendar Proposta de Natal 2026','Use quando o operador autorizar explicitamente o disparo oficial da proposta comercial de Natal 2026 pelo CRM. EXIGE confirmado_pelo_operador=true explícito (sem confirmação falha fechada antes de chamar o CRM), aplica a Regra de Ouro e garante idempotência. NÃO use sem prévia e confirmação explícita.',z.object({
+  reg('crm_enviar_proposta_natal','Disparar / Agendar Proposta de Natal 2026','Use quando o operador autorizar explicitamente o disparo oficial da proposta comercial de Natal 2026 pelo CRM. EXIGE confirmado_pelo_operador=true explícito (sem confirmação falha fechada antes de chamar o CRM), escopo crm.proposal.write + ability extension:proposal-write, aplica a Regra de Ouro e garante idempotência. NÃO use sem prévia e confirmação explícita.',z.object({
    telefone:z.string().min(8).max(30),
    nome:z.string().max(80).optional(),
    confirmado_pelo_operador:z.boolean(),
    modo_reenvio:z.enum(['normal','send_again','abort_and_resend']).default('normal'),
    request_id:z.string().uuid().optional()
   }),OUT_PROPOSAL_DISPATCH,async({telefone,nome,confirmado_pelo_operador,modo_reenvio='normal',request_id})=>{
+   if(!grantedScopes.has(SCOPE_PROPOSAL_WRITE)||!ex.canWriteProposal)throw Error('insufficient_operator_write_scope');
    if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
    const normPhone=phone(telefone);
    const normName=proposalName(nome)??null;
@@ -780,7 +832,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
     resend_mode:d.resend_mode||modo_reenvio,
     request_id:reqId
    };
-  },WRITE_IDEMPOTENT);
+  },WRITE_IDEMPOTENT,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE]});
  }
  if(direct){
   reg('crm_estatisticas_natal','Central de Inteligência — Estatísticas e Operação de Natal','Use quando precisar dos dados canônicos oficiais de /gestao/natal/estatisticas (2021–2026). ROTA RÁPIDA RECOMENDADA: para perguntas diretas de vendas, pedidos válidos, contratado, recebido, saldo ou metas atuais de Natal 2026, passe SEMPRE perfil_resposta="kpi_minimal" (<5 KB, retorno imediato com integrity_checks e metas R$ 300k base vs R$ 400k ampliada). Para visão executiva multi-ano use perfil_resposta="default" e nivel_detalhe="resumo". Use secoes sob demanda: simulador_previsao, financeiro_caixa (reconciliação explícita oi.total vs oi.payment_total da diferença de R$ 1.230,00, Permuta non_cash_barter vs Stone Débito debit_card), clientes_recompra_campanhas (recompra 2025->2026, cidades, canais, cupons e dia/hora de orders.created_at — NÃO representa ROAS nem horário pago), agenda_demanda, pacotes_produtos_bonus ou operacional_listas. NÃO use para demografia/idades de crianças/bebês (use crm_natal_participantes_estatisticas).',z.object({
@@ -877,16 +929,22 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      async input=>{
       if(input.tipo==='pedido'){
        if(!input.order_uuid&&!input.order_id)throw Error('invalid_uuid');
-       const det=await direct.detail({uuid:input.order_uuid,order_id:input.order_id,detailLevel:'padrao'});
+       const det=await direct.detail({uuid:input.order_uuid,order_id:input.order_id,detailLevel:'padrao',includeCalendarSync:true});
        const card=buildVisualCardPayload({tipo:'pedido',detailResult:det});
        return {...card,...(det?.bridge_telemetry?{bridge_telemetry:det.bridge_telemetry}:{})};
       }
       if(!input.customer_uuid&&!input.telefone&&!input.nome_cliente&&!input.documento&&!input.email){
        throw Error('invalid_customer_locator');
       }
-      const f360=await direct.customerForensic360({...input,pagina:1,por_pagina:5});
+      const f360=await direct.customerForensic360({...input,pagina:1,por_pagina:5,includeCrossOrderAudit:false});
+      if(f360?.lookup?.status==='ambiguous')throw Error('crm_customer_ambiguous');
       if(f360?.lookup?.status!=='matched')throw Error('crm_customer_not_matched');
-      const card=buildVisualCardPayload({tipo:'cliente_360',customerResult:f360});
+      let enrichedF360=f360;
+      if(!f360.natal_2026||typeof f360.natal_2026.purchased!=='boolean'){
+       const ext=await tryExtensionEligibility(f360.customer?.whatsapp||f360.customer?.phone||input?.telefone);
+       if(ext?.natal_2026)enrichedF360={...f360,natal_2026:ext.natal_2026};
+      }
+      const card=buildVisualCardPayload({tipo:'cliente_360',customerResult:enrichedF360});
       return {...card,...(f360?.bridge_telemetry?{bridge_telemetry:f360.bridge_telemetry}:{})};
      },
      READ,
@@ -962,6 +1020,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   for(const zt of zapiTools){
    if(registeredNames.has(zt.gatewayName))continue;
    registeredNames.add(zt.gatewayName);
+   const zScopes=Array.isArray(zt.requiredScopes)&&zt.requiredScopes.length?zt.requiredScopes:getZapiRequiredScopes(zt.gatewayName);
    m.registerTool(
     zt.gatewayName,
     {
@@ -969,10 +1028,17 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      description:zt.description,
      inputSchema:fromJsonSchema(zt.inputSchema),
      ...(zt.outputSchema?{outputSchema:fromJsonSchema(zt.outputSchema)}:{}),
-     annotations:zt.annotations
+     annotations:zt.annotations,
+     _meta:{securitySchemes:[{type:'oauth2',scopes:[...zScopes]}]}
     },
     async(args,ctx)=>{
      const t0=performance.now();
+     if(zScopes.some(s=>!grantedScopes.has(s))){
+      const gwMs=+(performance.now()-t0).toFixed(2);
+      perf?.record({tool:zt.gatewayName,ok:false,gatewayMs:gwMs,responseBytes:0});
+      log({evt:'tool',tool:zt.gatewayName,ok:false,err:'insufficient_operator_write_scope',err_cat:'UNAUTHORIZED',op:ex.operatorTag,ms:Math.round(gwMs),gateway_ms:gwMs});
+      return {isError:true,content:[{type:'text',text:JSON.stringify({error:'insufficient_operator_write_scope',error_category:'UNAUTHORIZED'})}]};
+     }
      const res=await zapi.callTool(ex.operatorId,zt,args,{signal:ctx?.mcpReq?.signal});
      const gwMs=+(performance.now()-t0).toFixed(2);
      perf?.record({tool:zt.gatewayName,ok:!res?.isError,gatewayMs:gwMs,responseBytes:Buffer.byteLength(JSON.stringify(res??null),'utf8')});
@@ -1027,7 +1093,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
- const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:[GATEWAY_SCOPE],resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
+ const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:supportedGatewayScopes(cfg),resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
  const plain=(status,body,extra={})=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store',...extra}});
  const withPrivateNoStore=res=>{
   try{res.headers.set('Cache-Control','private, no-store');return res}

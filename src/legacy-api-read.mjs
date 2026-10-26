@@ -1,13 +1,15 @@
 // Operator-only direct CRM integration READ adapter (replaces intermediary api.evydencia.com.br).
 // NEVER register on anonymous MCP. Requires authenticated OAuth + Sanctum operator session.
-import {execFile} from 'node:child_process';
+import {spawn} from 'node:child_process';
+import {createHash,createHmac} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {promisify} from 'node:util';
 import {baseURL,day,phone} from './core.mjs';
 
-const execFileAsync=promisify(execFile);
+export const BRIDGE_PROJECTION_VERSION='v0.12.1-hardened';
+const MAX_BRIDGE_STDIN_BYTES=16384;
+const MAX_BRIDGE_STDOUT_BYTES=8*1024*1024;
 const SCRIPTS_DIR=resolve(dirname(fileURLToPath(import.meta.url)),'..','scripts');
 const BRIDGE_SCRIPT=resolve(SCRIPTS_DIR,'crm-natal-bridge.php');
 const FORENSIC_BRIDGE_SCRIPT=resolve(SCRIPTS_DIR,'crm-forensic-bridge.php');
@@ -114,6 +116,120 @@ export function createBridgeSingleFlightCache({ttlMs=15000,maxEntries=128,now=()
 }
 
 const SHARED_BRIDGE_READ_CACHE=createBridgeSingleFlightCache({ttlMs:15000,maxEntries:128});
+
+function canonicalStableJson(val){
+ if(val===null||typeof val!=='object')return JSON.stringify(val);
+ if(Array.isArray(val))return '['+val.map(canonicalStableJson).join(',')+']';
+ const keys=Object.keys(val).filter(k=>val[k]!==undefined).sort();
+ return '{'+keys.map(k=>JSON.stringify(k)+':'+canonicalStableJson(val[k])).join(',')+'}';
+}
+
+export function buildScopedBridgeCacheKey({
+ cacheSecret=null,
+ operatorId='standalone',
+ authScope='direct_read',
+ upstreamGrantHash='none',
+ projectionVersion=BRIDGE_PROJECTION_VERSION,
+ kind='bridge',
+ base='',
+ appPath='',
+ payload={}
+}={}){
+ const queryHash=createHash('sha256').update(canonicalStableJson(payload)).digest('base64url');
+ const material=[
+  'v2',
+  String(projectionVersion),
+  String(kind),
+  String(operatorId),
+  String(authScope),
+  String(upstreamGrantHash),
+  String(base),
+  String(appPath),
+  queryHash
+ ].join('|');
+ if(cacheSecret&&(Buffer.isBuffer(cacheSecret)||typeof cacheSecret==='string')&&cacheSecret.length>=16){
+  return 'ebk2.'+createHmac('sha256',cacheSecret).update(material).digest('base64url');
+ }
+ return 'ebk2.'+createHash('sha256').update(material).digest('base64url');
+}
+
+function spawnPhpBridgeStdin(scriptPath,jsonPayload,{timeoutMs,maxBuffer=MAX_BRIDGE_STDOUT_BYTES,env}={}){
+ const inputBuf=Buffer.from(jsonPayload,'utf8');
+ if(inputBuf.byteLength>MAX_BRIDGE_STDIN_BYTES){
+  const e=new Error('legacy_read_bridge_input_too_large');
+  throw e;
+ }
+ return new Promise((resolvePromise,rejectPromise)=>{
+  const child=spawn('php',[scriptPath,'-'],{
+   stdio:['pipe','pipe','pipe'],
+   env,
+   windowsHide:true
+  });
+  const outChunks=[];
+  let outBytes=0;
+  let settled=false;
+  let timedOut=false;
+  let overflowed=false;
+
+  const timer=setTimeout(()=>{
+   timedOut=true;
+   try{child.kill('SIGTERM')}catch{}
+  },timeoutMs);
+
+  const done=(err,stdoutStr)=>{
+   if(settled)return;
+   settled=true;
+   clearTimeout(timer);
+   if(err)rejectPromise(err);
+   else resolvePromise({stdout:stdoutStr});
+  };
+
+  child.on('error',err=>done(err));
+  child.stdin.on('error',()=>{});
+  child.stdout.on('data',chunk=>{
+   outBytes+=chunk.byteLength;
+   if(outBytes>maxBuffer){
+    overflowed=true;
+    try{child.kill('SIGTERM')}catch{}
+    const e=new Error('stdout maxBuffer length exceeded');
+    e.code='ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+    done(e);
+    return;
+   }
+   outChunks.push(chunk);
+  });
+  // Drain stderr without retaining or logging any upstream text/PII
+  child.stderr.on('data',()=>{});
+  child.on('close',(code,signal)=>{
+   if(overflowed)return;
+   if(timedOut){
+    const e=new Error('bridge timed out');
+    e.killed=true;
+    e.signal=signal||'SIGTERM';
+    e.code='ETIMEDOUT';
+    done(e);
+    return;
+   }
+   if(code!==0){
+    const e=new Error('bridge php non-zero exit');
+    e.code=typeof code==='number'?code:1;
+    e.signal=signal||null;
+    done(e);
+    return;
+   }
+   done(null,Buffer.concat(outChunks).toString('utf8'));
+  });
+
+  child.stdin.end(inputBuf);
+ });
+}
+
+export const AVATAR_RENDER_STATES=Object.freeze([
+ 'url_validated_pending_widget_load',
+ 'image_loaded',
+ 'image_blocked_or_error',
+ 'initials_fallback'
+]);
 
 export function buildAvatarRenderContract(avRaw){
  const av=value(avRaw);
@@ -906,9 +1022,18 @@ export function legacyOrderProjection(raw,{includeParticipants=false,fullProfile
  return forensicOrderProjection(raw,{includeParticipants,fullProfile});
 }
 
-export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,includeParticipants=false}){
+export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,includeParticipants=false,operatorContext=null}){
  const base=baseURL(baseUrl);if(typeof token!=='string'||token.length<12)fail('missing_token');
  const fullProfile=Boolean(includeParticipants);
+ const opCtx=operatorContext&&typeof operatorContext==='object'?operatorContext:null;
+
+ const assertOperatorAuthorized=()=>{
+  if(opCtx?.requireOperator===true){
+   if(typeof opCtx.operatorId!=='string'||!opCtx.operatorId.trim()||typeof opCtx.authScope!=='string'||!opCtx.authScope.trim()){
+    fail('operator_not_authorized');
+   }
+  }
+ };
 
  const canUseForensicBridge=()=>{
   const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
@@ -938,12 +1063,25 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
  };
 
  async function execPhpJsonBridge(scriptPath,payload,{bridgeTimeoutMs,kind}){
+  assertOperatorAuthorized();
   const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
-  const cacheKey=`${kind}|${base}|${crmAppPath}|fp:${fullProfile?1:0}|${JSON.stringify(payload)}`;
+  const cacheKey=buildScopedBridgeCacheKey({
+   cacheSecret:opCtx?.cacheSecret??null,
+   operatorId:opCtx?.operatorId||'standalone',
+   authScope:`${opCtx?.authScope||'direct_read'}|fp:${fullProfile?1:0}`,
+   upstreamGrantHash:opCtx?.upstreamGrantHash||'none',
+   projectionVersion:BRIDGE_PROJECTION_VERSION,
+   kind,
+   base,
+   appPath:crmAppPath,
+   payload
+  });
   try{
    return await SHARED_BRIDGE_READ_CACHE.execute(cacheKey,async()=>{
-    const {stdout}=await execFileAsync('php',[scriptPath,JSON.stringify(payload)],{
-     timeout:bridgeTimeoutMs,maxBuffer:4194304,env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
+    const {stdout}=await spawnPhpBridgeStdin(scriptPath,JSON.stringify(payload),{
+     timeoutMs:bridgeTimeoutMs,
+     maxBuffer:MAX_BRIDGE_STDOUT_BYTES,
+     env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
     });
     let parsed;
     try{parsed=JSON.parse(stdout)}catch{const je=new SyntaxError('invalid_bridge_json');je.isInvalidJson=true;throw je}
@@ -1044,34 +1182,94 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
     warning:'Ordenado do pedido mais recente para o mais antigo (horário de emissão em created_at_brt America/Sao_Paulo).'};
   },
   async resolvePhoneByName(customerName){
+   assertOperatorAuthorized();
    const q=name(customerName);
+   const targetNorm=normAscii(q);
+
+   const evaluateCandidates=rawCandidates=>{
+    if(!rawCandidates.length)return {status:'not_found',match_count:0,phone:null,candidates:[]};
+    const exact=rawCandidates.filter(c=>normAscii(c.name)===targetNorm);
+    const pool=exact.length>0?exact:rawCandidates;
+    if(pool.length>1){
+     return {
+      status:'ambiguous',
+      match_count:pool.length,
+      phone:null,
+      candidates:pool.slice(0,10).map(c=>({
+       uuid:c.uuid||null,
+       name:c.name||null,
+       orders_count:Number.isSafeInteger(c.orders_count)?c.orders_count:null
+      }))
+     };
+    }
+    const chosen=pool[0];
+    if(!chosen.rawPhone)fail('customer_phone_unavailable');
+    let validPhone;
+    try{validPhone=phone(chosen.rawPhone)}catch{fail('customer_phone_unavailable')}
+    return {
+     status:'matched',
+     match_count:1,
+     phone:validPhone,
+     customer_uuid:chosen.uuid||null,
+     candidates:[{uuid:chosen.uuid||null,name:chosen.name||null,orders_count:chosen.orders_count??null}]
+    };
+   };
+
    if(canUseForensicBridge()){
-    const res=await runForensicBridge({action:'customers.search',nome_cliente:q,limit:5,full_profile:true});
-    const cust=(res?.customers||[]).find(c=>c?.whatsapp||c?.phone);
-    if(cust){try{return phone(cust.whatsapp||cust.phone)}catch{}}
+    const res=await runForensicBridge({action:'customers.search',nome_cliente:q,limit:10,full_profile:true});
+    const list=Array.isArray(res?.customers)?res.customers:[];
+    return evaluateCandidates(list.map(c=>({
+     uuid:c?.uuid||null,
+     name:c?.name||'',
+     rawPhone:c?.whatsapp||c?.phone||null,
+     orders_count:Number.isSafeInteger(c?.orders_count)?c.orders_count:null
+    })));
    }
+
    const raw=await get('/api/orders/search',legacyFilters({'customer.name':q}));
    const rows=Array.isArray(raw)?raw:Array.isArray(raw?.data)?raw.data:null;
-   if(!rows||!rows.length)fail('customer_not_found');
+   if(!rows||!rows.length)return {status:'not_found',match_count:0,phone:null,candidates:[]};
    const sorted=[...rows].sort((a,b)=>(Number(b?.id)||0)-(Number(a?.id)||0));
+   const byIdentity=new Map();
    for(const r of sorted){
-    const w=r?.customer?.whatsapp||r?.customer?.phone;
-    if(typeof w==='string'&&w.replace(/\D/g,'').length>=10){
-     try{return phone(w)}catch{}
+    const c=r?.customer||{};
+    const w=typeof(c.whatsapp||c.phone)==='string'?String(c.whatsapp||c.phone):'';
+    const digits=w.replace(/\D/g,'');
+    const cName=typeof c.name==='string'?c.name.trim():'';
+    const idKey=c.uuid?`u:${c.uuid}`:(digits?`p:${digits}`:(c.id?`i:${c.id}`:`n:${normAscii(cName)}`));
+    const existing=byIdentity.get(idKey);
+    if(existing){
+     existing.orders_count+=1;
+     if(!existing.rawPhone&&digits.length>=10)existing.rawPhone=w;
+    }else{
+     byIdentity.set(idKey,{
+      uuid:c.uuid||null,
+      name:cName,
+      rawPhone:digits.length>=10?w:null,
+      orders_count:1
+     });
     }
    }
-   fail('customer_phone_unavailable');
+   return evaluateCandidates([...byIdentity.values()]);
   },
   async detail(locator){
+   assertOperatorAuthorized();
    const isObj=locator&&typeof locator==='object';
    const idUuid=isObj?locator.uuid:locator;
    const orderId=isObj&&Number.isSafeInteger(locator.order_id)?locator.order_id:null;
    const detailLevel=isObj&&['resumo','padrao','forense'].includes(locator.detailLevel)?locator.detailLevel:'forense';
+   const includeCalendarSync=isObj&&typeof locator.includeCalendarSync==='boolean'?locator.includeCalendarSync:undefined;
    if(idUuid!==undefined&&idUuid!==null&&idUuid!==''&&!uuid(idUuid))fail('invalid_uuid');
    if(!idUuid&&(!orderId||orderId<1))fail('invalid_uuid');
 
    if(fullProfile&&canUseForensicBridge()){
-    const res=await runForensicBridge({action:'orders.detail',...(idUuid?{uuid:idUuid}:{order_id:orderId}),detail_level:detailLevel,full_profile:true});
+    const res=await runForensicBridge({
+     action:'orders.detail',
+     ...(idUuid?{uuid:idUuid}:{order_id:orderId}),
+     detail_level:detailLevel,
+     ...(includeCalendarSync!==undefined?{include_calendar_sync:includeCalendarSync}:{}),
+     full_profile:true
+    });
     if(res?.order)res.order=await attachProbedAvatarToOrder(res.order);
     return res;
    }
@@ -1128,6 +1326,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    return result;
   },
   async customerForensic360(locator={}){
+   assertOperatorAuthorized();
    let res;
    if(canUseForensicBridge()){
     res=await runForensicBridge({
@@ -1139,11 +1338,15 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      documento:locator.documento||undefined,
      page:Math.max(1,Number(locator.pagina)||1),
      per_page:Math.min(20,Math.max(1,Number(locator.por_pagina)||10)),
+     ...(typeof locator.includeCrossOrderAudit==='boolean'?{include_cross_order_audit:locator.includeCrossOrderAudit}:{}),
      full_profile:fullProfile
     });
    }else{
     const qParams=new URLSearchParams();
-    for(const [k,v] of Object.entries(locator||{})){if(v!==undefined&&v!==null&&v!=='')qParams.set(k,String(v))}
+    for(const [k,v] of Object.entries(locator||{})){
+     if(k==='includeCrossOrderAudit')continue;
+     if(v!==undefined&&v!==null&&v!=='')qParams.set(k,String(v));
+    }
     const raw=await get('/api/customers/forensic-360',qParams);
     if(!raw||typeof raw!=='object')fail('invalid_customer_360_contract');
     if(raw.lookup?.status!=='matched')return raw;
@@ -1164,6 +1367,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      kpis:raw.kpis||{total_orders_registered:orders.length},
      financial_audit_summary:raw.financial_audit_summary||{received_by_effective_method_cents:receivedByMethodCents,received_by_effective_method_reais:receivedByMethod},
      participants_cross_order_audit:fullProfile?buildCrossOrderParticipantAudit(orders):undefined,
+     ...(raw.natal_2026!==undefined?{natal_2026:raw.natal_2026}:{}),
      current_order:orders[0]||null,
      history:raw.history||{page:1,per_page:10,total:orders.length,has_more:false},
      orders

@@ -5,6 +5,10 @@ import {fromJsonSchema} from '@modelcontextprotocol/server';
 
 export const ZAPI_STATUS_TOOL_NAME='zapi_status_conexao';
 
+const SCOPES_MESSAGE=Object.freeze(['crm.read','zapi.message.send']);
+const SCOPES_GROUP_WRITE=Object.freeze(['crm.read','zapi.group.manage']);
+const SCOPES_GROUP_READ=Object.freeze(['crm.read']);
+
 const WRITE_MESSAGE={readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true};
 const WRITE_GROUP={readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true};
 const WRITE_GROUP_DESTRUCTIVE={readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:true};
@@ -15,6 +19,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_send_text',
   capability:'whatsapp_send_text',
   access:'write_external',
+  requiredScopes:SCOPES_MESSAGE,
   aliases:['send_text','send_message','send_text_message'],
   title:'Enviar mensagem de texto no WhatsApp (Z-API)',
   description:'Use quando o operador pedir explicitamente o envio imediato de uma mensagem de texto avulsa no WhatsApp pela instância Z-API vinculada. NÃO use quando a pergunta for consulta de vendas, caixa, pedidos, clientes ou diagnóstico, nem para disparar proposta comercial oficial de Natal 2026 (use crm_previa_proposta_natal / crm_enviar_proposta_natal). Quando o usuário informar nome sem telefone, consulte antes o CRM (crm_clientes_buscar ou crm_cliente_resumo) sem inventar número; se houver homônimos ou qualquer ambiguidade, pare e confirme antes do envio. Resposta aceita significa submissão ao provedor (não entrega/leitura); em timeout ou falha ambígua, nunca reenvie automaticamente.',
@@ -25,6 +30,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_send_image',
   capability:'whatsapp_send_image',
   access:'write_external',
+  requiredScopes:SCOPES_MESSAGE,
   aliases:['send_image','send_photo','send_image_message'],
   title:'Enviar imagem por URL HTTPS no WhatsApp (Z-API)',
   description:'Use quando o operador pedir explicitamente o envio de imagem por URL HTTPS pública acessível no WhatsApp (com legenda opcional). NÃO use com Base64 inline, URLs privadas/localhost ou sem destinatário confirmado. Se apenas o nome for informado, resolva o telefone antes no CRM e confirme em caso de homônimos.',
@@ -35,6 +41,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_send_video',
   capability:'whatsapp_send_video',
   access:'write_external',
+  requiredScopes:SCOPES_MESSAGE,
   aliases:['send_video','send_video_message'],
   title:'Enviar vídeo por URL HTTPS no WhatsApp (Z-API)',
   description:'Use quando o operador pedir explicitamente o envio de vídeo por URL HTTPS pública acessível no WhatsApp (com legenda opcional). NÃO use com Base64 inline, URLs privadas/localhost ou sem destinatário confirmado. Se apenas o nome for informado, resolva o telefone antes no CRM e confirme em caso de homônimos.',
@@ -45,6 +52,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_group_create',
   capability:'whatsapp_group_create',
   access:'write_external',
+  requiredScopes:SCOPES_GROUP_WRITE,
   aliases:['group_create','create_group'],
   title:'Criar grupo no WhatsApp (Z-API)',
   description:'Cria um grupo no WhatsApp na instância Z-API vinculada ao operador com o nome e os participantes informados.',
@@ -55,6 +63,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_group_add_participant',
   capability:'whatsapp_group_add_participant',
   access:'write_external',
+  requiredScopes:SCOPES_GROUP_WRITE,
   aliases:['group_add_participant','group_add_participants','add_participant','add_group_participant'],
   title:'Adicionar participante(s) a grupo WhatsApp (Z-API)',
   description:'Adiciona participante(s) a um grupo existente do WhatsApp na instância Z-API vinculada ao operador.',
@@ -65,6 +74,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_group_remove_participant',
   capability:'whatsapp_group_remove_participant',
   access:'write_external',
+  requiredScopes:SCOPES_GROUP_WRITE,
   aliases:['group_remove_participant','group_remove_participants','remove_participant','remove_group_participant'],
   title:'Remover participante(s) de grupo WhatsApp (Z-API)',
   description:'Remove participante(s) de um grupo do WhatsApp na instância Z-API vinculada ao operador.',
@@ -75,6 +85,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_group_add_admin',
   capability:'whatsapp_group_add_admin',
   access:'write_external',
+  requiredScopes:SCOPES_GROUP_WRITE,
   aliases:['group_add_admin','group_add_admins','add_admin','promote_group_participant','group_promote_admin'],
   title:'Promover administrador em grupo WhatsApp (Z-API)',
   description:'Concede permissão de administrador a participante(s) de um grupo do WhatsApp na instância Z-API vinculada ao operador.',
@@ -85,6 +96,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_group_remove_admin',
   capability:'whatsapp_group_remove_admin',
   access:'write_external',
+  requiredScopes:SCOPES_GROUP_WRITE,
   aliases:['group_remove_admin','group_remove_admins','remove_admin','demote_group_participant','group_demote_admin'],
   title:'Remover administrador em grupo WhatsApp (Z-API)',
   description:'Remove permissão de administrador de participante(s) de um grupo do WhatsApp na instância Z-API vinculada ao operador.',
@@ -95,6 +107,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   gatewayName:'zapi_group_metadata',
   capability:'whatsapp_group_metadata',
   access:'read',
+  requiredScopes:SCOPES_GROUP_READ,
   aliases:['group_metadata','get_group_metadata','group_info'],
   title:'Consultar metadados e participantes de grupo WhatsApp (Z-API)',
   description:'Consulta metadados, administradores e participantes de um grupo do WhatsApp pela instância Z-API vinculada ao operador.',
@@ -104,6 +117,11 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
 ]);
 
 export const ZAPI_GATEWAY_TOOL_NAMES=Object.freeze(ZAPI_OFFICIAL_SPECS.map(s=>s.gatewayName));
+
+const SPEC_BY_GATEWAY=new Map(ZAPI_OFFICIAL_SPECS.map(s=>[s.gatewayName,s]));
+export function getZapiRequiredScopes(gatewayName){
+ return SPEC_BY_GATEWAY.get(gatewayName)?.requiredScopes||SCOPES_GROUP_READ;
+}
 
 const SPEC_BY_ALIAS=new Map();
 for(const spec of ZAPI_OFFICIAL_SPECS){
@@ -182,6 +200,7 @@ export function classifyDiscoveredTools(rawTools,reservedNames=new Set()){
    upstreamName,
    capability:spec.capability,
    access:spec.access,
+   requiredScopes:[...spec.requiredScopes],
    title:spec.title,
    description:spec.description+upstreamDesc,
    inputSchema:compiledIn.jsonSchema,

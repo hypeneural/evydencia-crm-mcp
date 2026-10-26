@@ -372,3 +372,48 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
   assert.equal(crmLog.find(x=>x.path==='/api/v1/extension/proposals/schedule')?.idempotencyKey,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
  }finally{await client.close()}
 });
+
+test('Regression P0 — write scope enforcement, securitySchemes metadata, operator bridge cache isolation, and public availability 404 vs empty slots',async()=>{
+ const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
+ const asMeta=await (await call(g,'/.well-known/oauth-authorization-server')).json();
+ assert.ok(asMeta.scopes_supported.includes('crm.read'));
+ assert.ok(asMeta.scopes_supported.includes('crm.proposal.write'));
+
+ // Operator 9 has extension:proposal-read ONLY (NO extension:proposal-write)
+ const op9Conn=await connect(g,'fake-op9-read-000002');
+ assert.ok(!op9Conn.tokens.scope.split(/\s+/).includes('crm.proposal.write'),'read-only operator never receives crm.proposal.write');
+ const op7Conn=await connect(g,'fake-op7-write-00003');
+ assert.ok(op7Conn.tokens.scope.split(/\s+/).includes('crm.proposal.write'),'write-capable operator receives crm.proposal.write');
+
+ const c9=await mcp(g,op9Conn.tokens.access_token);
+ const c7=await mcp(g,op7Conn.tokens.access_token);
+ try{
+  const {tools}=await c7.listTools();
+  const writeTool=tools.find(t=>t.name==='crm_enviar_proposta_natal');
+  assert.deepEqual(writeTool._meta?.securitySchemes,[{type:'oauth2',scopes:['crm.read','crm.proposal.write']}]);
+  const readTool=tools.find(t=>t.name==='crm_pedido_detalhe');
+  assert.deepEqual(readTool._meta?.securitySchemes,[{type:'oauth2',scopes:['crm.read']}]);
+
+  // Op9 can preview (has extension:proposal-read)
+  const prev9=await c9.callTool({name:'crm_previa_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Teste'}});
+  assert.equal(prev9.isError,undefined);
+
+  // Op9 MUST be blocked server-side from crm_enviar_proposta_natal BEFORE hitting CRM!
+  crmLog.length=0;
+  const denyWrite=await c9.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Teste',confirmado_pelo_operador:true}});
+  assert.equal(denyWrite.isError,true);
+  const denyBody=JSON.parse(denyWrite.content[0].text);
+  assert.equal(denyBody.error_category,'UNAUTHORIZED');
+  assert.ok(!crmLog.some(x=>x.path==='/api/v1/extension/proposals/schedule'),'zero CRM write requests from read-only operator');
+
+  // Public availability HTTP 404 (e.g. internal ref "enatal" instead of public slug "entao-e-natal") must return NOT_FOUND error, never fake 0 slots
+  const pub404=await c7.callTool({name:'crm_horarios_publicos',arguments:{campanha:'natal',pacote:'enatal',inicio:'2026-11-01',fim:'2026-11-10'}});
+  assert.equal(pub404.isError,true);
+  const pubBody=JSON.parse(pub404.content[0].text);
+  assert.equal(pubBody.error_category,'NOT_FOUND');
+  assert.match(pubBody.hint||pubBody.error,/entao-e-natal/);
+ }finally{
+  await c9.close();
+  await c7.close();
+ }
+});
