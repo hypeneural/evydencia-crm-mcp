@@ -756,10 +756,12 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
  }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay)}));
  if(gameplay){
   const eligibleStatus=new Set(['waiting_product_retrieve','order_completed']);
-  const findOrders=async(filter)=>{
+  const findOrders=async(filter,{canonicalPaginationRequired=true}={})=>{
    const orders=[],seen=new Set();
    for(let page=1;page<=80;page++){
-    const result=await direct.search(filter,{page,limit:25,detailLevel:'resumo'});
+    const result=await direct.search(filter,{
+     page,limit:25,detailLevel:'resumo',canonicalPaginationRequired
+    });
     if(!Array.isArray(result?.orders))throw Error('gameplay_crm_invalid');
     for(const o of result.orders){
      const uuid=String(o.order_uuid||o.uuid||'').toLowerCase();
@@ -783,7 +785,10 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      const f={...natalFilter,...(order_id?{'order.id':order_id}:{}),
       ...(order_uuid?{'order.uuid':order_uuid}:{}),
       ...(nome_cliente?{'customer.name':nome_cliente}:{})};
-     const orders=await findOrders(f);
+     // Exact order ID / UUID can still use the legacy HTTP path because the
+     // returned identity is verified below. Broad name searches must use
+     // canonical server-side pagination to prevent incomplete candidate lists.
+     const orders=await findOrders(f,{canonicalPaginationRequired:Boolean(nome_cliente)});
      // A broken CRM filter must never return links for another order.
      if(order_id!==undefined&&orders.some(o=>Number(o.order_id)!==order_id))
       throw Error('gameplay_crm_filter_mismatch');
