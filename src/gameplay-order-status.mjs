@@ -21,7 +21,8 @@ export function gameplayOrderStatus(order, gameplay) {
   : gameplay.state==='not_published'&&prep?.state==='invalid'
     ? 'preparation_invalid'
     : PHASES[gameplay.state];
- const publishedCount=count(gameplay.photo_count);
+ const manifestCount=count(gameplay.photo_count);
+ const publishedCount=gameplay.state==='published_unverified'?manifestCount:0;
  const preparedCount=prep?.state==='staged' ? count(prep.photo_count) : null;
  return {
   crm_order_uuid:String(order.order_uuid||order.uuid).toLowerCase(),
@@ -31,6 +32,7 @@ export function gameplayOrderStatus(order, gameplay) {
   digital_experience_status:phase,
   publication_pending:required && gameplay.state!=='published_unverified',
   published_photo_count:publishedCount,
+  active_revision_manifest_photo_count:manifestCount,
   preparing_photo_count:preparedCount,
   published_variants_ready:count(gameplay.ready_blobs),
   preparing_variants_ready:inPreparation?count(prep.ready_blobs):null,
