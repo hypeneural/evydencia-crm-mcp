@@ -12,6 +12,7 @@ import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
+import {createGameplayReadClient,gameplayReadConfig} from './gameplay-read-client.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
@@ -33,6 +34,7 @@ export const BUILD_INFO=Object.freeze(resolveBuildInfo());
 
 export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_campanha_publica','crm_horarios_publicos','crm_conexao_privada','crm_cliente_resumo','crm_cliente_360']);
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
+export const GAMEPLAY_CRM_TOOL_NAMES=Object.freeze(['crm_gameplay_links','crm_gameplay_auditoria']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
 export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
 export {UI_CRM_TOOL_NAMES};
@@ -40,7 +42,7 @@ export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GA
 export {ZAPI_INSTANCE_TOOL_NAMES};
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
-const SAFE_ERR=/^(crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
+const SAFE_ERR=/^(gameplay_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
 
 function classifyToolError(code){
  if(code==='crm_public_package_or_campaign_not_found'){
@@ -570,6 +572,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   }
  }):null;
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
+ const gameplayCfg=gameplayReadConfig(process.env);
+ const gameplay=gameplayCfg&&direct?createGameplayReadClient(gameplayCfg,{fetchFn}):null;
  const resolvePhone=async({telefone,nome_cliente},{allowLookupMiss=false}={})=>{
   const handleLookup=r=>{
    if(typeof r==='string')return {status:'matched',phone:r};
@@ -706,6 +710,65 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
  }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null}));
+ if(gameplay){
+  const eligibleStatus=new Set(['waiting_product_retrieve','order_completed']);
+  const findOrders=async(filter)=>{
+   const orders=[],seen=new Set();
+   for(let page=1;page<=25;page++){
+    const result=await direct.search(filter,{page,limit:25});
+    if(!Array.isArray(result?.orders))throw Error('gameplay_crm_invalid');
+    for(const o of result.orders){
+     const uuid=String(o.order_uuid||o.uuid||'').toLowerCase();
+     if(!/^[0-9a-f-]{36}$/.test(uuid)||seen.has(uuid))continue;
+     seen.add(uuid);orders.push(o);
+    }
+    if(!result.pagination?.has_more)break;
+    if(page===25)throw Error('gameplay_crm_pagination_limit');
+   }
+   return orders;
+  };
+  const natalFilter={'order.created-start':'2026-01-01','order.created-end':'2026-12-31','product.slug':'natal'};
+  reg('crm_gameplay_links','Galeria e jogos de Natal 2026 por nome ou pedido',
+   'Consulta somente leitura. Use para encontrar os links de jogos e galeria de um pedido Natal 2026, por order_id, UUID ou nome. Em nomes repetidos devolve todos os pedidos separados. Não envia WhatsApp nem cria sessão.',
+   z.object({order_id:z.number().int().positive().optional(),order_uuid:z.string().uuid().optional(),
+    nome_cliente:z.string().min(2).max(100).optional()}),OUT_GENERIC,async({order_id,order_uuid,nome_cliente})=>{
+     if([order_id,order_uuid,nome_cliente].filter(x=>x!==undefined).length!==1)throw Error('gameplay_locator_invalid');
+     const f={...natalFilter,...(order_id?{'order.id':order_id}:{}),
+      ...(order_uuid?{'order.uuid':order_uuid}:{}),
+      ...(nome_cliente?{'customer.name':nome_cliente}:{})};
+     const orders=await findOrders(f);
+     if(!orders.length)return {source:'crm_gameplay_join',orders:[],total:0};
+     const rows=await gameplay.lookup(orders.map(o=>o.order_uuid||o.uuid));
+     const byUuid=new Map(rows.results.map(r=>[r.crm_order_uuid,r]));
+     return {source:'crm_gameplay_join',total:orders.length,verified_at:rows.verified_at,
+      orders:orders.map(o=>({order_id:o.order_id,crm_order_url:o.crm_order_url,
+       customer_name:o.customer_name,status_key:o.status_key,
+       gameplay:byUuid.get(String(o.order_uuid||o.uuid).toLowerCase())||null}))};
+   });
+  reg('crm_gameplay_auditoria','Pendências de galeria e jogos Natal 2026',
+   'Use para auditar apenas pedidos com status ATUAL Aguardando Retirada ou Pedido Concluído, cruzando com a publicação real do Gameplay. Falha do Gameplay não equivale a publicação ausente.',
+   z.object({}),OUT_GENERIC,async()=>{
+     const orders=[],seen=new Set();
+     for(const status of eligibleStatus){
+       const found=await findOrders({...natalFilter,'order.status':status});
+       for(const o of found){
+        const id=String(o.order_uuid||o.uuid).toLowerCase();
+        if(!seen.has(id)){orders.push(o);seen.add(id)}
+       }
+     }
+     const map=new Map();
+     for(let i=0;i<orders.length;i+=50){
+       const result=await gameplay.lookup(orders.slice(i,i+50).map(o=>o.order_uuid||o.uuid));
+       for(const row of result.results)map.set(row.crm_order_uuid,row);
+     }
+     const entries=orders.map(o=>({order_id:o.order_id,crm_order_url:o.crm_order_url,
+      customer_name:o.customer_name,status_key:o.status_key,
+      gameplay:map.get(String(o.order_uuid||o.uuid).toLowerCase())||null}));
+     const counts={total:entries.length};
+     for(const e of entries){const state=e.gameplay?.state||'not_verified';counts[state]=(counts[state]||0)+1}
+     return {source:'crm_gameplay_join',year:2026,statuses:[...eligibleStatus],counts,orders:entries};
+   });
+ }
  reg('crm_status','Estado do CRM','Use quando precisar verificar rapidamente o liveness público do servidor CRM (evydencia.com). NÃO use para diagnóstico de WhatsApp/Z-API.',z.object({}),OUT_GENERIC,()=>crm.status());
  reg('crm_campanha_publica','Pacotes públicos','Use quando precisar consultar o catálogo público de pacotes e preços de uma campanha (padrão "natal"). NÃO use para relatórios de vendas ou estatísticas internas.',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
  reg('crm_horarios_publicos','Horários públicos','Use quando precisar verificar disponibilidade pública de horários de um pacote em janela de até 14 dias (AAAA-MM-DD). ATENÇÃO DE SLUG: informe o slug público da campanha/pacote retornado por crm_campanha_publica (ex.: "entao-e-natal", "ho-ho-ho", "boas-festas"), NUNCA a referência interna de produto ("enatal"). NÃO cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,async({campanha,pacote,inicio,fim})=>{
