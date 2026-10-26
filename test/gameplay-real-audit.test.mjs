@@ -56,6 +56,10 @@ test('cross-check reconciles UUID, status and publication/photo totals without l
  assert.equal(result.gameplay.published_photo_count,30);
  assert.equal(result.gameplay.preparing_photo_count,20);
  assert.equal(result.gameplay.publication_pending,1);
+ assert.equal(result.gameplay_live_metadata_verified,true);
+ assert.equal(result.gameplay_dataset_provenance_verified,false);
+ assert.equal(result.media_bytes_verified,false);
+ assert.equal(result.browser_runtime_verified,false);
  assert.equal(result.customer_data_release_approved,false);
  assert.equal(JSON.stringify(result).includes(U1),false);
  assert.equal(JSON.stringify(result).includes(U2),false);
