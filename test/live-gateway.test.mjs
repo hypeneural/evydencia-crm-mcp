@@ -57,7 +57,7 @@ before(async()=>{
    const newerOrder={id:5127,uuid:'22222222-bbbb-4222-8222-000000000202',status:{id:6,name:'Sessão Agendada'},customer:{name:'Larissa Exemplo',whatsapp:'48988881775'},created_at:'2026-10-23T17:33:09.000000Z',schedule_1:'2026-11-02 09:00:00',items:[{id:2,quantity:'1.000',total:'480.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'120.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'João Miguel Exemplo',birth:'2024-04-30',birth_for_extense:'há 2 anos e 5 meses',relation:{id:1,name:'Filho (a)'}}],summary:{total:480,received:120,remaining:360}};
    if(u.pathname==='/api/orders/search'&&u.searchParams.toString().includes('6001')){
     return send(200,JSON.stringify({data:[{...sampleOrder,id:6001,
-     uuid:'33333333-cccc-4333-8333-000000000303',summary:{total:480,received:480,remaining:0},
+     uuid:'33333333-cccc-4333-8333-000000000303',status_key:'waiting_product_retrieve',summary:{total:480,received:480,remaining:0},
      installments:[],customer:{name:'Cliente Sintetica Natal',whatsapp:'48999990001'}}]}));
    }
    if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder,newerOrder]}));
