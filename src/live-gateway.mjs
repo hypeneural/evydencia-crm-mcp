@@ -713,7 +713,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled),perfSnapshot:perf?.snapshot()??null}));
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),perfSnapshot:perf?.snapshot()??null}));
  reg('crm_status','Estado do CRM','Use quando precisar verificar rapidamente o liveness público do servidor CRM (evydencia.com). NÃO use para diagnóstico de WhatsApp/Z-API.',z.object({}),OUT_GENERIC,()=>crm.status());
  reg('crm_campanha_publica','Pacotes públicos','Use quando precisar consultar o catálogo público de pacotes e preços de uma campanha (padrão "natal"). NÃO use para relatórios de vendas ou estatísticas internas.',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
  reg('crm_horarios_publicos','Horários públicos','Use quando precisar verificar disponibilidade pública de horários de um pacote em janela de até 14 dias (AAAA-MM-DD). ATENÇÃO DE SLUG: informe o slug público da campanha/pacote retornado por crm_campanha_publica (ex.: "entao-e-natal", "ho-ho-ho", "boas-festas"), NUNCA a referência interna de produto ("enatal"). NÃO cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,async({campanha,pacote,inicio,fim})=>{
@@ -903,7 +903,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
    order_id:z.number().int().min(1).optional(),
    nivel_detalhe:z.enum(['resumo','padrao','forense']).default('forense')
   }),OUT_ORDER_DETAIL,({uuid,order_id,nivel_detalhe})=>direct.detail({uuid,order_id,detailLevel:nivel_detalhe}));
-  if(printCfg.enabled&&cfg.operatorFullCrm){
+  if(printCfg.enabled&&cfg.operatorFullCrm&&ex.canPrint){
    const printer=printserverClient(printCfg,{fetchFn});
    reg('crm_previa_malotes_retirada','Prévia de malotes por IDs (somente leitura)',
     'Conferir um lote de IDs numéricos extraídos de fotos; não altera status, não envia WhatsApp e não imprime. Só indica possibilidade de impressão após status 10, sem substituir validações financeiras do CRM.',
@@ -930,7 +930,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     'SOMENTE após operador confirmar expressamente. Consulta o pedido no CRM; exige status 10, saldo verificado zero, escopo print.jobs.write; gera etiqueta simplificada 100x40 no PrintServer. NÃO altera o CRM nem envia WhatsApp. Repetição é deduplicada por pedido no broker.',
     z.object({order_id:z.number().int().min(1),confirmado_pelo_operador:z.boolean(),request_id:z.string().uuid().optional()}),
     OUT_GENERIC,async({order_id,confirmado_pelo_operador,request_id})=>{
-     if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canWriteProposal)throw Error('insufficient_operator_write_scope');
+     if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canPrint)throw Error('insufficient_operator_write_scope');
      if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
      const r=await direct.detail({order_id,detailLevel:'resumo'});
      const o=r?.order;
@@ -954,7 +954,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     'Consulta fila remota. spooled significa entregue ao executável/spooler do Windows, não etiqueta fisicamente impressa.',
     z.object({order_id:z.number().int().min(1),job_id:z.string().uuid()}),OUT_GENERIC,
     async({order_id,job_id})=>{
-     if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canWriteProposal)throw Error('insufficient_operator_write_scope');
+     if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canPrint)throw Error('insufficient_operator_write_scope');
      const r=await direct.detail({order_id,detailLevel:'resumo'});
      if(r?.order?.order_id!==order_id)throw Error('printserver_order_not_found');
      const result=await printer.status(job_id);
