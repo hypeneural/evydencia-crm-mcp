@@ -59,3 +59,16 @@
 - `findOrders` reconcilia contagens totais, returned_count, números de páginas e UUIDs únicos; se houver drift durante a varredura, retorna erro, não um inventário parcial.
 - Um probe seguro, `node scripts/antigravity/inspect-canonical-bridge.mjs --json`, identifica exclusivamente arquivos locais necessários para o bridge PHP. **Não atesta** chamadas reais nem coleta credenciais; executá-lo no Avell pode produzir `false`, como esperado.
 - Não repetir 179 testes como evidência da implementação nova: CI recente registrou 183/183 e deve ser acompanhada por SHA.
+
+
+## Relationship and photo quantity fields (additive response)
+- CRM order ID is a human identifier. Join ONLY by `order_uuid` -> Gameplay `photo_sessions.crm_order_uuid`; never by customer name or phone.
+- Each `orders[]` entry in `crm_gameplay_links` and `crm_gameplay_auditoria` includes `order_id`, `crm_order_uuid`, `status_id`, `status_key`, `package_name`, `gameplay` and an `operational` projection.
+- `operational.publication_required_by_crm` is true only for **current** status 10 (`waiting_product_retrieve`) or 12 (`order_completed`) of a CRM-filtered Christmas 2026 order.
+- `operational.digital_experience_status` is one of `no_gameplay_session`, `album_in_preparation`, `album_not_published`, `preparation_invalid`, `publication_incomplete`, `access_revoked`, `album_published_runtime_unverified`.
+- `operational.published_photo_count`: number of photo entries in an ACTIVE, fully ready manifest, **not the total photographed in camera or stored in Drive**. An incomplete active revision can carry a separate `active_revision_manifest_photo_count` but counts as **0 published**.
+- `operational.preparing_photo_count`: number in the latest staged manifest, or `null` when none/not known. Do not add staging and active totals because a new revision may replace existing photos.
+- `operational.individual_games_verified=false` and `browser_runtime_verified=false`: Gameplay does not store a per-game success receipt; one published hub does not prove that every game works.
+- `counts.published_photo_count` and `counts.preparing_photo_count` are sums of separate reported populations across eligible orders; avoid using them as counts of original camera files.
+- The default audit returns pending rows; request `incluir_publicados=true` to see all states. Batch does not include family capability URLs.
+- The direct LIVE MCP currently has **no Gameplay tools deployed**; this PR is draft. Do not invent real Gameplay status from CRM-only counts.
