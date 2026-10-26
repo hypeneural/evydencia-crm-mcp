@@ -48,3 +48,14 @@
 - No Avell Windows, `scripts/antigravity/prepare-avell.mjs` nao chama `npm` como executavel binario no Windows: usa `cmd.exe` apenas para subcomandos npm em allowlist fixa, preservando o Node do sistema. Nunca executar `npm ci` no checkout MCP operacional.
 - Leituras SQLite de auditoria nao escrevem, nao ativam e nao criam sessao. Nao preparar token real/segredo no computador Avell nem executar deploy do Gameplay a partir do computador da impressora.
 - Runbook canonico: `docs/PROMPT_ANTIGRAVITY_FLASH_AVELL_20261026.md` e `docs/AVELL_ANTIGRAVITY_RUNBOOK_20261026.md`.
+
+## Auditoria posterior ao walkthrough Avell — paginação Laravel real
+
+- O resultado original `CRM_CANONICAL_SEARCH=unavailable` foi observado **no Avell**, onde o Laravel não está instalado. Não é prova de indisponibilidade no MCP de produção.
+- `app/Services/Api/OrderService.php` do CRM Laravel utiliza `$query->paginate(200)` em `GET /api/orders/search`.
+- A PR MCP #11 agora aproveita paginação **no servidor** quando não encontra a ponte PHP privada, conferindo `meta.current_page`, `meta.per_page`, `meta.total`, `meta.last_page` e a quantidade efetiva de linhas. O retorno inconsistente causa `legacy_read_canonical_pagination_unavailable`.
+- O caminho preferido continua `scripts/crm-forensic-bridge.php` (até 25 linhas por página). A API remota não pode ser tratada como equivalente sem validação de conexão/autorização e de resposta real (limite 1 MiB).
+- O `OrderResource` do Laravel retorna `status: {id,name}`; o fallback converte somente IDs canônicos 10/11/12 em chaves de status. O status 11 permanece **inelegível** à cobrança desta integração.
+- `findOrders` reconcilia contagens totais, returned_count, números de páginas e UUIDs únicos; se houver drift durante a varredura, retorna erro, não um inventário parcial.
+- Um probe seguro, `node scripts/antigravity/inspect-canonical-bridge.mjs --json`, identifica exclusivamente arquivos locais necessários para o bridge PHP. **Não atesta** chamadas reais nem coleta credenciais; executá-lo no Avell pode produzir `false`, como esperado.
+- Não repetir 179 testes como evidência da implementação nova: CI recente registrou 183/183 e deve ser acompanhada por SHA.
