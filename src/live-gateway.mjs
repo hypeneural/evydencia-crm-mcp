@@ -761,11 +761,21 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   const eligibleStatus=new Set(['waiting_product_retrieve','order_completed']);
   const findOrders=async(filter,{canonicalPaginationRequired=true}={})=>{
    const orders=[],seen=new Set();
+   let expectedTotal=null;
    for(let page=1;page<=80;page++){
     const result=await direct.search(filter,{
      page,limit:25,detailLevel:'resumo',canonicalPaginationRequired
     });
     if(!Array.isArray(result?.orders))throw Error('gameplay_crm_invalid');
+    const p=result.pagination;
+    if(canonicalPaginationRequired){
+     if(!Number.isSafeInteger(p?.total_matching_orders)||p.total_matching_orders<0||
+        p.page!==page||p.returned_count!==result.orders.length)
+       throw Error('gameplay_crm_pagination_invalid');
+     if(expectedTotal===null)expectedTotal=p.total_matching_orders;
+     else if(expectedTotal!==p.total_matching_orders)
+       throw Error('gameplay_crm_pagination_invalid');
+    }
     for(const o of result.orders){
      const uuid=String(o.order_uuid||o.uuid||'').toLowerCase();
      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(uuid))
@@ -774,7 +784,11 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      seen.add(uuid);orders.push(o);
     }
     if(typeof result.pagination?.has_more!=='boolean')throw Error('gameplay_crm_pagination_invalid');
-    if(!result.pagination.has_more)break;
+    if(!result.pagination.has_more){
+     if(canonicalPaginationRequired&&seen.size!==expectedTotal)
+      throw Error('gameplay_crm_pagination_invalid');
+     break;
+    }
     if(page===80)throw Error('gameplay_crm_pagination_limit');
    }
    return orders;
