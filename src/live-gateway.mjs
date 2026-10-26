@@ -12,7 +12,7 @@ import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
-import {createGameplayReadClient,gameplayReadConfig} from './gameplay-read-client.mjs';
+import {createGameplayReadClient} from './gameplay-read-client.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
@@ -610,13 +610,13 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   }
  }):null;
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
- // A missing/misconfigured optional Gameplay integration must never bring down CRM and Z-API.
+ // Optional Gameplay configuration is captured by gatewayConfig(env) and
+ // never implicitly loaded from another process-global environment.
  let gameplay=null;
  if(direct&&cfg.operatorFullCrm){
-  try{
-   const readConfig=gameplayReadConfig(process.env);
-   if(readConfig)gameplay=createGameplayReadClient(readConfig,{fetchFn});
-  }catch{log({evt:'gameplay_config_invalid',op:ex.operatorTag})}
+  if(cfg.gameplayReadConfigError)log({evt:'gameplay_config_invalid',op:ex.operatorTag});
+  else if(cfg.gameplayReadSettings)
+   gameplay=createGameplayReadClient(cfg.gameplayReadSettings,{fetchFn});
  }
  const resolvePhone=async({telefone,nome_cliente},{allowLookupMiss=false}={})=>{
   const handleLookup=r=>{
