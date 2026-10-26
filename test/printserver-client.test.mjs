@@ -4,6 +4,19 @@ import {printserverConfig,printserverClient} from '../src/printserver-client.mjs
 
 const token='A'.repeat(48);
 const config={enabled:true,origin:'https://print.example.org',token};
+import {gatewayConfig,supportedGatewayScopes} from '../src/oauth-gateway.mjs';
+const baseEnv={EVYD_PUBLIC_URL:'http://localhost',CRM_BASE_URL:'https://evydencia.com',EVYD_GATEWAY_KEY:Buffer.alloc(32,5).toString('base64'),EVYD_ALLOWED_OPERATOR_IDS:'7,9',EVYD_ENABLE_OPERATOR_FULL_CRM:'1'};
+
+test('print OAuth is denied without a separate authorized operator allowlist',()=>{
+ const printEnv={...baseEnv,EVYD_PRINTSERVER_ENABLED:'1'};
+ assert.throws(()=>gatewayConfig(printEnv),/print_operator_allowlist/);
+ assert.throws(()=>gatewayConfig({...printEnv,EVYD_PRINT_ALLOWED_OPERATOR_IDS:'99'}),/print_operator_allowlist/);
+ const cfg=gatewayConfig({...printEnv,EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7'});
+ assert.equal(cfg.printAllowedOperators.has('7'),true);
+ assert.equal(cfg.printAllowedOperators.has('9'),false);
+ assert.ok(supportedGatewayScopes(cfg).includes('print.jobs.write'));
+});
+
 test('print bridge defaults off without credentials',()=>{
  assert.deepEqual(printserverConfig({}),{enabled:false});
 });
