@@ -12,13 +12,15 @@ import {assertOperatorAbilities} from './live-abilities.mjs';
 
 export const GATEWAY_SCOPE='crm.read';
 export const SCOPE_PROPOSAL_WRITE='crm.proposal.write';
+export const SCOPE_PRINT_WRITE='print.jobs.write';
 export const SCOPE_ZAPI_SEND='zapi.message.send';
 export const SCOPE_ZAPI_GROUP='zapi.group.manage';
-export const ALL_WRITE_SCOPES=Object.freeze([SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]);
+export const ALL_WRITE_SCOPES=Object.freeze([SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]);
 export function supportedGatewayScopes(cfg){
  return [
   GATEWAY_SCOPE,
   ...(cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_PROPOSAL_WRITE]:[]),
+  ...(cfg.printserverEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_PRINT_WRITE]:[]),
   ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[])
  ];
 }
@@ -113,6 +115,7 @@ export function gatewayConfig(env){
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
   allowedOperators,redirects,internalReadToken,
   operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
+  printserverEnabled:env.EVYD_PRINTSERVER_ENABLED==='1',
   uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
   zapiEnabled,zapiMcpUrl,zapiIssuer,zapiStorePath,zapiRestStatus,
@@ -223,6 +226,7 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
  const eligibleScopesForOperator=v=>[
   GATEWAY_SCOPE,
   ...(cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canWriteProposal)?[SCOPE_PROPOSAL_WRITE]:[]),
+  ...(cfg.printserverEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canWriteProposal)?[SCOPE_PRINT_WRITE]:[]),
   ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[])
  ];
  const computeGrantedScopes=(v,narrowWriteScopes=null)=>{
