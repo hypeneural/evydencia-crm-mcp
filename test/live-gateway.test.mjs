@@ -55,6 +55,11 @@ before(async()=>{
    if(auth!==INTERNAL_TOK)return send(401,JSON.stringify({message:'Unauthorized'}));
    const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01T17:33:09.000000Z',schedule_1:'2026-11-10 10:00:00',items:[{id:1,quantity:'1.000',total:'450.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'200.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'Crianca Ficticia',birthday:'2024-04-30',age:'2 anos e 5 meses',relationship:'Filho (a)'}],summary:{total:450,received:200,remaining:250}};
    const newerOrder={id:5127,uuid:'22222222-bbbb-4222-8222-000000000202',status:{id:6,name:'Sessão Agendada'},customer:{name:'Larissa Exemplo',whatsapp:'48988881775'},created_at:'2026-10-23T17:33:09.000000Z',schedule_1:'2026-11-02 09:00:00',items:[{id:2,quantity:'1.000',total:'480.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'120.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'João Miguel Exemplo',birth:'2024-04-30',birth_for_extense:'há 2 anos e 5 meses',relation:{id:1,name:'Filho (a)'}}],summary:{total:480,received:120,remaining:360}};
+   if(u.pathname==='/api/orders/search'&&u.searchParams.toString().includes('6001')){
+    return send(200,JSON.stringify({data:[{...sampleOrder,id:6001,
+     uuid:'33333333-cccc-4333-8333-000000000303',summary:{total:480,received:480,remaining:0},
+     installments:[],customer:{name:'Cliente Sintetica Natal',whatsapp:'48999990001'}}]}));
+   }
    if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder,newerOrder]}));
    if(u.pathname==='/api/orders/11111111-aaaa-4111-8111-000000000101/detail')return send(200,JSON.stringify({data:sampleOrder}));
    if(u.pathname==='/api/reports/natal-statistics')return send(200,JSON.stringify({source:'CRM_CANONICAL_NATAL_STATISTICS',reference_year:2026,cutoff_mmdd:u.searchParams.get('date')||'10-25',detail_level:u.searchParams.get('detail_level')||'resumo',kpis_2026:{valid_orders:101,unique_customers:100,scheduled_sessions:91,confirmed_realized_sessions:23,past_scheduled_sessions:27,past_scheduled_pending_confirmation:4,contracted_revenue_cents:5477600,contracted_revenue_reais:54776},ytd_comparison_at_cutoff:{'2026':{year:2026,accum_orders:101},'2025':{year:2025,accum_orders:142,diff_orders_2026_vs_year:-41},'2024':{year:2024,accum_orders:124,diff_orders_2026_vs_year:-23}}}));
@@ -416,6 +421,63 @@ test('Regression P0 — write scope enforcement, securitySchemes metadata, opera
   await c9.close();
   await c7.close();
  }
+});
+
+test('authorized canonical label uses CRM PNG exactly and never exposes PNG in MCP result',async()=>{
+ const printed=[],renders=[];
+ const bridgeFetch=async(url,opt)=>{
+  if(String(url)==='https://print.example.test/v1/jobs'){
+   printed.push(JSON.parse(opt.body));
+   return new Response(JSON.stringify({replay:false,job:{job_id:'d83ed2db-f4f1-4a55-b632-61e246a22b38',order_id:6001,
+    render_source:'crm_canonical',state:'queued'}}),{status:201,headers:{'Content-Type':'application/json'}});
+  }
+  return fetch(url,opt);
+ };
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1'
+ }),{fetchFn:bridgeFetch,labelRenderer:async options=>{
+  renders.push(options);
+  return {label_source:'crm_canonical',label_png_base64:'fake-test-only-png',label_png_sha256:'a'.repeat(64)};
+ },log:e=>logs.push(e),now});
+ const op=await connect(g,'fake-op7-read-000001'),client=await mcp(g,op.tokens.access_token);
+ try{
+  const result=await client.callTool({name:'crm_solicitar_impressao_etiqueta',
+   arguments:{order_id:6001,confirmado_pelo_operador:true}});
+  assert.equal(result.isError,undefined,JSON.stringify(result.content));
+  assert.equal(result.structuredContent.render_source,'crm_canonical');
+  assert.equal(result.structuredContent.print_state,'queued');
+  assert.equal(result.structuredContent.label_png_base64,undefined);
+  assert.equal(renders.length,1);
+  assert.equal(renders[0].orderId,6001);
+  assert.equal(renders[0].orderUuid,'33333333-cccc-4333-8333-000000000303');
+  assert.equal(printed.length,1);
+  assert.equal(printed[0].label_source,'crm_canonical');
+  assert.equal(printed[0].label_png_base64,'fake-test-only-png');
+  assert.equal(printed[0].status_key,'waiting_product_retrieve');
+ }finally{await client.close();await g.close()}
+});
+test('failed canonical render cannot enqueue a plain fallback label',async()=>{
+ let submitted=0;
+ const bridgeFetch=async(url,opt)=>{
+  if(String(url)==='https://print.example.test/v1/jobs'){submitted++;throw Error('test_unexpected_print')}
+  return fetch(url,opt);
+ };
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1'
+ }),{fetchFn:bridgeFetch,labelRenderer:async()=>{throw Error('crm_label_render_unavailable')},log:e=>logs.push(e),now});
+ const op=await connect(g,'fake-op7-read-000001'),client=await mcp(g,op.tokens.access_token);
+ try{
+  const result=await client.callTool({name:'crm_solicitar_impressao_etiqueta',
+   arguments:{order_id:6001,confirmado_pelo_operador:true}});
+  assert.equal(result.isError,true);
+  assert.equal(submitted,0);
+ }finally{await client.close();await g.close()}
 });
 
 test('PrintServer synthetic job status is readable with print scope, never needs a fake CRM order',async()=>{
