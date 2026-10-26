@@ -8,16 +8,21 @@
 - `gh pr view` sozinho não garante jobs verdes. Usar `gh pr checks <numero> -R <repo> --json name,state,bucket,link` e cruzar com `headRefOid`.
 - Nenhum teste local da impressora foi demonstrado em evidência versionada; NÃO escrever "zero impacto comprovado" apenas porque o preparador usou AppData.
 
-## Achado P0: paginação real da consulta CRM
-`src/legacy-api-read.mjs` tem dois mecanismos:
-1. `runForensicBridge('orders.search')` quando o backend PHP do Laravel e o bridge privado realmente estão presentes. Paginação e filtro canônicos do servidor.
-2. Fallback HTTP `/api/orders/search`, que ordena e usa `.slice` local nos registros obtidos. Essa rota NÃO prova cobertura exaustiva de páginas nos mesmos moldes do bridge. Não usar `total_matching_orders` e `has_more` desse fallback para declarar que toda a lista de Natal foi conferida.
+## Achado P0 corrigido — paginação remota canônica sem PHP local
 
-**Correção nesta PR:** `legacyReadClient.search(...,{canonicalPaginationRequired:true})` falha com `legacy_read_canonical_pagination_unavailable` se não houver bridge PHP. `crm_gameplay_auditoria` e consulta por `nome_cliente` exigem cobertura canônica. Pedidos por ID/UUID usam validação explícita de igualdade e preservam a busca direta existente. Teste: `test/gameplay-canonical-pagination.test.mjs`.
+A auditoria adicional leu **Laravel `app/Services/Api/OrderService.php`**: `GET /api/orders/search` implementa `paginate(200)`. O problema estava em `src/legacy-api-read.mjs`, que paginava novamente uma amostra local usando `.slice()`.
 
-**Bloqueio novo:** validar na VPS DO MCP se `EVYD_CRM_APP_PATH/vendor/autoload.php` e o bridge forense privado existem e o executor pode usá-los sem alterar o Laravel. Se o MCP está isolado da aplicação Laravel e não possui bridge, **NO-GO para auditoria completa**. Abrir tarefa específica de endpoint seguro/paginado no CRM por canal autorizado; não ativar uma varredura truncada nem forçar `has_more=false`.
+**Correção de código na PR #11:**
+1. Preferir `scripts/crm-forensic-bridge.php` quando o MCP está co-localizado com Laravel, com paginação canônica de até 25 pedidos.
+2. Se o bridge PHP não está disponível, consumir a API Laravel já existente com `page` no servidor, exigindo `data[]`, `meta.current_page`, `meta.per_page`, `meta.total` e `meta.last_page` consistentes. O MCP não inventa cobertura; erro explícito caso a API não prove a página. Limite de 1 MiB da resposta HTTP continua valendo.
+3. `OrderResource.status` retorna **ID e nome, sem chave**. Converter explicitamente IDs atuais 10/11/12 em `waiting_product_retrieve`, `product_retrieve_confirmed`, `order_completed` no fallback, conforme `app/Enums/OrderStatus.php`.
+4. `src/live-gateway.mjs` reconcilia contagens entre páginas, total estável e UUIDs distintos; falha se a paginação for contraditória.
+5. Teste `test/gameplay-canonical-pagination.test.mjs` cobre duas páginas, ausência de meta, página incompleta e status 11 inelegível.
+6. Teste `test/inspect-canonical-bridge.test.mjs` impede que mera presença de arquivos do PHP seja apresentada como prova de API funcional.
 
-Na amostra atual `crm_pedidos_buscar(nivel_detalhe=resumo)`, `items` pode estar vazio. Não tentar validar Natal por presença de `items`; confie somente no filtro `product_slug=natal` do servidor canônico ou falhe explicitamente.
+**NO-GO de ambiente ainda necessário:** verificar no MCP operacional se o bridge local está disponível OU se a rota HTTPS privada existente aceita paginação servidor com meta estável e Authorization correta. Não instalar Laravel no Avell e não criar novo endpoint no CRM. A consulta do Avell só testa contratos sintéticos; a capacidade real do host VPS continua `not_verified` até smoke autenticado autorizado.
+
+**Documentação oficial:** Laravel pagination <https://laravel.com/docs/10.x/pagination>; GitHub CLI <https://cli.github.com/manual/gh_pr_checks>; MCP tools <https://modelcontextprotocol.io/specification/2025-11-25/server/tools>.
 
 ## Segurança e semântica
 - Elegíveis à cobrança: Natal 2026 status ATUAL `waiting_product_retrieve` (10) OU `order_completed` (12). Estado 11 não entra. Contagens históricas (12+10) são snapshot, não constante.
