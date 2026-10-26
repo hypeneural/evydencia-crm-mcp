@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
-import {main,parseArgs} from '../scripts/antigravity/prepare-avell.mjs';
+import {main,parseArgs,resolveCommand} from '../scripts/antigravity/prepare-avell.mjs';
 
 test('CLI flags parse and default to safe no-deploy profile',()=>{
  const args=parseArgs([]);
@@ -36,4 +36,14 @@ test('script is executable under Node without loading NPM packages',()=>{
  const run=spawnSync(process.execPath,[script,'--help'],{encoding:'utf8',timeout:10000});
  assert.equal(run.status,0,run.stderr);
  assert.match(run.stdout,/COPIAS ISOLADAS/);
+});
+
+test('Windows npm.cmd invokes cmd.exe only with allowlisted constant commands',()=>{
+ const ci=resolveCommand('npm',['ci','--ignore-scripts','--no-audit','--no-fund'],'win32');
+ assert.equal(ci.bin,'cmd.exe');
+ assert.deepEqual(ci.argv,['/d','/s','/c','npm ci --ignore-scripts --no-audit --no-fund']);
+ assert.equal(resolveCommand('npm',['test'],'win32').bin,'cmd.exe');
+ assert.equal(resolveCommand('npm',['run','gateway:test'],'win32').bin,'cmd.exe');
+ assert.throws(()=>resolveCommand('npm',['run','deploy'],'win32'),/UNSAFE_NPM_ARGUMENTS/);
+ assert.deepEqual(resolveCommand('npm',['test'],'linux'),{bin:'npm',argv:['test']});
 });
