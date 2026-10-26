@@ -31,6 +31,8 @@ jobs:
         run: |
           command -v php
           php -l tools/export-natal-digest.php
+          php -l scripts/crm-label-render-bridge.php
+          php -l scripts/crm-label-synthetic-fixture.php
           php tools/export-natal-digest.php --help
           # Guard must reject a missing CRM root and never create a JSON output.
           if php tools/export-natal-digest.php --crm-root=/definitely-no-crm --output="$RUNNER_TEMP/digest.json" > "$RUNNER_TEMP/export-out.log" 2>&1; then
