@@ -45,6 +45,14 @@ test('early CRM statuses do not create false operational alerts',()=>{
  assert.equal(result.publication_pending,false);
  assert.equal(result.crm_status_id,4);
 });
+test('incomplete active revision photos are not counted as published or playable',()=>{
+ const row={...gp('partial'),photo_count:25,ready_blobs:15};
+ const result=gameplayOrderStatus(order('order_completed',12),row);
+ assert.equal(result.active_revision_manifest_photo_count,25);
+ assert.equal(result.published_photo_count,0);
+ assert.equal(result.publication_pending,true);
+ assert.equal(result.digital_experience_status,'publication_incomplete');
+});
 test('invalid preparation is an explicit anomaly, never a published photo',()=>{
  const result=gameplayOrderStatus(order('order_completed',12),gp('not_published',{
   state:'invalid',revision_id:'33333333-3333-4333-8333-333333333333',
