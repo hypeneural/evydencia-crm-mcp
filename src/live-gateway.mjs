@@ -235,7 +235,9 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
  }
  const activeTools=tools.filter(t=>t.registered);
  const uiSet=new Set(UI_CRM_TOOL_NAMES);
- const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)).length;
+ // Count only original v0.12 tools; UI and PrintServer are additive.
+ const printSet=new Set(PRINTSERVER_TOOL_NAMES);
+ const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)).length;
  const mcpUiActive=Boolean(directEnabled&&operatorFullCrm&&uiAppsEnabled);
  return {
   service:'evydencia-crm-mcp-live',
@@ -331,6 +333,12 @@ const OUT_CAPACIDADES=z.looseObject({
  tools_total_catalog:z.number().int(),
  tools_active_count:z.number().int(),
  legacy_v012_tools_preserved_count:z.number().int().nullish(),
+ oauth_authorization:z.looseObject({
+  operator_id:z.string(),
+  granted_scopes:z.array(z.string()),
+  print_scope_granted:z.boolean(),
+  print_tool_enabled:z.boolean()
+ }).nullish(),
  tools:z.array(z.looseObject({
   tool:z.string(),
   capability:z.string(),
@@ -707,13 +715,22 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,_meta:mergedMeta},safe(name,fn));
  };
 
- reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({}),OUT_CAPACIDADES,()=>manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
+ reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({}),OUT_CAPACIDADES,()=>({...manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
   enabled:Boolean(zapi),
   oauthStatus:zapi?zapi.auth.getOperatorState(ex.operatorId).oauth_status:null,
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),perfSnapshot:perf?.snapshot()??null}));
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),perfSnapshot:perf?.snapshot()??null}),
+  // Report EFFECTIVE token scopes, not scopes_supported advertised by OAuth metadata.
+  // No access tokens, gateway secrets or upstream abilities in this response.
+  oauth_authorization:{
+   operator_id:String(ex.operatorId),
+   granted_scopes:[...grantedScopes].sort(),
+   print_scope_granted:grantedScopes.has(SCOPE_PRINT_WRITE),
+   print_tool_enabled:Boolean(printCfg.enabled&&ex.canPrint&&grantedScopes.has(SCOPE_PRINT_WRITE))
+  }
+ }));
  reg('crm_status','Estado do CRM','Use quando precisar verificar rapidamente o liveness público do servidor CRM (evydencia.com). NÃO use para diagnóstico de WhatsApp/Z-API.',z.object({}),OUT_GENERIC,()=>crm.status());
  reg('crm_campanha_publica','Pacotes públicos','Use quando precisar consultar o catálogo público de pacotes e preços de uma campanha (padrão "natal"). NÃO use para relatórios de vendas ou estatísticas internas.',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
  reg('crm_horarios_publicos','Horários públicos','Use quando precisar verificar disponibilidade pública de horários de um pacote em janela de até 14 dias (AAAA-MM-DD). ATENÇÃO DE SLUG: informe o slug público da campanha/pacote retornado por crm_campanha_publica (ex.: "entao-e-natal", "ho-ho-ho", "boas-festas"), NUNCA a referência interna de produto ("enatal"). NÃO cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,async({campanha,pacote,inicio,fim})=>{
@@ -955,11 +972,17 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     z.object({order_id:z.number().int().min(1),job_id:z.string().uuid()}),OUT_GENERIC,
     async({order_id,job_id})=>{
      if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canPrint)throw Error('insufficient_operator_write_scope');
-     const r=await direct.detail({order_id,detailLevel:'resumo'});
-     if(r?.order?.order_id!==order_id)throw Error('printserver_order_not_found');
+     // Synthetic homologation job exists only in the broker, never in CRM.
+     // Do not bypass CRM validation for any real customer order.
+     const syntheticTest=(order_id===999999);
+     if(!syntheticTest){
+      const r=await direct.detail({order_id,detailLevel:'resumo'});
+      if(r?.order?.order_id!==order_id)throw Error('printserver_order_not_found');
+     }
      const result=await printer.status(job_id);
      if(result?.job?.order_id!==order_id)throw Error('printserver_order_mismatch');
-     return {source:'PRINTSERVER',order_id,job_id,print_state:result.job.state,printed_physically:false};
+     return {source:'PRINTSERVER',order_id,job_id,print_state:result.job.state,
+      synthetic_test:syntheticTest,printed_physically:false};
     },READ,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
   }
   if(cfg.operatorFullCrm){
