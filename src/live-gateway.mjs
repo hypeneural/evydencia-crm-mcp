@@ -66,7 +66,7 @@ function classifyToolError(code){
  if(code.endsWith('_timeout')){
   return {error_category:'TIMEOUT'};
  }
- if(['crm_contract_invalid','crm_invalid_json','crm_extension_envelope_invalid','legacy_read_contract_invalid','legacy_read_invalid_json','natal_bridge_invalid_json','forensic_bridge_invalid_json'].includes(code)){
+ if(['crm_contract_invalid','crm_invalid_json','crm_extension_envelope_invalid','legacy_read_contract_invalid','legacy_read_invalid_json','natal_bridge_invalid_json','forensic_bridge_invalid_json','gameplay_crm_invalid','gameplay_crm_filter_mismatch','gameplay_crm_pagination_invalid','gameplay_contract_invalid','gameplay_url_invalid'].includes(code)){
   return {error_category:'CONTRACT_MISMATCH'};
  }
  return {error_category:'UNAVAILABLE'};
