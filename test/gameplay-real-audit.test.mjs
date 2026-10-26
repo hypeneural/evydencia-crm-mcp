@@ -18,12 +18,13 @@ function crmStub({drift=false,badPage=false,duplicate=false}={}){
   const status=f['order.status'],id=status==='waiting_product_retrieve'?10:12;
   const key=id===10?'pickup':'complete';calls[key]++;
   const base=objects.filter(o=>o.status_id===id);
-  const orders=duplicate&&id===12?[objects[0]]:base;
+  const orders=drift&&id===12&&calls[key]>1
+   ?[]:duplicate&&id===12?[objects[0]]:base;
   return {
    source:'CRM_FORENSIC_READ_ONLY_BRIDGE',
    pagination:{page:1,returned_count:orders.length,
     total_matching_orders:badPage?orders.length+1:orders.length,has_more:false},
-   orders:drift&&id===12&&calls[key]>1?[]:orders
+   orders
   };
  }};
 }
