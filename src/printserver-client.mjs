@@ -38,6 +38,7 @@ export function printserverClient(cfg,{fetchFn=fetch,timeoutMs=12000}={}){
  }
  return Object.freeze({
   enqueue:data=>send('/v1/jobs','POST',data),
+  agentStatus:()=>send('/v1/agent/status','GET'),
   status:jobId=>{
    if(!/^[0-9a-fA-F-]{36}$/.test(jobId))throw Error('printserver_invalid_job_id');
    return send('/v1/jobs/'+encodeURIComponent(jobId),'GET');
