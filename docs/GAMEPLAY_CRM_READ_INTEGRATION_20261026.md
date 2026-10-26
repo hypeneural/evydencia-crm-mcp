@@ -40,3 +40,11 @@
 7. Desabilitar `EVYD_GAMEPLAY_READ_ENABLED` para rollback do gateway.
 
 **NO GO produção** enquanto a PR Gameplay #43 e suas dependências de publicação não estiverem reconciliadas, o edge público não bloquear a API privada ou o Gameplay permanecer com flags de piloto proibitivas para fotos reais.
+
+## Auditoria adicional — Avell / autorizacao / confiabilidade (26/10/2026)
+- Ferramentas Gameplay so sao registradas quando `EVYD_ENABLE_OPERATOR_FULL_CRM=1`, o CRM interno por operador esta disponivel e o cliente Gameplay de leitura passou nas validacoes. OAuth `crm.read` continua obrigatorio. Teste sintetico de discovery em `test/live-gateway.test.mjs` garante ausencia da ferramenta fora desse modo.
+- Antes de liberar URL por ID/UUID, verificar que o CRM realmente respeitou o filtro do pedido. Paginacao inconsistente ou sem `has_more` booleano e erro de contrato, nao busca completa.
+- Gameplay verifica hash do token canônico mesmo nos lotes; `published_unverified` nao pode ocultar erro de derivacao de token.
+- No Avell Windows, `scripts/antigravity/prepare-avell.mjs` nao chama `npm` como executavel binario no Windows: usa `cmd.exe` apenas para subcomandos npm em allowlist fixa, preservando o Node do sistema. Nunca executar `npm ci` no checkout MCP operacional.
+- Leituras SQLite de auditoria nao escrevem, nao ativam e nao criam sessao. Nao preparar token real/segredo no computador Avell nem executar deploy do Gameplay a partir do computador da impressora.
+- Runbook canonico: `docs/PROMPT_ANTIGRAVITY_FLASH_AVELL_20261026.md` e `docs/AVELL_ANTIGRAVITY_RUNBOOK_20261026.md`.
