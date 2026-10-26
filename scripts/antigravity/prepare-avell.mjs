@@ -9,7 +9,7 @@
  * Requirements: Node >=22, Git with credentials for hypeneural repositories.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +62,15 @@ export function parseArgs(argv) {
   return args;
 }
 function command(bin, argv, { cwd, timeout = 180000, output = false } = {}) {
+  // On Windows, npm is commonly npm.cmd, which is not directly executable
+  // via spawnSync without cmd.exe (Node child_process Windows contract).
+  // Only invoke fixed, developer-authored npm subcommands, never user input.
+  if (process.platform === 'win32' && bin === 'npm') {
+    const allowed = new Set(['ci --ignore-scripts --no-audit --no-fund', 'test', 'run gateway:test']);
+    if (!allowed.has(argv.join(' '))) throw Error('UNSAFE_NPM_ARGUMENTS');
+    return command(process.env.ComSpec || 'cmd.exe',
+      ['/d', '/s', '/c', 'npm ' + argv.join(' ')], { cwd, timeout, output });
+  }
   const result = spawnSync(bin, argv, {
     cwd, windowsHide: true, timeout, encoding: 'utf8',
     stdio: output ? ['ignore', 'pipe', 'pipe'] : 'inherit',
@@ -95,6 +104,13 @@ function assertSafeWorkspace(where) {
 function ensureRepo(target, workspace, args) {
   const dir = join(workspace, target.key);
   const expected = normalizedRepoUrl(target.url);
+  // Refuse junctions/symlinks which could redirect writes into operational trees.
+  if (existsSync(dir)) {
+    const rootReal = realpathSync(workspace);
+    const targetReal = realpathSync(dir);
+    if (!within(rootReal, targetReal) || targetReal === rootReal)
+      throw Error('TARGET_PATH_ESCAPES_ISOLATED_WORKSPACE:' + target.key);
+  }
   if (!existsSync(dir)) {
     const clone = ['clone', '--depth', '1', '--filter=blob:none', '--single-branch',
       '--branch', target.branch];
@@ -196,7 +212,7 @@ export function main(argv = process.argv.slice(2)) {
     gameplay_local_tests: 'not_run_use_github_ci_or_isolated_node24',
     gameplay_pilot_ready: readiness?.pilotReady === true,
     gameplay_customer_data_allowed: readiness?.customerDataAllowed === true,
-    production_deploy_performed: false, printer_or_live_mcp_changed: false,
+    deployment_action_executed: false, operational_services_not_intentionally_touched: true,
   };
   writeFileSync(join(args.workspace, 'antigravity-preflight.json'),
     JSON.stringify(report, null, 2) + '\n', { flag: 'w' });
