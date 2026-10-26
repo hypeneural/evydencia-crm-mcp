@@ -45,6 +45,8 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
+$forensicStartedMs = hrtime(true) / 1_000_000;
+
 // Enforce mathematical read-only safety at the database session and query-listener levels.
 DB::statement('SET SESSION TRANSACTION READ ONLY');
 $conn = DB::connection();
@@ -54,6 +56,23 @@ if (method_exists($conn, 'beforeExecuting')) {
             throw new RuntimeException('forensic_bridge_write_blocked');
         }
     });
+}
+DB::enableQueryLog();
+
+function emitForensicJson(array $data, float $startedAtMs): never
+{
+    $log = DB::getQueryLog();
+    $sqlMs = 0.0;
+    foreach ($log as $entry) {
+        $sqlMs += (float) ($entry['time'] ?? 0.0);
+    }
+    $data['bridge_telemetry'] = [
+        'php_ms' => round((hrtime(true) / 1_000_000) - $startedAtMs, 2),
+        'sql_count' => count($log),
+        'sql_ms' => round($sqlMs, 2),
+    ];
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit(0);
 }
 
 $tz = 'America/Sao_Paulo';
@@ -1026,12 +1045,11 @@ if ($action === 'orders.detail') {
 
     $effDetailLevel = $requestedDetailLevel ?? 'forense';
     $batch = projectOrdersBatch(new Collection([$order]), $fullProfile, $cardSvc, $todayBrt, $effDetailLevel);
-    echo json_encode([
+    emitForensicJson([
         'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
         'detail_level' => $effDetailLevel,
         'order' => $batch[0],
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    exit(0);
+    ], $forensicStartedMs);
 }
 
 if ($action === 'orders.search') {
@@ -1106,7 +1124,7 @@ if ($action === 'orders.search') {
 
     $ordersOut = projectOrdersBatch($rows, $fullProfile, $cardSvc, $todayBrt, $effDetailLevel);
 
-    echo json_encode([
+    emitForensicJson([
         'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
         'scope' => 'PAGINATED_FORENSIC_ORDER_LIST',
         'detail_level' => $effDetailLevel,
@@ -1123,8 +1141,7 @@ if ($action === 'orders.search') {
         ],
         'returned_count' => count($ordersOut),
         'orders' => $ordersOut,
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    exit(0);
+    ], $forensicStartedMs);
 }
 
 function buildCustomerQuery(array $locator): \Illuminate\Database\Eloquent\Builder
@@ -1225,7 +1242,7 @@ if ($action === 'customers.search') {
         return $proj;
     })->values()->all();
 
-    echo json_encode([
+    emitForensicJson([
         'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
         'pagination' => [
             'page' => $page,
@@ -1237,8 +1254,7 @@ if ($action === 'customers.search') {
             'has_more' => ($page * $limit) < $totalMatching,
         ],
         'customers' => $customersOut,
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    exit(0);
+    ], $forensicStartedMs);
 }
 
 if ($action === 'customers.forensic360') {
@@ -1255,17 +1271,16 @@ if ($action === 'customers.forensic360') {
     }
 
     if ($matches->isEmpty()) {
-        echo json_encode([
+        emitForensicJson([
             'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
             'lookup' => ['status' => 'not_found', 'match_count' => 0],
             'customer' => null,
             'orders' => [],
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        exit(0);
+        ], $forensicStartedMs);
     }
 
     if ($matches->count() > 1) {
-        echo json_encode([
+        emitForensicJson([
             'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
             'lookup' => [
                 'status' => 'ambiguous',
@@ -1278,8 +1293,7 @@ if ($action === 'customers.forensic360') {
             ],
             'customer' => null,
             'orders' => [],
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        exit(0);
+        ], $forensicStartedMs);
     }
 
     /** @var Customer $customer */
@@ -1362,7 +1376,7 @@ if ($action === 'customers.forensic360') {
     $perPage = min(20, max(1, (int) ($payload['per_page'] ?? 10)));
     $pagedOrders = array_slice($ordersProjected, ($page - 1) * $perPage, $perPage);
 
-    echo json_encode([
+    emitForensicJson([
         'source' => 'CRM_FORENSIC_READ_ONLY_BRIDGE',
         'lookup' => ['status' => 'matched', 'match_count' => 1],
         'customer' => $custOut,
@@ -1397,8 +1411,7 @@ if ($action === 'customers.forensic360') {
             'has_more' => ($page * $perPage) < count($ordersProjected),
         ],
         'orders' => $pagedOrders,
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    exit(0);
+    ], $forensicStartedMs);
 }
 
 if ($action === 'zapi_connection_history') {
@@ -1502,7 +1515,7 @@ if ($action === 'zapi_connection_history') {
         }
     }
 
-    echo json_encode([
+    emitForensicJson([
         'available' => true,
         'source' => 'CRM_PROVIDER_WEBHOOK_EVENTS_READ_ONLY',
         'timezone' => $tz,
@@ -1514,8 +1527,7 @@ if ($action === 'zapi_connection_history') {
         'last_disconnected' => $lastDisconnected,
         'integration_account' => $integrationAccountSummary,
         'events' => array_slice($matched, 0, $limit),
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    exit(0);
+    ], $forensicStartedMs);
 }
 
 fwrite(STDERR, json_encode(['error' => 'unknown_forensic_action']) . "\n");

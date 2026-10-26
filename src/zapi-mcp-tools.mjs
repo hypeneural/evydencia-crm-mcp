@@ -17,7 +17,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   access:'write_external',
   aliases:['send_text','send_message','send_text_message'],
   title:'Enviar mensagem de texto no WhatsApp (Z-API)',
-  description:'Envia mensagem de texto pelo WhatsApp através da instância Z-API vinculada ao operador autenticado. Quando o usuário informar nome de cliente sem telefone, consulte antes o CRM (crm_clientes_buscar ou crm_cliente_resumo) sem inventar número; se houver homônimos/ambiguidade, confirme antes do envio. Resposta aceita pela Z-API significa submissão ao provedor (não confirmação de entrega/leitura); em timeout ou falha ambígua de rede, não reenvie automaticamente.',
+  description:'Use quando o operador pedir explicitamente o envio imediato de uma mensagem de texto avulsa no WhatsApp pela instância Z-API vinculada. NÃO use quando a pergunta for consulta de vendas, caixa, pedidos, clientes ou diagnóstico, nem para disparar proposta comercial oficial de Natal 2026 (use crm_previa_proposta_natal / crm_enviar_proposta_natal). Quando o usuário informar nome sem telefone, consulte antes o CRM (crm_clientes_buscar ou crm_cliente_resumo) sem inventar número; se houver homônimos ou qualquer ambiguidade, pare e confirme antes do envio. Resposta aceita significa submissão ao provedor (não entrega/leitura); em timeout ou falha ambígua, nunca reenvie automaticamente.',
   annotations:WRITE_MESSAGE,
   mediaKind:null
  },
@@ -27,7 +27,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   access:'write_external',
   aliases:['send_image','send_photo','send_image_message'],
   title:'Enviar imagem por URL HTTPS no WhatsApp (Z-API)',
-  description:'Envia imagem por URL HTTPS acessível (preservando legenda opcional) pelo WhatsApp na instância Z-API vinculada ao operador. Exige URL HTTPS acessível pelo servidor Z-API; não envie Base64 grande em JSON. Quando o destinatário for informado por nome, resolva o telefone antes no CRM.',
+  description:'Use quando o operador pedir explicitamente o envio de imagem por URL HTTPS pública acessível no WhatsApp (com legenda opcional). NÃO use com Base64 inline, URLs privadas/localhost ou sem destinatário confirmado. Se apenas o nome for informado, resolva o telefone antes no CRM e confirme em caso de homônimos.',
   annotations:WRITE_MESSAGE,
   mediaKind:'image'
  },
@@ -37,7 +37,7 @@ export const ZAPI_OFFICIAL_SPECS=Object.freeze([
   access:'write_external',
   aliases:['send_video','send_video_message'],
   title:'Enviar vídeo por URL HTTPS no WhatsApp (Z-API)',
-  description:'Envia vídeo por URL HTTPS acessível (preservando legenda opcional) pelo WhatsApp na instância Z-API vinculada ao operador. Exige URL HTTPS acessível pelo servidor Z-API; não envie Base64 grande em JSON. Quando o destinatário for informado por nome, resolva o telefone antes no CRM.',
+  description:'Use quando o operador pedir explicitamente o envio de vídeo por URL HTTPS pública acessível no WhatsApp (com legenda opcional). NÃO use com Base64 inline, URLs privadas/localhost ou sem destinatário confirmado. Se apenas o nome for informado, resolva o telefone antes no CRM e confirme em caso de homônimos.',
   annotations:WRITE_MESSAGE,
   mediaKind:'video'
  },

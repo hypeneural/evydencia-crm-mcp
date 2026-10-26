@@ -1,5 +1,9 @@
 # Evydência CRM MCP — instruções Antigravity Flash
 
+## Prioridade para a PR #8 — reconciliar v0.12 LIVE (25/10/2026)
+Se a tarefa envolve precisão, velocidade, UI do ChatGPT ou KPIs, LEIA PRIMEIRO `docs/AUDITORIA_OPENAI_CHATGPT_MCP_V012_20261025.md` e `docs/ANTIGRAVITY_CHATGPT_MCP_PERFORMANCE_20261025.md`.
+A main LIVE evoluiu para v0.12.0 (29 ferramentas, commit 9896fc5). Esta branch nasceu em v0.10.1: ANTES DE MERGE/DEPLOY, integrar main com cuidado, preservar Z-API OAuth/diagnósticos/tool registry e executar CI. Nunca sobrescrever com `src/live-gateway.mjs` antigo. `perfil_resposta=kpi_minimal` é opt-in; preservar resposta original por padrão. Nada de dados reais no Git ou de envios de WhatsApp em smoke. Não declarar que HTTP/WebP validado = avatar renderizado no ChatGPT.
+
 ## Começo rápido
 1. Confira `git status --short`; preserve alterações locais.
 2. Abra `docs/ONE_COMMAND.md`.

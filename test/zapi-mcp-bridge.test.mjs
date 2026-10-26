@@ -15,6 +15,7 @@ import {
  DIRECT_CRM_TOOL_NAMES,
  FORENSIC_CRM_TOOL_NAMES,
  PROPOSAL_CRM_TOOL_NAMES,
+ UI_CRM_TOOL_NAMES,
  ZAPI_INSTANCE_TOOL_NAMES
 } from '../src/live-gateway.mjs';
 import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME} from '../src/zapi-mcp-tools.mjs';
@@ -575,9 +576,9 @@ test('1. Pre-OAuth state (authorization_required), paginated discovery of 9 offi
   const op7Tokens=await connectCrmOperator(g,'fake-crm-sanctum-op7-secret');
   const c7=await openMcpClient(g,op7Tokens.access_token);
   try{
-   // Before Z-API OAuth: all 17 CRM tools + zapi_status_conexao + 2 zapi_instancia_* tools, zero faked Z-API MCP schemas.
+   // Before Z-API OAuth: all 17 CRM tools + 1 decoupled UI card tool + zapi_status_conexao + 2 zapi_instancia_* tools, zero faked Z-API MCP schemas.
    const preList=await c7.listTools();
-   const expectedPre=[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME,...ZAPI_INSTANCE_TOOL_NAMES].sort();
+   const expectedPre=[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME,...ZAPI_INSTANCE_TOOL_NAMES].sort();
    assert.deepEqual(preList.tools.map(t=>t.name).sort(),expectedPre);
 
    const statusPre=await c7.callTool({name:ZAPI_STATUS_TOOL_NAME,arguments:{}});
@@ -601,11 +602,11 @@ test('1. Pre-OAuth state (authorization_required), paginated discovery of 9 offi
    const rawDisk=readFileSync(storePath,'utf8');
    assert.ok(!rawDisk.includes('INST_OP7')&&!rawDisk.includes('zapi-at-')&&!rawDisk.includes('zapi-rt-'));
 
-   // Refresh client tool list: 17 CRM + zapi_status_conexao + 2 zapi_instancia_* + 9 official Z-API tools = 29 tools!
+   // Refresh client tool list: all 29 legacy v0.12 tools preserved + 1 decoupled MCP App UI tool = 30 active tools!
    const postList=await c7.listTools(undefined,{cacheMode:'refresh'});
    const names=postList.tools.map(t=>t.name).sort();
    assert.deepEqual(names,[...expectedPre,...ZAPI_GATEWAY_TOOL_NAMES].sort());
-   assert.equal(names.length,29);
+   assert.equal(names.length,30);
    assert.ok(!names.some(n=>n.includes('webhook')||n.includes('dangerous')),'10th unapproved upstream tool was NOT silently exposed');
 
    // Verify exact upstream inputSchema preservation on zapi_send_text and zapi_send_image.
@@ -616,12 +617,13 @@ test('1. Pre-OAuth state (authorization_required), paginated discovery of 9 offi
    const groupMetaTool=postList.tools.find(t=>t.name==='zapi_group_metadata');
    assert.equal(groupMetaTool.annotations.readOnlyHint,true);
 
-   // Existing CRM tools continue working identically.
+   // Existing CRM tools continue working identically, with all 29 v0.12 tools preserved.
    const crmCap=await c7.callTool({name:'crm_capacidades',arguments:{}});
    assert.equal(crmCap.structuredContent.zapi_mcp_enabled,true);
    assert.equal(crmCap.structuredContent.zapi_oauth_status,'authorized');
    assert.equal(crmCap.structuredContent.zapi_discovered_tools_count,9);
-   assert.equal(crmCap.structuredContent.tools_active_count,29);
+   assert.equal(crmCap.structuredContent.legacy_v012_tools_preserved_count,29);
+   assert.equal(crmCap.structuredContent.tools_active_count,30);
 
    const crmOrders=await c7.callTool({name:'crm_pedidos_buscar',arguments:{}});
    assert.equal(crmOrders.structuredContent.orders[0].order_id,7001);

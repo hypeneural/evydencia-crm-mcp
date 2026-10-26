@@ -41,6 +41,116 @@ const MISSING_FIELD_LABELS={
 const ADULT_KINSHIPS=new Set(['mae','pai','vo','avo','esposo (a)','marido','esposa','titular']);
 
 const fail=x=>{throw Error('legacy_read_'+x)};
+const SAFE_BRIDGE_CODE=/^[a-z0-9_]{3,64}$/;
+
+export function classifyBridgeExecError(err,kind='natal_bridge'){
+ if(typeof err?.message==='string'&&err.message.startsWith('legacy_read_'))return err.message.slice('legacy_read_'.length);
+ if(err?.code==='ERR_CHILD_PROCESS_STDIO_MAXBUFFER'||/maxBuffer/i.test(String(err?.message||'')))return `${kind}_max_buffer`;
+ if(err?.killed===true||err?.signal==='SIGTERM'||err?.signal==='SIGKILL'||err?.code==='ETIMEDOUT'||/timed?\s*out/i.test(String(err?.message||'')))return `${kind}_timeout`;
+ if(err instanceof SyntaxError||err?.isInvalidJson===true)return `${kind}_invalid_json`;
+ if(Number.isInteger(err?.code)||typeof err?.status==='number')return `${kind}_php_exit`;
+ return kind==='natal_bridge'?'natal_stats_unavailable':'forensic_bridge_unavailable';
+}
+
+export function createBridgeSingleFlightCache({ttlMs=15000,maxEntries=128,now=()=>Date.now()}={}){
+ const cache=new Map();
+ const inFlight=new Map();
+ const cloneVal=v=>{try{return structuredClone(v)}catch{return JSON.parse(JSON.stringify(v))}};
+ const withMeta=(val,{cacheHit,shared,bytes})=>{
+  const out=cloneVal(val);
+  if(out&&typeof out==='object'&&!Array.isArray(out)){
+   out.bridge_telemetry={
+    ...(out.bridge_telemetry&&typeof out.bridge_telemetry==='object'?out.bridge_telemetry:{}),
+    cache_hit:cacheHit,
+    single_flight_shared:shared,
+    response_bytes:bytes
+   };
+  }
+  return out;
+ };
+ return {
+  clear(){cache.clear();inFlight.clear()},
+  stats(){return {cached_entries:cache.size,in_flight:inFlight.size,ttl_ms:ttlMs}},
+  async execute(key,runner,{effectiveTtlMs=ttlMs}={}){
+   const ttl=Math.max(0,Number(effectiveTtlMs)||0);
+   const ts=now();
+   if(ttl>0){
+    const hit=cache.get(key);
+    if(hit){
+     if(hit.expiresAt>ts){
+      cache.delete(key);cache.set(key,hit);
+      return withMeta(hit.value,{cacheHit:true,shared:false,bytes:hit.bytes});
+     }
+     cache.delete(key);
+    }
+   }
+   const existing=inFlight.get(key);
+   if(existing){
+    const {value,bytes}=await existing;
+    return withMeta(value,{cacheHit:false,shared:true,bytes});
+   }
+   const p=(async()=>{
+    const rawResult=await runner();
+    const bytes=Buffer.byteLength(JSON.stringify(rawResult??null),'utf8');
+    const cleanVal=cloneVal(rawResult);
+    if(ttl>0){
+     if(cache.size>=maxEntries){
+      const oldest=cache.keys().next().value;
+      if(oldest!==undefined)cache.delete(oldest);
+     }
+     cache.set(key,{value:cleanVal,bytes,expiresAt:now()+ttl});
+    }
+    return {value:cleanVal,bytes};
+   })();
+   inFlight.set(key,p);
+   try{
+    const {value,bytes}=await p;
+    return withMeta(value,{cacheHit:false,shared:false,bytes});
+   }finally{
+    if(inFlight.get(key)===p)inFlight.delete(key);
+   }
+  }
+ };
+}
+
+const SHARED_BRIDGE_READ_CACHE=createBridgeSingleFlightCache({ttlMs:15000,maxEntries:128});
+
+export function buildAvatarRenderContract(avRaw){
+ const av=value(avRaw);
+ const hasAvatar=Boolean(av.has_avatar&&av.url);
+ const status=typeof av.asset_check_status==='string'?av.asset_check_status:'not_checked';
+ const initials=typeof av.initials==='string'&&av.initials?av.initials:'CL';
+ if(!hasAvatar){
+  return {
+   state:'initials_fallback',
+   chat_rendered_confirmed:false,
+   fallback_initials:initials,
+   semantics_note:'Cliente sem foto cadastrada; exibir iniciais como estado normal (nao e erro).'
+  };
+ }
+ if(status==='validated'){
+  return {
+   state:'url_validated_pending_widget_load',
+   chat_rendered_confirmed:false,
+   fallback_initials:initials,
+   semantics_note:'HTTP 200/WebP validou a origem no servidor, mas NAO comprova exibicao no ChatGPT; somente onload do widget MCP App confirma image_loaded (onerror exibe fallback de iniciais).'
+  };
+ }
+ if(status==='unavailable'||status==='restricted'){
+  return {
+   state:'image_blocked_or_error',
+   chat_rendered_confirmed:false,
+   fallback_initials:initials,
+   semantics_note:'URL cadastrada no CRM, porem inacessivel ou restrita na sondagem segura; exibir fallback de iniciais com aviso.'
+  };
+ }
+ return {
+  state:'url_present_not_probed',
+  chat_rendered_confirmed:false,
+  fallback_initials:initials,
+  semantics_note:'URL presente no cadastro e ainda nao sondada via HTTP; usar widget MCP App ou iniciais em caso de bloqueio.'
+ };
+}
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(x);
 const name=x=>{if(typeof x!=='string'||x.trim().length<2||x.trim().length>100||/[\x00-\x1f<>]/.test(x))fail('invalid_name');return x.trim()};
 const money=x=>{const n=typeof x==='number'?x:(typeof x==='string'&&x.trim()!==''?Number(x):NaN);return Number.isFinite(n)?Math.round(n*100):null};
@@ -109,8 +219,9 @@ export function humanAgeAt(birthYmd,refYmd){
  */
 export async function probeCustomerAvatarAsset(avatar,{fetchFn=fetch,crmBaseUrl='https://evydencia.com',timeoutMs=2500}={}){
  const av=value(avatar);
+ const finalize=obj=>({...obj,render_contract:buildAvatarRenderContract(obj)});
  if(!av.has_avatar||!av.url){
-  return {...av,has_avatar:false,url:null,asset_accessible:false,asset_check_status:'not_checked'};
+  return finalize({...av,has_avatar:false,url:null,asset_accessible:false,asset_check_status:'not_checked'});
  }
  const checkedAt=new Date().toISOString();
  let targetUrl,allowedBase;
@@ -118,24 +229,24 @@ export async function probeCustomerAvatarAsset(avatar,{fetchFn=fetch,crmBaseUrl=
   targetUrl=new URL(String(av.url));
   allowedBase=new URL(baseURL(crmBaseUrl));
  }catch{
-  return {...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{reason:'invalid_avatar_url',checked_at:checkedAt}};
+  return finalize({...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{reason:'invalid_avatar_url',checked_at:checkedAt}});
  }
  if(targetUrl.username||targetUrl.password){
-  return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'url_credentials_blocked',checked_at:checkedAt}};
+  return finalize({...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'url_credentials_blocked',checked_at:checkedAt}});
  }
  const baseIsLoopback=allowedBase.hostname==='127.0.0.1'||allowedBase.hostname==='localhost';
  // In offline local unit tests (CRM_BASE_URL on 127.0.0.1), never open external internet sockets to evydencia.com.
  if(baseIsLoopback&&targetUrl.origin==='https://evydencia.com'&&targetUrl.pathname.startsWith('/storage/')&&fetchFn===fetch){
-  return {...av,asset_accessible:null,asset_check_status:'not_checked'};
+  return finalize({...av,asset_accessible:null,asset_check_status:'not_checked'});
  }
  if(targetUrl.origin!==allowedBase.origin){
-  return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'origin_not_allowlisted',checked_at:checkedAt}};
+  return finalize({...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'origin_not_allowlisted',checked_at:checkedAt}});
  }
  if(!baseIsLoopback&&targetUrl.protocol!=='https:'){
-  return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'https_required',checked_at:checkedAt}};
+  return finalize({...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'https_required',checked_at:checkedAt}});
  }
  if(!targetUrl.pathname.startsWith('/storage/')||targetUrl.pathname.includes('..')){
-  return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'storage_path_required',checked_at:checkedAt}};
+  return finalize({...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{reason:'storage_path_required',checked_at:checkedAt}});
  }
 
  const controller=new AbortController();
@@ -148,13 +259,13 @@ export async function probeCustomerAvatarAsset(avatar,{fetchFn=fetch,crmBaseUrl=
    headers:{Accept:'image/webp,image/*;q=0.8'}
   });
   if(headRes.status>=300&&headRes.status<400){
-   return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:headRes.status,reason:'redirect_blocked',checked_at:checkedAt}};
+   return finalize({...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:headRes.status,reason:'redirect_blocked',checked_at:checkedAt}});
   }
   if(headRes.status===401||headRes.status===403){
-   return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:headRes.status,reason:'http_auth_restricted',checked_at:checkedAt}};
+   return finalize({...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:headRes.status,reason:'http_auth_restricted',checked_at:checkedAt}});
   }
   if(!headRes.ok){
-   return {...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{http_status:headRes.status,reason:'http_not_ok',checked_at:checkedAt}};
+   return finalize({...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{http_status:headRes.status,reason:'http_not_ok',checked_at:checkedAt}});
   }
 
   const getRes=await fetchFn(targetUrl,{
@@ -164,13 +275,13 @@ export async function probeCustomerAvatarAsset(avatar,{fetchFn=fetch,crmBaseUrl=
    headers:{Range:'bytes=0-31',Accept:'image/webp,image/*;q=0.8'}
   });
   if(getRes.status>=300&&getRes.status<400){
-   return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:getRes.status,reason:'redirect_blocked',checked_at:checkedAt}};
+   return finalize({...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:getRes.status,reason:'redirect_blocked',checked_at:checkedAt}});
   }
   if(getRes.status===401||getRes.status===403){
-   return {...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:getRes.status,reason:'http_auth_restricted',checked_at:checkedAt}};
+   return finalize({...av,asset_accessible:false,asset_check_status:'restricted',asset_probe:{http_status:getRes.status,reason:'http_auth_restricted',checked_at:checkedAt}});
   }
   if(!getRes.ok&&getRes.status!==206){
-   return {...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{http_status:getRes.status,reason:'range_get_failed',checked_at:checkedAt}};
+   return finalize({...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{http_status:getRes.status,reason:'range_get_failed',checked_at:checkedAt}});
   }
 
   let headBytes=Buffer.alloc(0);
@@ -207,7 +318,7 @@ export async function probeCustomerAvatarAsset(avatar,{fetchFn=fetch,crmBaseUrl=
   const validImage=(isWebp||isPng||isJpeg)&&ct.startsWith('image/')&&contentLengthBytes>0;
 
   if(!validImage){
-   return {
+   return finalize({
     ...av,
     asset_accessible:false,
     asset_check_status:'unavailable',
@@ -220,10 +331,10 @@ export async function probeCustomerAvatarAsset(avatar,{fetchFn=fetch,crmBaseUrl=
      reason:'invalid_image_signature_or_mime',
      checked_at:checkedAt
     }
-   };
+   });
   }
 
-  return {
+  return finalize({
    ...av,
    has_avatar:true,
    asset_accessible:true,
@@ -237,9 +348,9 @@ export async function probeCustomerAvatarAsset(avatar,{fetchFn=fetch,crmBaseUrl=
     image_magic_format:isWebp?'webp':(isPng?'png':'jpeg'),
     checked_at:checkedAt
    }
-  };
+  });
  }catch{
-  return {...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{reason:'network_or_timeout',checked_at:checkedAt}};
+  return finalize({...av,asset_accessible:false,asset_check_status:'unavailable',asset_probe:{reason:'network_or_timeout',checked_at:checkedAt}});
  }finally{
   clearTimeout(timer);
  }
@@ -306,7 +417,13 @@ export function forensicCustomerProjection(raw,{fullProfile=false}={}){
    initials,
    asset_accessible:typeof avatarObj.asset_accessible==='boolean'?avatarObj.asset_accessible:(hasAvatar?null:false),
    asset_check_status:typeof avatarObj.asset_check_status==='string'?avatarObj.asset_check_status:'not_checked',
-   ...(avatarObj.asset_probe?{asset_probe:avatarObj.asset_probe}:{})
+   ...(avatarObj.asset_probe?{asset_probe:avatarObj.asset_probe}:{}),
+   render_contract:buildAvatarRenderContract({
+    has_avatar:hasAvatar,
+    url:hasAvatar?avatarUrl:null,
+    initials,
+    asset_check_status:typeof avatarObj.asset_check_status==='string'?avatarObj.asset_check_status:'not_checked'
+   })
   },
   registration_completeness:completeness,
   ...(Number.isInteger(c.orders_count)?{orders_count:c.orders_count,lifecycle_stage:c.lifecycle_stage||(c.orders_count===0?'lead':c.orders_count===1?'first_time':'recurring')}:{})
@@ -814,34 +931,46 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
   };
  };
 
- async function runForensicBridge(payload){
+ const readCacheTtlMs=()=>{
+  const raw=process.env.EVYD_READ_CACHE_TTL_MS;
+  if(raw!==undefined&&raw!=='')return Math.max(0,Math.min(120000,Number(raw)||0));
+  return 15000;
+ };
+
+ async function execPhpJsonBridge(scriptPath,payload,{bridgeTimeoutMs,kind}){
   const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
+  const cacheKey=`${kind}|${base}|${crmAppPath}|fp:${fullProfile?1:0}|${JSON.stringify(payload)}`;
   try{
-   const {stdout}=await execFileAsync('php',[FORENSIC_BRIDGE_SCRIPT,JSON.stringify(payload)],{
-    timeout:Math.max(timeoutMs,15000),maxBuffer:4194304,env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
-   });
-   const parsed=JSON.parse(stdout);
-   if(parsed?.error)fail(String(parsed.error));
-   return parsed;
+   return await SHARED_BRIDGE_READ_CACHE.execute(cacheKey,async()=>{
+    const {stdout}=await execFileAsync('php',[scriptPath,JSON.stringify(payload)],{
+     timeout:bridgeTimeoutMs,maxBuffer:4194304,env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
+    });
+    let parsed;
+    try{parsed=JSON.parse(stdout)}catch{const je=new SyntaxError('invalid_bridge_json');je.isInvalidJson=true;throw je}
+    if(parsed?.error){
+     const safeErr=String(parsed.error);
+     fail(SAFE_BRIDGE_CODE.test(safeErr)?safeErr:`${kind}_contract_error`);
+    }
+    return parsed;
+   },{effectiveTtlMs:readCacheTtlMs()});
   }catch(e){
    if(typeof e?.message==='string'&&e.message.startsWith('legacy_read_'))throw e;
-   fail('forensic_bridge_unavailable');
+   fail(classifyBridgeExecError(e,kind));
   }
  }
 
+ async function runForensicBridge(payload){
+  return await execPhpJsonBridge(FORENSIC_BRIDGE_SCRIPT,payload,{
+   bridgeTimeoutMs:Math.max(timeoutMs,15000),
+   kind:'forensic_bridge'
+  });
+ }
+
  async function runNatalBridge(payload){
-  const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
-  try{
-   const {stdout}=await execFileAsync('php',[BRIDGE_SCRIPT,JSON.stringify(payload)],{
-    timeout:Math.max(timeoutMs,18000),maxBuffer:4194304,env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
-   });
-   const parsed=JSON.parse(stdout);
-   if(parsed?.error)fail(String(parsed.error));
-   return parsed;
-  }catch(e){
-   if(typeof e?.message==='string'&&e.message.startsWith('legacy_read_'))throw e;
-   fail('natal_stats_unavailable');
-  }
+  return await execPhpJsonBridge(BRIDGE_SCRIPT,payload,{
+   bridgeTimeoutMs:Math.max(timeoutMs,18000),
+   kind:'natal_bridge'
+  });
  }
 
  async function get(path,params){
@@ -1049,7 +1178,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    }
    return res;
   },
-  async natalStatistics({cutoffMmDd,secoes,nivelDetalhe='resumo',ano,pagina=1,limite=15}={}){
+  async natalStatistics({cutoffMmDd,secoes,nivelDetalhe='resumo',perfilResposta='default',ano,pagina=1,limite=15}={}){
    let mmdd='';
    if(cutoffMmDd!==undefined&&cutoffMmDd!==null&&cutoffMmDd!==''){
     if(typeof cutoffMmDd!=='string'||!/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(cutoffMmDd))fail('invalid_mmdd');
@@ -1057,6 +1186,9 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    }
    const sections=Array.isArray(secoes)?secoes.filter(s=>typeof s==='string'):[];
    const detail=['resumo','padrao','completo'].includes(nivelDetalhe)?nivelDetalhe:'resumo';
+   const profile=['default','kpi_minimal'].includes(perfilResposta)?perfilResposta:'default';
+   if(profile==='kpi_minimal'&&(mmdd!==''||detail==='completo'||sections.some(x=>x!=='resumo')||(ano!==undefined&&ano!==2026)))fail('invalid_natal_kpi_scope');
+   if(profile==='kpi_minimal'&&!canUseNatalBridge())fail('natal_kpi_requires_readonly_bridge');
    const page=Math.min(50,Math.max(1,Number(pagina)||1));
    const limit=Math.min(50,Math.max(1,Number(limite)||15));
    if(canUseNatalBridge()){
@@ -1065,6 +1197,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      cutoff_mmdd:mmdd,
      year:Number.isInteger(ano)?ano:null,
      detail_level:detail,
+     response_profile:profile,
      sections,
      page,
      limit,

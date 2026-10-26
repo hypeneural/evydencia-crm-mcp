@@ -12,6 +12,7 @@ import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
+import {MCP_UI_CARD_RESOURCE_URI,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
 import {createZapiBridge} from './zapi-mcp-client.mjs';
@@ -34,15 +35,84 @@ export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
 export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
+export {UI_CRM_TOOL_NAMES};
 export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GATEWAY_TOOL_NAMES]);
 export {ZAPI_INSTANCE_TOOL_NAMES};
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
 const SAFE_ERR=/^(crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+)$/;
 
-const INSTRUCTIONS='EVYDÊNCIA CRM LIVE (v0.12 Forense, Analítico, Z-API MCP & Diagnóstico de Instâncias) — Conectado diretamente ao CRM oficial (evydencia.com), ao MCP oficial da Z-API (mcp.z-api.io) e ao diagnóstico REST somente-leitura das instâncias Z-API (api.z-api.io). Regras obrigatórias de precisão, economia de contexto e auditoria: (1) Natal 2026 e Histórico 2021–2026: use crm_estatisticas_natal. Por padrão (nivel_detalhe="resumo"), ela retorna o cockpit enxuto com KPIs 2026, metas (goal_cockpit: R$ 300 mil base pacotes vs R$ 400 mil ampliada / 500 contratos), comparativo acumulado até o corte (ytd_comparison_at_cutoff), conciliação histórica (historical_reconciliation_invariants), separação estrita entre sessões confirmadas/realizadas (confirmed_realized_sessions) e sessões passadas aguardando baixa (past_scheduled_pending_confirmation), próxima sessão (sessions_schedule_2026.next_session) e recompra 2025->2026. Solicite secoes sob demanda conforme a pergunta: simulador_previsao, financeiro_caixa, clientes_recompra_campanhas, agenda_demanda, pacotes_produtos_bonus ou operacional_listas (paginada). (2) Demografia, Bebês, Filhos, Parentesco e Qualidade Cadastral de Participantes: use SEMPRE crm_natal_participantes_estatisticas (população reconciliada de crianças, bebês <3 anos e subfaixas em meses, adultos, pets e sem data de nascimento; famílias com 0/1/2/3+ filhos; pacote x idade infantil; comparativo 2024–2026; anomalias cadastrais). Só ative incluir_lista_participantes=true se o usuário pedir listagem nominal. (3) Links canônicos: cite crm_order_url (https://evydencia.com/gestao/pedidos/$UUID/detalhes) e crm_customer_url (https://evydencia.com/gestao/clientes/$UUID/consultar). (4) Auditoria financeira: consulte installments[] e payment_summary; diferencie method_name (ex.: "Permuta", "Pix - Pagar.me") de method_category_label (ex.: "Dinheiro", "Pix"), use montantes canônicos em *_cents / *_reais e verifique status_history[]. (5) Produtos, bônus R$ 0, agenda e personalização: verifique items[].bonus_classification (proven===true vs origin==="unknown"), schedule_details (Google Calendar e histórico de remarcações) e personalization (quando available===false, declare indisponível em vez de assumir zero). (6) Participantes e bloqueio de edição: informe participants_registration (status_label, customer_access_label, edit_lock_reason, temporary_access_label, kinship_age_anomalies), diferencie age_at_session de age_today e verifique participants_cross_order_audit no Cliente 360 sem sugerir sobrescrita automática. (7) Avatar validado e leads: verifique avatar.has_avatar, avatar.asset_accessible e avatar.asset_check_status (validated | unavailable | restricted | not_checked; ausência de foto usa initials com url: null e não é erro); para clientes com 0 pedidos use crm_clientes_buscar, crm_cliente_resumo ou crm_cliente_360. (8) Proposta Natal 2026: gere prévia com crm_previa_proposta_natal e exija confirmação explícita do operador (confirmado_pelo_operador: true) antes de crm_enviar_proposta_natal. (9) Diagnóstico e Histórico de Instâncias Z-API (somente leitura): para "A Z-API está online/conectada?" use zapi_instancia_diagnostico(escopo="status_rapido"); para número conectado, nome/foto de perfil ou aparelho use zapi_instancia_diagnostico(escopo="perfil_dispositivo"); para vencimento da assinatura, pagamento, webhooks ou configurações use zapi_instancia_diagnostico(escopo="assinatura_configuracoes", nivel_detalhe="completo"); para prontidão geral use zapi_instancia_diagnostico(escopo="completo"); para última conexão, última desconexão e motivo da queda use zapi_instancia_historico (diferenciando occurred_at_brt do momment da Z-API, webhook_received_at_brt e poll_detected_at_brt). Nunca trate connection_state="unknown" como desconectada e exiba warnings quando presentes. (10) Envio e Grupos WhatsApp Oficial Z-API MCP: use zapi_status_conexao para estado OAuth/link de vínculo e zapi_send_text, zapi_send_image, zapi_send_video e zapi_group_* para operações na instância vinculada; resolva telefones pelo CRM quando apenas o nome for informado, confirme homônimos e nunca reenvie automaticamente após timeout ou falha ambígua.';
+const INSTRUCTIONS='EVYDÊNCIA CRM LIVE (v0.12 Forense, Analítico, MCP UI & Z-API) — ROTEAMENTO CRÍTICO: (1) Vendas/recebidos/saldo Natal 2026 simples -> crm_estatisticas_natal(perfil_resposta="kpi_minimal"); NUNCA chame zapi_send_* em consultas de vendas/caixa/CRM. (2) orders.created_at mede criação do pedido (NÃO horário pago nem ROAS de anúncios). (3) Avatar HTTP 200 ("validated") prova asset no servidor, NÃO foto exibida (só onload do card visual confirma image_loaded). Regras completas: (4) Natal 2026 e Histórico 2021–2026: crm_estatisticas_natal(nivel_detalhe="resumo") traz KPIs, metas (R$ 300k base vs R$ 400k ampliada / 500 contratos), corte YTD, invariantes históricos, sessões confirmadas vs passadas aguardando baixa e loaded_sections; use secoes sob demanda (simulador_previsao, financeiro_caixa com reconciliação oi.total vs oi.payment_total e Permuta non_cash_barter vs Stone Débito debit_card, clientes_recompra_campanhas, agenda_demanda, pacotes_produtos_bonus, operacional_listas). (5) Demografia/Bebês/Famílias: use crm_natal_participantes_estatisticas (em ano="todos", a população detalhada é 2026 e o histórico cobre 2024–2026; incluir_lista_participantes=false salvo pedido nominal). (6) Links canônicos: cite crm_order_url (/gestao/pedidos/$UUID/detalhes) e crm_customer_url (/gestao/clientes/$UUID/consultar). (7) Card Visual ChatGPT Web (MCP App): use crm_renderizar_card_visual APENAS quando o operador pedir card/ficha visual de pedido ou cliente 360; demais consultas permanecem em JSON puro rápido. (8) Proposta Natal 2026: gere prévia em crm_previa_proposta_natal e exija confirmado_pelo_operador=true em crm_enviar_proposta_natal. (9) Z-API Diagnóstico/Histórico (leitura): use zapi_instancia_diagnostico (escopo="status_rapido" | "perfil_dispositivo" | "assinatura_configuracoes" | "completo") e zapi_instancia_historico (occurred_at_brt vs poll_detected_at_brt; nunca trate connection_state="unknown" como desconectada). (10) Z-API MCP Oficial: use zapi_status_conexao e zapi_send_*/zapi_group_* somente mediante pedido explícito de WhatsApp, resolvendo nomes no CRM antes, confirmando homônimos e sem reenvio automático em falha ambígua.';
 
 export function defaultLog(entry){process.stderr.write(JSON.stringify({ts:new Date().toISOString(),...entry})+'\n')}
+
+function calcPercentile(sortedNums,q){
+ if(!sortedNums.length)return null;
+ const idx=Math.min(sortedNums.length-1,Math.max(0,Math.floor(q*sortedNums.length)));
+ return +sortedNums[idx].toFixed(2);
+}
+
+export function createGatewayPerfTracker(maxSamples=400){
+ const samples=[];
+ const byTool=new Map();
+ let callsTotal=0,errorsTotal=0,cacheHitsTotal=0,cacheMissesTotal=0,singleFlightSharedTotal=0;
+ return {
+  record({tool,ok,gatewayMs=0,phpMs=null,sqlCount=null,sqlMs=null,cacheHit=null,singleFlightShared=false,responseBytes=0}){
+   callsTotal++;
+   if(!ok)errorsTotal++;
+   if(cacheHit===true)cacheHitsTotal++;
+   else if(cacheHit===false)cacheMissesTotal++;
+   if(singleFlightShared)singleFlightSharedTotal++;
+   const sample={
+    gatewayMs:Number(gatewayMs)||0,
+    phpMs:typeof phpMs==='number'&&Number.isFinite(phpMs)?phpMs:null,
+    sqlCount:typeof sqlCount==='number'&&Number.isFinite(sqlCount)?sqlCount:null,
+    sqlMs:typeof sqlMs==='number'&&Number.isFinite(sqlMs)?sqlMs:null,
+    responseBytes:Number(responseBytes)||0
+   };
+   if(samples.length>=maxSamples)samples.shift();
+   samples.push(sample);
+   if(tool){
+    const prev=byTool.get(tool)||{calls:0,errors:0,cache_hits:0,cache_misses:0,last_gateway_ms:null,last_php_ms:null,last_sql_count:null,last_sql_ms:null,last_response_bytes:null};
+    prev.calls++;
+    if(!ok)prev.errors++;
+    if(cacheHit===true)prev.cache_hits++;
+    else if(cacheHit===false)prev.cache_misses++;
+    prev.last_gateway_ms=+sample.gatewayMs.toFixed(2);
+    if(sample.phpMs!==null)prev.last_php_ms=+sample.phpMs.toFixed(2);
+    if(sample.sqlCount!==null)prev.last_sql_count=sample.sqlCount;
+    if(sample.sqlMs!==null)prev.last_sql_ms=+sample.sqlMs.toFixed(2);
+    prev.last_response_bytes=sample.responseBytes;
+    byTool.set(tool,prev);
+   }
+  },
+  snapshot(){
+   const gw=samples.map(s=>s.gatewayMs).sort((a,b)=>a-b);
+   const php=samples.map(s=>s.phpMs).filter(v=>v!==null).sort((a,b)=>a-b);
+   const sqlCounts=samples.map(s=>s.sqlCount).filter(v=>v!==null);
+   const sqlTimes=samples.map(s=>s.sqlMs).filter(v=>v!==null);
+   const bytes=samples.map(s=>s.responseBytes).filter(v=>v>0);
+   const cacheDenom=cacheHitsTotal+cacheMissesTotal;
+   const avg=arr=>arr.length?+(arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(2):null;
+   return {
+    window_samples:samples.length,
+    calls_total:callsTotal,
+    errors_total:errorsTotal,
+    error_rate:callsTotal>0?+(errorsTotal/callsTotal).toFixed(4):0,
+    cache_hits_total:cacheHitsTotal,
+    cache_misses_total:cacheMissesTotal,
+    cache_hit_rate:cacheDenom>0?+(cacheHitsTotal/cacheDenom).toFixed(4):null,
+    single_flight_shared_total:singleFlightSharedTotal,
+    gateway_ms:{p50:calcPercentile(gw,0.5),p95:calcPercentile(gw,0.95),avg:avg(gw),max:gw.length?+gw.at(-1).toFixed(2):null},
+    php_ms:{p50:calcPercentile(php,0.5),p95:calcPercentile(php,0.95),avg:avg(php)},
+    sql_count_avg:avg(sqlCounts),
+    sql_ms_avg:avg(sqlTimes),
+    response_bytes:{avg:bytes.length?Math.round(bytes.reduce((a,b)=>a+b,0)/bytes.length):null,max:bytes.length?Math.max(...bytes):null},
+    by_tool:Object.fromEntries(byTool.entries())
+   };
+  }
+ };
+}
 
 const LIVE_CATALOG=Object.freeze([
  {tool:'crm_capacidades',capability:'capability_inventory',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_local',supports_filters:false,supports_pagination:false,supports_history:false,when:()=>true},
@@ -61,11 +131,12 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_relatorio_clientes_natal',capability:'natal_customers_segmentation',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_legacy_api',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct})=>direct},
  {tool:'crm_clientes_buscar',capability:'customers_and_leads_search',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct,full})=>Boolean(direct&&full)},
  {tool:'crm_previa_proposta_natal',capability:'natal_proposal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:true,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
- {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)}
+ {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
+ {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null){
- const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm)};
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,perfSnapshot=null}={}){
+ const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
@@ -126,6 +197,10 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null){
    });
   }
  }
+ const activeTools=tools.filter(t=>t.registered);
+ const uiSet=new Set(UI_CRM_TOOL_NAMES);
+ const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)).length;
+ const mcpUiActive=Boolean(directEnabled&&operatorFullCrm&&uiAppsEnabled);
  return {
   service:'evydencia-crm-mcp-live',
   version:GATEWAY_VERSION,
@@ -136,13 +211,16 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null){
   direct_crm_read_enabled:Boolean(directEnabled),
   forensic_audit_enabled:Boolean(directEnabled&&operatorFullCrm),
   proposal_dispatch_enabled:Boolean(operatorFullCrm),
+  mcp_ui_apps_enabled:mcpUiActive,
   write_requires_explicit_confirmation:true,
   tools_total_catalog:tools.length,
-  tools_active_count:tools.filter(t=>t.registered).length,
+  tools_active_count:activeTools.length,
+  legacy_v012_tools_preserved_count:legacyPreservedCount,
   tools,
   ...(directEnabled?{direct_crm_tools:DIRECT_CRM_TOOL_NAMES}:{}),
   ...(directEnabled&&operatorFullCrm?{forensic_crm_tools:FORENSIC_CRM_TOOL_NAMES}:{}),
   ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{}),
+  ...(mcpUiActive?{ui_crm_tools:UI_CRM_TOOL_NAMES,ui_resource_uri:MCP_UI_CARD_RESOURCE_URI}:{}),
   ...(zapiContext?.diagEnabled?{
    zapi_diagnostics_enabled:true,
    zapi_diagnostics_configured_for_operator:Boolean(zapiContext.diagConfigured),
@@ -153,7 +231,8 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null){
    zapi_oauth_status:zapiContext.oauthStatus,
    zapi_discovered_tools_count:(zapiContext.tools||[]).length,
    zapi_exposed_tools:[ZAPI_STATUS_TOOL_NAME,...(zapiContext.tools||[]).map(t=>t.gatewayName)]
-  }:{})
+  }:{}),
+  ...(perfSnapshot?{performance_telemetry:perfSnapshot}:{})
  };
 }
 
@@ -161,7 +240,7 @@ function summarizeToolResult(tool,res){
  if(!res||typeof res!=='object')return `OK [${tool}]: resposta concluída em structuredContent.`;
  switch(tool){
   case 'crm_capacidades':
-   return `OK [crm_capacidades]: versao=${res.version}, commit=${res.build_commit}, modo=${res.mode}, ativas=${res.tools_active_count}/${res.tools_total_catalog}.`;
+   return `OK [crm_capacidades]: versao=${res.version}, commit=${res.build_commit}, modo=${res.mode}, ativas=${res.tools_active_count}/${res.tools_total_catalog} (legado_v012_preservadas=${res.legacy_v012_tools_preserved_count??res.tools_active_count}).`;
   case 'crm_status':
    return `OK [crm_status]: status=${res.status||'ok'}.`;
   case 'crm_campanha_publica':
@@ -175,15 +254,17 @@ function summarizeToolResult(tool,res){
   case 'crm_cliente_360':
    return `OK [crm_cliente_360]: status=${res.lookup?.status||'matched'}, pedidos_retornados=${Array.isArray(res.orders)?res.orders.length:0}. Consulte structuredContent.`;
   case 'crm_estatisticas_natal':
-   return `OK [crm_estatisticas_natal]: corte=${res.cutoff_mmdd||'atual'}, nivel=${res.detail_level||'resumo'}, pedidos_validos_2026=${res.kpis_2026?.valid_orders??'n/d'}, sessoes_confirmadas_2026=${res.kpis_2026?.confirmed_realized_sessions??res.kpis_2026?.confirmed_realized_sessions_to_date??res.kpis_2026?.realized_sessions_to_date??'n/d'}. Consulte structuredContent.`;
+   return `OK [crm_estatisticas_natal]: perfil=${res.response_profile||'default'}, corte=${res.cutoff_mmdd||'atual'}, nivel=${res.detail_level||'resumo'}, pedidos_validos_2026=${res.kpis_2026?.valid_orders??'n/d'}, sessoes_confirmadas_2026=${res.kpis_2026?.confirmed_realized_sessions??res.kpis_2026?.confirmed_realized_sessions_to_date??res.kpis_2026?.realized_sessions_to_date??'n/d'}. Consulte structuredContent.`;
   case 'crm_natal_participantes_estatisticas':
-   return `OK [crm_natal_participantes_estatisticas]: escopo=${res.year_scope||'2026'}, total_participantes=${res.population_reconciliation?.total_participants_count??'n/d'}, reconciliado=${Boolean(res.population_reconciliation?.reconciled)}. Consulte structuredContent.`;
+   return `OK [crm_natal_participantes_estatisticas]: escopo=${res.year_scope||'2026'}, pop_primaria=${res.primary_population_year??res.year_scope??'2026'}, total_participantes=${res.population_reconciliation?.total_participants_count??'n/d'}, reconciliado=${Boolean(res.population_reconciliation?.reconciled)}. Consulte structuredContent.`;
   case 'crm_pedidos_buscar':
    return `OK [crm_pedidos_buscar]: retornados=${Array.isArray(res.orders)?res.orders.length:0}, total_correspondente=${res.pagination?.total_matching_orders??'n/d'}. Consulte structuredContent.`;
   case 'crm_pedido_detalhe':
    return `OK [crm_pedido_detalhe]: order_id=${res.order?.order_id??'n/d'}, parcelas=${Array.isArray(res.order?.installments)?res.order.installments.length:0}, eventos_status=${res.order?.status_history_count??0}. Consulte structuredContent.`;
   case 'crm_clientes_buscar':
    return `OK [crm_clientes_buscar]: retornados=${Array.isArray(res.customers)?res.customers.length:0}, total=${res.pagination?.total_matching_customers??'n/d'}. Consulte structuredContent.`;
+  case 'crm_renderizar_card_visual':
+   return formatVisualCardTextFallback(res);
   case 'crm_previa_proposta_natal':
    return `OK [crm_previa_proposta_natal]: elegivel=${Boolean(res.ready)}. Consulte structuredContent.`;
   case 'crm_enviar_proposta_natal':
@@ -209,9 +290,11 @@ const OUT_CAPACIDADES=z.looseObject({
  direct_crm_read_enabled:z.boolean(),
  forensic_audit_enabled:z.boolean(),
  proposal_dispatch_enabled:z.boolean(),
+ mcp_ui_apps_enabled:z.boolean().nullish(),
  write_requires_explicit_confirmation:z.boolean(),
  tools_total_catalog:z.number().int(),
  tools_active_count:z.number().int(),
+ legacy_v012_tools_preserved_count:z.number().int().nullish(),
  tools:z.array(z.looseObject({
   tool:z.string(),
   capability:z.string(),
@@ -223,10 +306,19 @@ const OUT_CAPACIDADES=z.looseObject({
   supports_filters:z.boolean(),
   supports_pagination:z.boolean(),
   supports_history:z.boolean()
- }))
+ })),
+ performance_telemetry:z.looseObject({}).nullish()
 });
 // PHP json_encode emits lists (and empty associative arrays) as JSON arrays: nested analytic blocks accept object OR array.
 const FLEX=z.union([z.looseObject({}),z.array(z.unknown())]).nullish();
+const OUT_BRIDGE_TELEMETRY=z.looseObject({
+ php_ms:z.number().nullish(),
+ sql_count:z.number().nullish(),
+ sql_ms:z.number().nullish(),
+ cache_hit:z.boolean().nullish(),
+ single_flight_shared:z.boolean().nullish(),
+ response_bytes:z.number().nullish()
+}).nullish();
 const OUT_GENERIC=z.looseObject({source:z.string().nullish()});
 const OUT_CUSTOMER=z.looseObject({
  source:z.string().nullish(),
@@ -236,7 +328,8 @@ const OUT_CUSTOMER=z.looseObject({
  financial_audit_summary:FLEX,
  participants_cross_order_audit:FLEX,
  current_order:FLEX,
- orders:z.array(z.looseObject({})).nullish()
+ orders:z.array(z.looseObject({})).nullish(),
+ bridge_telemetry:OUT_BRIDGE_TELEMETRY
 });
 const OUT_ORDER_DETAIL=z.looseObject({
  source:z.string().nullish(),
@@ -259,7 +352,8 @@ const OUT_ORDER_DETAIL=z.looseObject({
   schedule_details:FLEX,
   personalization:FLEX,
   participants_registration:FLEX
- }).nullish()
+ }).nullish(),
+ bridge_telemetry:OUT_BRIDGE_TELEMETRY
 });
 const OUT_ORDERS_SEARCH=z.looseObject({
  source:z.string().nullish(),
@@ -271,7 +365,8 @@ const OUT_ORDERS_SEARCH=z.looseObject({
   total_matching_orders:z.number().nullish(),
   has_more:z.boolean().nullish()
  }).nullish(),
- orders:z.array(z.looseObject({}))
+ orders:z.array(z.looseObject({})),
+ bridge_telemetry:OUT_BRIDGE_TELEMETRY
 });
 const OUT_CUSTOMERS_SEARCH=z.looseObject({
  source:z.string().nullish(),
@@ -282,18 +377,25 @@ const OUT_CUSTOMERS_SEARCH=z.looseObject({
   total_matching_customers:z.number().nullish(),
   has_more:z.boolean().nullish()
  }).nullish(),
- customers:z.array(z.looseObject({}))
+ customers:z.array(z.looseObject({})),
+ bridge_telemetry:OUT_BRIDGE_TELEMETRY
 });
 const OUT_NATAL_STATS=z.looseObject({
  source:z.string().nullish(),
  reference_year:z.number().nullish(),
  cutoff_mmdd:z.string().nullish(),
  detail_level:z.string().nullish(),
+ response_profile:z.string().nullish(),
+ data_status:z.string().nullish(),
+ integrity_checks:z.looseObject({contracted_equals_paid_plus_balance:z.boolean().nullish()}).nullish(),
+ warnings:z.array(z.string()).nullish(),
+ loaded_sections:z.array(z.string()).nullish(),
  sections_loaded:z.array(z.string()).nullish(),
  kpis_2026:z.looseObject({
   valid_orders:z.number().nullish(),
   unique_customers:z.number().nullish(),
   scheduled_sessions:z.number().nullish(),
+  unscheduled_sessions:z.number().nullish(),
   confirmed_realized_sessions:z.number().nullish(),
   past_scheduled_sessions:z.number().nullish(),
   past_scheduled_pending_confirmation:z.number().nullish(),
@@ -318,11 +420,16 @@ const OUT_NATAL_STATS=z.looseObject({
  annual_evolution_full_season:FLEX,
  packages_matrix_by_year:FLEX,
  historical_reconciliation_invariants:FLEX,
- sections:FLEX
+ sections:FLEX,
+ bridge_telemetry:OUT_BRIDGE_TELEMETRY
 });
 const OUT_NATAL_PARTICIPANTS=z.looseObject({
  source:z.string().nullish(),
  year_scope:z.string().nullish(),
+ requested_year_scope:z.string().nullish(),
+ primary_population_year:z.number().nullish(),
+ historical_comparison_years:z.array(z.number()).nullish(),
+ scope_semantics:z.string().nullish(),
  population_reconciliation:z.looseObject({
   valid_natal_orders_count:z.number().nullish(),
   sessions_with_participants_count:z.number().nullish(),
@@ -339,7 +446,25 @@ const OUT_NATAL_PARTICIPANTS=z.looseObject({
  family_children_composition:FLEX,
  packages_by_child_age_profile:z.array(z.looseObject({})).nullish(),
  historical_2024_2026:FLEX,
- data_quality_anomalies:FLEX
+ data_quality_anomalies:FLEX,
+ bridge_telemetry:OUT_BRIDGE_TELEMETRY
+});
+const OUT_VISUAL_CARD=z.looseObject({
+ source:z.string(),
+ card_type:z.enum(['pedido','cliente_360']),
+ ui_resource_uri:z.string(),
+ supported_avatar_states:z.array(z.string()),
+ avatar:z.looseObject({
+  initial_state:z.string(),
+  allow_img_tag:z.boolean(),
+  url:z.string().nullable(),
+  initials:z.string(),
+  asset_check_status:z.string()
+ }),
+ header:z.looseObject({title:z.string()}),
+ links:z.looseObject({}),
+ financial:z.looseObject({}),
+ bridge_telemetry:OUT_BRIDGE_TELEMETRY
 });
 const OUT_PROPOSAL_PREVIEW=z.looseObject({
  ready:z.boolean(),
@@ -411,15 +536,14 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 });
 
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
-export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
+export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
-async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
+async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
  const crm=crmClient({baseUrl:cfg.crmBaseUrl,token:ex.upstream,privateEnabled:true,timeoutMs:cfg.crmTimeoutMs,fetchFn,strictEnvelope:true});
  const direct=cfg.internalReadToken?legacyReadClient({baseUrl:cfg.crmBaseUrl,token:cfg.internalReadToken,fetchFn,timeoutMs:cfg.crmTimeoutMs,includeParticipants:cfg.operatorFullCrm}):null;
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
- const zapiOauthStatus=zapi?zapi.auth.getOperatorState(ex.operatorId).oauth_status:null;
  const resolvePhone=async({telefone,nome_cliente})=>{
   if(typeof telefone==='string'&&telefone.trim()){
    const t=telefone.trim();
@@ -495,35 +619,61 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
   const t0=performance.now();
   try{
    const result=await fn(input||{},ctx);
-   log({evt:'tool',tool,ok:true,op:ex.operatorTag,ms:Math.round(performance.now()-t0)});
+   const gwMs=+(performance.now()-t0).toFixed(2);
+   const bt=result&&typeof result==='object'?result.bridge_telemetry:null;
+   const respBytes=typeof bt?.response_bytes==='number'?bt.response_bytes:Buffer.byteLength(JSON.stringify(result??null),'utf8');
+   perf?.record({
+    tool,
+    ok:true,
+    gatewayMs:gwMs,
+    phpMs:bt?.php_ms??null,
+    sqlCount:bt?.sql_count??null,
+    sqlMs:bt?.sql_ms??null,
+    cacheHit:typeof bt?.cache_hit==='boolean'?bt.cache_hit:null,
+    singleFlightShared:Boolean(bt?.single_flight_shared),
+    responseBytes:respBytes
+   });
+   log({
+    evt:'tool',
+    tool,
+    ok:true,
+    op:ex.operatorTag,
+    ms:Math.round(gwMs),
+    gateway_ms:gwMs,
+    ...(typeof bt?.php_ms==='number'?{php_ms:bt.php_ms,sql_count:bt.sql_count??null,sql_ms:bt.sql_ms??null}:{}),
+    ...(typeof bt?.cache_hit==='boolean'?{cache_hit:bt.cache_hit}:{}),
+    response_bytes:respBytes
+   });
    return {content:[{type:'text',text:summarizeToolResult(tool,result)}],structuredContent:result};
   }catch(e){
+   const gwMs=+(performance.now()-t0).toFixed(2);
    let code=SAFE_ERR.test(e?.message||'')?e.message:'crm_unavailable';
    if(code==='crm_http_401'){code='operator_token_revoked';operators.forget(ex.upstream)}
-   log({evt:'tool',tool,ok:false,err:code,op:ex.operatorTag,ms:Math.round(performance.now()-t0)});
+   perf?.record({tool,ok:false,gatewayMs:gwMs,responseBytes:0});
+   log({evt:'tool',tool,ok:false,err:code,op:ex.operatorTag,ms:Math.round(gwMs),gateway_ms:gwMs});
    return {isError:true,content:[{type:'text',text:JSON.stringify({error:code})}]};
   }
  };
  const m=new McpServer({name:'evydencia-crm-mcp-live',version:GATEWAY_VERSION},{instructions:INSTRUCTIONS});
  const registeredNames=new Set();
- const reg=(name,title,description,inputSchema,outputSchema,fn,annotations=READ)=>{
+ const reg=(name,title,description,inputSchema,outputSchema,fn,annotations=READ,extraConfig=null)=>{
   if(registeredNames.has(name))return;
   registeredNames.add(name);
-  m.registerTool(name,{title,description,inputSchema,outputSchema,annotations},safe(name,fn));
+  m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...(extraConfig||{})},safe(name,fn));
  };
 
- reg('crm_capacidades','Capacidades disponíveis','Lista o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), escopos e ferramentas habilitadas na sessão atual.',z.object({}),OUT_CAPACIDADES,()=>manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
+ reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({}),OUT_CAPACIDADES,()=>manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
   enabled:Boolean(zapi),
   oauthStatus:zapi?zapi.auth.getOperatorState(ex.operatorId).oauth_status:null,
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null));
- reg('crm_status','Estado do CRM','Liveness público do CRM.',z.object({}),OUT_GENERIC,()=>crm.status());
- reg('crm_campanha_publica','Pacotes públicos','Catálogo público de uma campanha (padrão natal).',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
- reg('crm_horarios_publicos','Horários públicos','Horários públicos de um pacote, janela máxima de 14 dias (AAAA-MM-DD). Não cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,({campanha,pacote,inicio,fim})=>crm.availability(campanha,pacote,inicio,fim));
- reg('crm_conexao_privada','Identidade do operador','Operador autenticado, fuso do servidor e abilities do token.',z.object({}),OUT_GENERIC,()=>crm.bootstrap());
- reg('crm_cliente_resumo','Cliente por telefone, nome, CPF, e-mail ou UUID','Contexto completo do cliente (inclusive leads com 0 pedidos) por telefone (DDD+número), nome_cliente, customer_uuid, email ou documento: dados cadastrais do titular, avatar validado/iniciais, completude cadastral (registration_completeness), resumo financeiro em centavos e reais, pedido atual, link canônico (/gestao/clientes/$UUID/consultar) e elegibilidade Natal 2026.',z.object({
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null}));
+ reg('crm_status','Estado do CRM','Use quando precisar verificar rapidamente o liveness público do servidor CRM (evydencia.com). NÃO use para diagnóstico de WhatsApp/Z-API.',z.object({}),OUT_GENERIC,()=>crm.status());
+ reg('crm_campanha_publica','Pacotes públicos','Use quando precisar consultar o catálogo público de pacotes e preços de uma campanha (padrão "natal"). NÃO use para relatórios de vendas ou estatísticas internas.',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
+ reg('crm_horarios_publicos','Horários públicos','Use quando precisar verificar disponibilidade pública de horários de um pacote em janela de até 14 dias (AAAA-MM-DD). NÃO cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,({campanha,pacote,inicio,fim})=>crm.availability(campanha,pacote,inicio,fim));
+ reg('crm_conexao_privada','Identidade do operador','Use quando precisar validar a identidade do operador autenticado no CRM, fuso do servidor e abilities do token Sanctum.',z.object({}),OUT_GENERIC,()=>crm.bootstrap());
+ reg('crm_cliente_resumo','Cliente por telefone, nome, CPF, e-mail ou UUID (Resumo Rápido)','Use quando precisar localizar rapidamente um cliente ou lead (inclusive com 0 pedidos) por telefone, nome_cliente, customer_uuid, email ou documento: retorna titular, avatar validado/iniciais (render_contract), completude cadastral, resumo financeiro em centavos e reais, pedido atual, link canônico (/gestao/clientes/$UUID/consultar) e elegibilidade Natal 2026. NÃO use quando precisar de todos os pedidos históricos paginados (use crm_cliente_360).',z.object({
   telefone:z.string().min(8).max(30).optional(),
   nome_cliente:z.string().min(2).max(100).optional(),
   customer_uuid:z.string().min(36).max(36).optional(),
@@ -544,7 +694,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
      participants_cross_order_audit:f360.participants_cross_order_audit,
      current_order:f360.current_order,
      ...(ext?.natal_2026?{natal_2026:ext.natal_2026}:{}),
-     ...(ext?.capabilities?{capabilities:ext.capabilities}:{})
+     ...(ext?.capabilities?{capabilities:ext.capabilities}:{}),
+     ...(f360.bridge_telemetry?{bridge_telemetry:f360.bridge_telemetry}:{})
     };
    }catch(e){
     if(e?.message!=='legacy_read_http_404')throw e;
@@ -554,7 +705,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
   if(!cfg.operatorFullCrm||!res?.current_order)return res;
   return {...res,current_order:await enrichOrderWithDirect(res.current_order)};
  });
- reg('crm_cliente_360','Cliente 360 Forense (histórico, pagamentos, avatar e auditoria)','Reconstrução 360 completa do cliente (inclusive leads com 0 pedidos) por telefone, nome_cliente, customer_uuid, email ou documento: perfil completo do titular, avatar verificado via HTTP/WebP ou iniciais, diagnóstico de cadastro incompleto (registration_completeness), KPIs, resumo financeiro por meio efetivo (financial_audit_summary), auditoria cruzada de divergências históricas de participantes entre pedidos (participants_cross_order_audit) e pedidos completos com parcelas, linha do tempo de status, agenda Google Calendar, personalização e origem de bônus.',z.object({
+ reg('crm_cliente_360','Cliente 360 Forense (histórico completo, pagamentos, avatar e auditoria)','Use quando precisar da reconstrução 360 completa do cliente (inclusive leads com 0 pedidos): perfil do titular, avatar verificado via HTTP/WebP com contrato explícito (render_contract: HTTP 200 != foto renderizada), completude cadastral (registration_completeness), KPIs, resumo financeiro por meio efetivo, auditoria cruzada de divergências de participantes entre pedidos (participants_cross_order_audit) e histórico completo de pedidos com parcelas, status_history, agenda e bônus. NÃO abre widget visual pesado por padrão (para card visual use crm_renderizar_card_visual).',z.object({
   telefone:z.string().min(8).max(30).optional(),
   nome_cliente:z.string().min(2).max(100).optional(),
   customer_uuid:z.string().min(36).max(36).optional(),
@@ -584,7 +735,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
   return {...res,current_order,orders};
  });
  if(cfg.operatorFullCrm){
-  reg('crm_previa_proposta_natal','Prévia da Proposta de Natal 2026','Simula e gera a prévia oficial da proposta de Natal 2026 no CRM para o telefone informado (DDD+número) e nome opcional, validando elegibilidade comercial (Regra de Ouro: bloqueia se já comprou Natal 2026 ou se houver múltiplos cadastros) sem disparar mensagem.',z.object({
+  reg('crm_previa_proposta_natal','Prévia da Proposta de Natal 2026','Use quando precisar simular e validar elegibilidade comercial (Regra de Ouro) da proposta oficial de Natal 2026 para um telefone (DDD+número) sem enviar mensagem.',z.object({
    telefone:z.string().min(8).max(30),
    nome:z.string().max(80).optional()
   }),OUT_PROPOSAL_PREVIEW,async({telefone,nome})=>{
@@ -597,7 +748,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
    }
    return {...proposalProjection(json),variant:json?.data?.variant??json?.data?.selection?.variant??null,campaign_id:json?.data?.campaign_id??json?.data?.campaign?.id??null,message_preview:json?.data?.message_preview??json?.data?.message??null,phone_formatted:json?.data?.phone_formatted??null};
   });
-  reg('crm_enviar_proposta_natal','Disparar / Agendar Proposta de Natal 2026','Dispara e agenda oficialmente o envio da proposta comercial de Natal 2026 pelo CRM (WhatsApp / cadência oficial) para o telefone informado (DDD+número) e nome opcional. EXIGE confirmado_pelo_operador=true explícito (sem confirmação falha fechada antes de chamar o CRM), aplica a Regra de Ouro e garante idempotência.',z.object({
+  reg('crm_enviar_proposta_natal','Disparar / Agendar Proposta de Natal 2026','Use quando o operador autorizar explicitamente o disparo oficial da proposta comercial de Natal 2026 pelo CRM. EXIGE confirmado_pelo_operador=true explícito (sem confirmação falha fechada antes de chamar o CRM), aplica a Regra de Ouro e garante idempotência. NÃO use sem prévia e confirmação explícita.',z.object({
    telefone:z.string().min(8).max(30),
    nome:z.string().max(80).optional(),
    confirmado_pelo_operador:z.boolean(),
@@ -632,22 +783,24 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
   },WRITE_IDEMPOTENT);
  }
  if(direct){
-  reg('crm_estatisticas_natal','Central de Inteligência — Estatísticas e Operação de Natal','Retorna os dados canônicos oficiais de /gestao/natal/estatisticas (2021–2026) de forma proporcional à pergunta. Por padrão (nivel_detalhe="resumo"), traz cockpit executivo enxuto: KPIs 2026 (pedidos válidos, clientes únicos, receita contratada/recebida/aberta em centavos e reais), metas (R$ 300k base vs R$ 400k ampliada / 500 contratos), estágios operacionais (Aguardando Retirada, sem participantes, próxima sessão), sessões confirmadas/realizadas vs horário passado e comparativo histórico YTD + fechamento anual (com invariantes de conciliação 2022 e 2024). Use secoes para aprofundar sob demanda: simulador_previsao, financeiro_caixa (aging, meios efetivos, conciliação Pagar.me/Stone/Moderninha), clientes_recompra_campanhas (recompra safra 2025->2026, fiéis 2+ anos, cidades, canais, cupons, melhor dia/horário de venda), agenda_demanda (heatmap, ocupação, antecedência), pacotes_produtos_bonus (reajustes, elasticidade, extras comprados vs bônus) ou operacional_listas (paginada). Para perfil demográfico de crianças/bebês/famílias, use crm_natal_participantes_estatisticas.',z.object({
+  reg('crm_estatisticas_natal','Central de Inteligência — Estatísticas e Operação de Natal','Use quando precisar dos dados canônicos oficiais de /gestao/natal/estatisticas (2021–2026). ROTA RÁPIDA RECOMENDADA: para perguntas diretas de vendas, pedidos válidos, contratado, recebido, saldo ou metas atuais de Natal 2026, passe SEMPRE perfil_resposta="kpi_minimal" (<5 KB, retorno imediato com integrity_checks e metas R$ 300k base vs R$ 400k ampliada). Para visão executiva multi-ano use perfil_resposta="default" e nivel_detalhe="resumo". Use secoes sob demanda: simulador_previsao, financeiro_caixa (reconciliação explícita oi.total vs oi.payment_total da diferença de R$ 1.230,00, Permuta non_cash_barter vs Stone Débito debit_card), clientes_recompra_campanhas (recompra 2025->2026, cidades, canais, cupons e dia/hora de orders.created_at — NÃO representa ROAS nem horário pago), agenda_demanda, pacotes_produtos_bonus ou operacional_listas. NÃO use para demografia/idades de crianças/bebês (use crm_natal_participantes_estatisticas).',z.object({
    data_corte_mm_dd:z.string().regex(/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/).optional(),
    secoes:z.array(z.enum(['resumo','historico','simulador_previsao','financeiro_caixa','clientes_recompra_campanhas','agenda_demanda','pacotes_produtos_bonus','operacional_listas'])).max(8).optional(),
    nivel_detalhe:z.enum(['resumo','padrao','completo']).default('resumo'),
+   perfil_resposta:z.enum(['default','kpi_minimal']).default('default'),
    ano:z.number().int().min(2021).max(2026).optional(),
    pagina:z.number().int().min(1).max(50).default(1),
    limite:z.number().int().min(1).max(50).default(15)
-  }),OUT_NATAL_STATS,({data_corte_mm_dd,secoes,nivel_detalhe,ano,pagina,limite})=>direct.natalStatistics({
+  }),OUT_NATAL_STATS,({data_corte_mm_dd,secoes,nivel_detalhe,perfil_resposta,ano,pagina,limite})=>direct.natalStatistics({
    cutoffMmDd:data_corte_mm_dd,
    secoes,
    nivelDetalhe:nivel_detalhe,
+   perfilResposta:perfil_resposta,
    ano,
    pagina,
    limite
   }));
-  reg('crm_natal_participantes_estatisticas','Inteligência Demográfica e Familiar — Participantes de Natal','Retorna a inteligência demográfica, etária e familiar oficial dos participantes de Natal no CRM: reconciliação exata da população (crianças 0–17, adultos 18+, pets e humanos sem data de nascimento), subfaixas de bebês e crianças (0-6m, 6-12m, 1-3a, <3 anos, <=3 anos, 3-5a, 5-10a, 11-17a), parentesco (Filho(a), Mãe, Pai, avós, Pet), composição familiar (0, 1, 2, 3+ filhos e famílias com 2+ filhos), cruzamento pacote x idade infantil/bebês, histórico comparativo 2024–2026, repetição familiar e anomalias de qualidade cadastral (ex.: parentesco adulto com idade infantil, datas divergentes entre pedidos da mesma família e registros sem data de nascimento). Mantenha incluir_lista_participantes=false salvo pedido explícito de lista nominal.',z.object({
+  reg('crm_natal_participantes_estatisticas','Inteligência Demográfica e Familiar — Participantes de Natal','Use quando a pergunta envolver perfil demográfico, crianças, bebês, idades, parentesco, tamanho de famílias, pets ou qualidade cadastral dos participantes de Natal: reconciliação exata da população (crianças 0–17, adultos 18+, pets e humanos sem data de nascimento), subfaixas de bebês (0-6m, 6-12m, 1-3a, <3 anos, <=3 anos), composição familiar (0, 1, 2, 3+ filhos), pacote x idade infantil, comparativo 2024–2026 e anomalias cadastrais. ATENÇÃO DE ESCOPO: quando ano="todos", population_reconciliation detalha a safra primária 2026 (primary_population_year=2026) e historical_2024_2026 compara 2024–2026. Mantenha incluir_lista_participantes=false salvo pedido explícito de listagem nominal.',z.object({
    ano:z.enum(['2026','2025','2024','todos']).default('2026'),
    secoes:z.array(z.enum(['resumo','faixas_etarias','parentesco','familias_filhos','pacotes_cruzamentos','historico_recompra','qualidade_cadastro'])).max(7).optional(),
    incluir_anomalias:z.boolean().default(true),
@@ -662,7 +815,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
    pagina,
    limite
   }));
-  reg('crm_pedidos_buscar','Buscar pedidos ou listar pedidos paginados no CRM','Busca direta e paginada de pedidos no CRM (evydencia.com) ordenados do MAIS RECENTE para o mais antigo (paridade com /gestao/pedidos), retornando pagination.total_matching_orders. Inclui crm_order_url, crm_customer_url (/consultar), avatar/iniciais e perfil do cliente, parcelas individuais (installments[] com method_name vs method_category_label, vencimento, pagamento, transações e recibos), payment_summary em centavos e reais, linha do tempo de status (status_history[]), itens detalhados com bonus_classification, participants_registration (status, bloqueio de edição e anomalias) e participantes.',z.object({
+  reg('crm_pedidos_buscar','Buscar pedidos ou listar pedidos paginados no CRM','Use quando precisar listar ou filtrar pedidos no CRM (evydencia.com) ordenados do MAIS RECENTE para o mais antigo (paridade com /gestao/pedidos), por cliente, status, pacote, meio de pagamento, saldo em aberto ou período. NÃO use para KPIs agregados de Natal (use crm_estatisticas_natal).',z.object({
    customer_name:z.string().min(2).max(100).optional(),
    customer_whatsapp:z.string().min(8).max(30).optional(),
    customer_uuid:z.string().min(36).max(36).optional(),
@@ -685,13 +838,13 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
    for(const [k,v] of Object.entries(input||{}))if(v!==undefined&&v!==null&&v!==''&&map[k])filters[map[k]]=v;
    return direct.search(filters,{limit:input?.limite,page:input?.pagina,detailLevel:input?.nivel_detalhe});
   });
-  reg('crm_pedido_detalhe','Auditoria e detalhe completo de pedido no CRM (por UUID ou ID)','Auditoria completa de um pedido no CRM aceitando uuid OU order_id numérico (ex.: order_id: 4510): retorna crm_order_url, crm_customer_url (/consultar), dados do titular e avatar verificado via HTTP/WebP (asset_accessible, asset_check_status), payment_summary em centavos e reais, parcelas individuais (installments[] distinguindo method_name como "Permuta" de method_category_label como "Dinheiro", transações e recibos bills[]), linha do tempo de status (status_history[]), schedule_details (Google Calendar e histórico de agendamentos), personalization (observações, personalização infantil, bolo e santa_audio explícito), produtos/extras com bonus_classification, participants_registration (incluindo motivo de bloqueio de edição e anomalias) e participantes completos.',z.object({
+  reg('crm_pedido_detalhe','Auditoria e detalhe completo de pedido no CRM (por UUID ou ID)','Use quando precisar auditar um pedido específico no CRM por uuid OU order_id numérico (ex.: order_id: 4510): retorna links canônicos, titular e avatar verificado (render_contract), payment_summary, parcelas individuais (installments[] distinguindo Permuta de Dinheiro e Stone Débito), recibos bills[], status_history[], schedule_details, personalization, bonus_classification e participants_registration.',z.object({
    uuid:z.string().min(36).max(36).optional(),
    order_id:z.number().int().min(1).optional(),
    nivel_detalhe:z.enum(['resumo','padrao','forense']).default('forense')
   }),OUT_ORDER_DETAIL,({uuid,order_id,nivel_detalhe})=>direct.detail({uuid,order_id,detailLevel:nivel_detalhe}));
   if(cfg.operatorFullCrm){
-   reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Busca paginada diretamente no cadastro geral de clientes (/gestao/clientes) por busca livre (nome, WhatsApp, e-mail ou CPF/CNPJ), nome_cliente, telefone, email, documento ou customer_uuid. Localiza inclusive leads com 0 pedidos (somente_sem_pedidos: true) ou com cadastro incompleto para cartão (somente_cadastro_incompleto: true), retornando avatar/iniciais (com verificação HTTP opcional em verificar_avatar_http=true), dados completos do titular, link canônico (/consultar), orders_count, lifecycle_stage e registration_completeness.',z.object({
+   reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
     busca:z.string().min(2).max(120).optional(),
     nome_cliente:z.string().min(2).max(100).optional(),
     telefone:z.string().min(8).max(30).optional(),
@@ -704,15 +857,51 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
     pagina:z.number().int().min(1).max(500).default(1),
     limite:z.number().int().min(1).max(25).default(10)
    }),OUT_CUSTOMERS_SEARCH,input=>direct.searchCustomers({...input,page:input?.pagina,limit:input?.limite}));
+   if(cfg.uiAppsEnabled){
+    registerCrmVisualCardUi(m);
+    reg(
+     'crm_renderizar_card_visual',
+     'Renderizar Card Visual no ChatGPT Web (Pedido ou Cliente 360)',
+     'Use quando o operador pedir explicitamente um card visual, ficha visual ou visualização interativa de um Pedido (tipo="pedido" com order_id ou order_uuid) ou Cliente 360 (tipo="cliente_360" com customer_uuid, telefone, nome_cliente, documento ou email) no ChatGPT Web. NÃO use para consultas analíticas, financeiras agregadas ou listagens rápidas (mantenha as demais ferramentas em JSON puro). Renderiza avatar com 4 estados honestos (url_validated_pending_widget_load, image_loaded no onload, image_blocked_or_error no onerror, initials_fallback), sem PII desnecessária de menores e com fallback textual completo.',
+     z.object({
+      tipo:z.enum(['pedido','cliente_360']),
+      order_id:z.number().int().min(1).optional(),
+      order_uuid:z.string().min(36).max(36).optional(),
+      customer_uuid:z.string().min(36).max(36).optional(),
+      telefone:z.string().min(8).max(30).optional(),
+      nome_cliente:z.string().min(2).max(100).optional(),
+      documento:z.string().min(11).max(20).optional(),
+      email:z.string().min(4).max(120).optional()
+     }),
+     OUT_VISUAL_CARD,
+     async input=>{
+      if(input.tipo==='pedido'){
+       if(!input.order_uuid&&!input.order_id)throw Error('invalid_uuid');
+       const det=await direct.detail({uuid:input.order_uuid,order_id:input.order_id,detailLevel:'padrao'});
+       const card=buildVisualCardPayload({tipo:'pedido',detailResult:det});
+       return {...card,...(det?.bridge_telemetry?{bridge_telemetry:det.bridge_telemetry}:{})};
+      }
+      if(!input.customer_uuid&&!input.telefone&&!input.nome_cliente&&!input.documento&&!input.email){
+       throw Error('invalid_customer_locator');
+      }
+      const f360=await direct.customerForensic360({...input,pagina:1,por_pagina:5});
+      if(f360?.lookup?.status!=='matched')throw Error('crm_customer_not_matched');
+      const card=buildVisualCardPayload({tipo:'cliente_360',customerResult:f360});
+      return {...card,...(f360?.bridge_telemetry?{bridge_telemetry:f360.bridge_telemetry}:{})};
+     },
+     READ,
+     {_meta:{ui:{resourceUri:MCP_UI_CARD_RESOURCE_URI}}}
+    );
+   }
   }
-  reg('crm_relatorio_itens_vendidos','Relatório de itens vendidos (unidades brutas)','Relatório geral do CRM de unidades de itens vendidos (orders_items) por período de emissão (AAAA-MM-DD). ATENÇÃO: Não use para contagem oficial de pedidos ou ensaios de Natal (para Natal use crm_estatisticas_natal).',z.object({
+  reg('crm_relatorio_itens_vendidos','Relatório de itens vendidos (unidades brutas)','Use somente quando precisar de unidades brutas de itens emitidos (orders_items) por período (AAAA-MM-DD). NÃO use para contagem oficial de pedidos ou ensaios de Natal (use crm_estatisticas_natal).',z.object({
    inicio:z.string().max(10),
    fim:z.string().max(10),
    slug:z.string().max(60).optional(),
    busca:z.string().max(80).optional()
   }),OUT_GENERIC,({inicio,fim,slug:s,busca})=>direct.soldItems({start:inicio,end:fim,slug:s,busca}));
-  reg('crm_relatorio_natal_sem_participantes','Pedidos de Natal sem participantes','Lista pedidos de Natal do ano corrente com pagamento/sessão e zero participantes cadastrados, incluindo link direto do pedido no CRM (crm_order_url). Para visão completa (incluindo sessão, pacote e concluídos), consulte também orders_without_participants_2026 em crm_estatisticas_natal.',z.object({limite:z.number().int().min(1).max(50).default(20)}),OUT_GENERIC,({limite})=>direct.christmasWithoutParticipants({limit:limite}));
-  reg('crm_relatorio_clientes_natal','Clientes com ou sem compra de Natal','Consulta clientes no CRM com ou sem pedido de Natal no ano corrente, com filtro opcional por nome.',z.object({
+  reg('crm_relatorio_natal_sem_participantes','Pedidos de Natal sem participantes','Use quando precisar listar rapidamente pedidos de Natal do ano corrente com zero participantes cadastrados e link direto (crm_order_url).',z.object({limite:z.number().int().min(1).max(50).default(20)}),OUT_GENERIC,({limite})=>direct.christmasWithoutParticipants({limit:limite}));
+  reg('crm_relatorio_clientes_natal','Clientes com ou sem compra de Natal','Use quando precisar consultar clientes com ou sem compra de Natal no ano corrente, com filtro opcional por nome.',z.object({
    comprou_natal:z.boolean().default(true),
    busca_nome:z.string().min(2).max(80).optional(),
    limite:z.number().int().min(1).max(50).default(20)
@@ -722,7 +911,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
   reg(
    ZAPI_DIAG_TOOL_NAME,
    'Diagnóstico em Tempo Real da Instância WhatsApp Z-API',
-   'Consulta em tempo real a instância WhatsApp autorizada na Z-API (somente leitura GET em https://api.z-api.io): conexão (/status), número conectado, nome/foto de perfil e aparelho (/device), vencimento da assinatura, situação de pagamento, webhooks sanitizados e configurações (/me), além de prontidão de envio cruzada com o OAuth MCP. Para perguntar apenas "A Z-API está conectada/online?", use escopo="status_rapido" (1 único GET). Para número/perfil/aparelho, use escopo="perfil_dispositivo". Para vencimento/pagamento/webhooks/configurações, use escopo="assinatura_configuracoes" com nivel_detalhe="completo". Para diagnóstico geral ou "Está pronta para enviar?", use escopo="completo". Nunca aceita URL ou token arbitrário.',
+   'Use quando precisar verificar em tempo real a instância WhatsApp autorizada na Z-API (somente leitura GET em https://api.z-api.io): conexão (/status), número conectado, nome/foto de perfil e aparelho (/device), vencimento da assinatura, pagamento, webhooks sanitizados e configurações (/me). Para "A Z-API está conectada/online?", use escopo="status_rapido" (1 GET). Para número/perfil/aparelho, use escopo="perfil_dispositivo". Para assinatura/webhooks/configurações, use escopo="assinatura_configuracoes" com nivel_detalhe="completo". NÃO aceita URL ou token arbitrário e NÃO envia mensagens.',
    z.object({
     instancia:z.string().max(120).optional(),
     nivel_detalhe:z.enum(['resumo','completo']).default('resumo'),
@@ -741,7 +930,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
   reg(
    ZAPI_HIST_TOOL_NAME,
    'Histórico de Conexão e Desconexão da Instância Z-API',
-   'Consulta o histórico auditável de conexões e desconexões da instância Z-API autorizada (somente leitura): última conexão, última desconexão, motivo registrado da queda (disconnect_reason), telefone mascarado associado e linha do tempo cronológica a partir dos webhooks reais persistidos no CRM (ConnectedCallback e DisconnectedCallback, diferenciando occurred_at_brt do momment da Z-API de webhook_received_at_brt), complementado por observações deduplicadas de sondagem do gateway (poll_detected_at_brt, nunca tratadas como horário exato da queda).',
+   'Use quando precisar consultar última conexão, última desconexão, motivo da queda (disconnect_reason) e linha do tempo cronológica da instância Z-API a partir dos webhooks reais do CRM (occurred_at_brt vs webhook_received_at_brt) e observações deduplicadas de sondagem (poll_detected_at_brt). NÃO envia mensagens.',
    z.object({
     instancia:z.string().max(120).optional(),
     limite:z.number().int().min(1).max(50).default(20)
@@ -758,7 +947,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
   reg(
    ZAPI_STATUS_TOOL_NAME,
    'Estado da Autorização OAuth e Instância Z-API MCP',
-   'Consulta o estado da autorização OAuth do operador na Z-API (authorized, authorization_required, expired, revoked, unavailable), lista as ferramentas oficiais Z-API descobertas na instância vinculada, verifica conectividade do WhatsApp quando disponível e gera o link seguro (authorization_url) para vincular, reautorizar ou desvincular a instância pelo navegador.',
+   'Use quando precisar verificar o estado da autorização OAuth do operador no MCP oficial da Z-API, listar as 9 ferramentas oficiais descobertas ou gerar o link seguro (authorization_url) de vínculo/reautorização. NÃO use para diagnóstico técnico detalhado de aparelho/assinatura/webhooks (use zapi_instancia_diagnostico).',
    z.object({
     atualizar_ferramentas:z.boolean().default(false),
     incluir_link_gestao:z.boolean().default(false)
@@ -782,7 +971,13 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag}){
      ...(zt.outputSchema?{outputSchema:fromJsonSchema(zt.outputSchema)}:{}),
      annotations:zt.annotations
     },
-    (args,ctx)=>zapi.callTool(ex.operatorId,zt,args,{signal:ctx?.mcpReq?.signal})
+    async(args,ctx)=>{
+     const t0=performance.now();
+     const res=await zapi.callTool(ex.operatorId,zt,args,{signal:ctx?.mcpReq?.signal});
+     const gwMs=+(performance.now()-t0).toFixed(2);
+     perf?.record({tool:zt.gatewayName,ok:!res?.isError,gatewayMs:gwMs,responseBytes:Buffer.byteLength(JSON.stringify(res??null),'utf8')});
+     return res;
+    }
    );
   }
  }
@@ -802,6 +997,7 @@ function rateLimiter(now){
 
 export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now()}={}){
  const cfg=gatewayConfig(env);
+ const perf=createGatewayPerfTracker();
  const operators=operatorVerifier(cfg,{fetchFn,now});
  const oauth=createOAuthServer(cfg,{operators,now,log});
  let mcp,zapi=null;
@@ -821,14 +1017,14 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   now,
   log,
   diagnostics:zapiDiag,
-  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...ZAPI_INSTANCE_TOOL_NAMES],
+  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES,...ZAPI_INSTANCE_TOOL_NAMES],
   gatewayVersion:GATEWAY_VERSION,
   onToolsUpdated:()=>mcp?.notify?.toolsChanged?.()
  }):null;
  const resourceUrl=new URL(cfg.resource);
  const resourceMetadataUrl=getOAuthProtectedResourceMetadataUrl(resourceUrl);
  const gate=requireBearerAuth({verifier:oauth.verifier,requiredScopes:[GATEWAY_SCOPE],resourceMetadataUrl,expectedResource:resourceUrl});
- mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
+ mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:[GATEWAY_SCOPE],resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
@@ -840,7 +1036,26 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
 
  async function route(request,{ip='unknown',host}={}){
   const path=new URL(request.url).pathname;
-  if(path==='/healthz')return plain(200,{ok:true,service:'evydencia-crm-mcp-live',version:GATEWAY_VERSION,build_commit:BUILD_INFO.commit,repository_branch:BUILD_INFO.branch,zapi_mcp_enabled:Boolean(zapi),zapi_diagnostics_enabled:Boolean(zapiDiag)});
+  if(path==='/healthz'){
+   const snap=perf.snapshot();
+   return plain(200,{
+    ok:true,
+    service:'evydencia-crm-mcp-live',
+    version:GATEWAY_VERSION,
+    build_commit:BUILD_INFO.commit,
+    repository_branch:BUILD_INFO.branch,
+    zapi_mcp_enabled:Boolean(zapi),
+    zapi_diagnostics_enabled:Boolean(zapiDiag),
+    mcp_ui_apps_enabled:Boolean(cfg.internalReadToken&&cfg.operatorFullCrm&&cfg.uiAppsEnabled),
+    telemetry_summary:{
+     calls_total:snap.calls_total,
+     error_rate:snap.error_rate,
+     cache_hit_rate:snap.cache_hit_rate,
+     gateway_p50_ms:snap.gateway_ms.p50,
+     gateway_p95_ms:snap.gateway_ms.p95
+    }
+   });
+  }
   if(!validateHostHeader(host??request.headers.get('host'),allowedHosts).ok)return plain(403,{error:'invalid_host'});
   const meta=oauthMetadataResponse(request,metaOpts);
   if(meta)return meta;
@@ -869,7 +1084,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   log({evt:'http',method:request.method,path:path.slice(0,64),status:res.status,ms:Math.round(performance.now()-t0)});
   return res;
  }
- return {cfg,zapi,handle,close:async()=>{await Promise.allSettled([mcp.close(),zapi?.close()])}};
+ return {cfg,zapi,perf,handle,close:async()=>{await Promise.allSettled([mcp.close(),zapi?.close()])}};
 }
 
 // node:http bridge (the @modelcontextprotocol/node adapter is not a dependency).
