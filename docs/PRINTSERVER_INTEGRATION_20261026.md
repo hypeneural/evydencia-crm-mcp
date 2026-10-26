@@ -5,7 +5,7 @@
 O módulo printserver está protegido pela flag `EVYD_PRINTSERVER_ENABLED=1`; por padrão todas as 30 tools LIVE originais continuam idênticas. As tools novas só são expostas quando `EVYD_INTERNAL_READ_TOKEN`, `EVYD_ENABLE_OPERATOR_FULL_CRM=1`, a flag, URL e token privado estiverem configurados.
 
 ## Escopos, tools e responsabilidades
-- OAuth `print.jobs.write`, separado de `crm.proposal.write` e de `crm.read`. O operador também precisa possuir ability válida `extension:proposal-write` na versão atual do token, permitindo isolar somente usuários operacionais já aprovados sem mudar o Laravel. Avaliar ability `print:write` independente em fase futura.
+- OAuth `print.jobs.write`, separado de `crm.proposal.write` e de `crm.read`. O operador também precisa possuir identidade Sanctum válida, operador na allowlist geral `EVYD_ALLOWED_OPERATOR_IDS` e também na nova `EVYD_PRINT_ALLOWED_OPERATOR_IDS`. Não exige `extension:proposal-write` e não altera o Laravel. A permissão é negada quando a lista de impressão está vazia.
 - `crm_previa_malotes_retirada({order_ids:[...]})`: **read-only**; até 20 IDs numéricos reconhecidos na imagem pelo ChatGPT, retorna status e saldo. Não marca status 10.
 - `crm_solicitar_impressao_etiqueta({order_id,confirmado_pelo_operador:true,request_id?})`: lê status e financeiro atuais no CRM pelo bridge read-only, exige `waiting_product_retrieve` e `remaining_cents===0`, encaminha ao broker somente `order_id`, nome, nome do pacote, operador e UUID; não chama Z-API nem altera CRM. Resposta `queued` do broker significa trabalho em fila, não etiqueta física impressa.
 - `crm_consultar_impressao_etiqueta({order_id,job_id})`: estado de fila por job, validado com pedido consultado. `spooled` não é prova física de impressão.
@@ -15,6 +15,7 @@ O módulo printserver está protegido pela flag `EVYD_PRINTSERVER_ENABLED=1`; po
 2. No gateway Evidência MCP (VPS existente), acrescentar ao secrets environment:
 ```text
 EVYD_PRINTSERVER_ENABLED=0
+EVYD_PRINT_ALLOWED_OPERATOR_IDS=7
 EVYD_PRINTSERVER_URL=https://printserver.example.com
 EVYD_PRINTSERVER_MCP_TOKEN=<segredo_exclusivo_do_broker>
 ```
@@ -35,6 +36,6 @@ node --check src/live-gateway.mjs
 node --test test/printserver-client.test.mjs test/live-gateway.test.mjs
 npm run validate:local
 ```
-Sem env: testar que o catálogo atual de 30 tools não muda. Com env sintético e mocks HTTP: exigir confirmation e escopo, status diferente de 10 bloqueia, cliente não confirmado bloqueia, 409 é conflito e não faz retry. Nenhum pedido real, WhatsApp ou impressão real deve ser acionado no teste.
+Sem env: testar que o catálogo atual de 30 tools não muda. Com env sintético e mocks HTTP: exigir confirmation, allowlist independente e escopo, status diferente de 10 bloqueia, cliente não confirmado bloqueia, 409 é conflito e não faz retry. Nenhum pedido real, WhatsApp ou impressão real deve ser acionado no teste.
 
 Documentação: https://modelcontextprotocol.io/specification/2025-06-18/server/tools ; https://www.sumatrapdfreader.org/docs/Printing ; https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/register-scheduledtask
