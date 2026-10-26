@@ -507,6 +507,34 @@ const OUT_PROPOSAL_DISPATCH=z.looseObject({
  error_code:z.string().nullish(),
  message:z.string().nullish()
 });
+const OUT_GAMEPLAY_STATE=z.enum(['not_found','not_published','partial','revoked','published_unverified']);
+const OUT_GAMEPLAY_RECORD=z.looseObject({
+ crm_order_uuid:z.string().uuid(),state:OUT_GAMEPLAY_STATE,
+ photo_count:z.number().int().nonnegative(),expected_blobs:z.number().int().nonnegative(),
+ ready_blobs:z.number().int().nonnegative(),
+ hub_url:z.string().url().nullable(),gallery_url:z.string().url().nullable(),
+ games_runtime_verified:z.literal(false)
+});
+const OUT_GAMEPLAY_ORDER=z.looseObject({
+ order_id:z.number().int().nullish(),crm_order_url:z.string().url().nullish(),
+ customer_name:z.string().nullish(),status_key:z.string().nullish(),
+ expected_now:z.boolean().optional(),gameplay:OUT_GAMEPLAY_RECORD.nullish()
+});
+const OUT_GAMEPLAY_LINKS=z.looseObject({
+ source:z.literal('crm_gameplay_join'),total:z.number().int().nonnegative(),
+ selection_required:z.boolean().optional(),orders:z.array(OUT_GAMEPLAY_ORDER)
+});
+const OUT_GAMEPLAY_AUDIT=z.looseObject({
+ source:z.literal('crm_gameplay_join'),year:z.literal(2026),
+ statuses:z.array(z.enum(['waiting_product_retrieve','order_completed'])),
+ counts:z.looseObject({total:z.number().int().nonnegative(),
+  pending_publication:z.number().int().nonnegative(),
+  published_without_browser_proof:z.number().int().nonnegative()}),
+ pagination:z.looseObject({page:z.number().int(),per_page:z.number().int(),
+  total_matching:z.number().int(),has_more:z.boolean()}),
+ orders:z.array(OUT_GAMEPLAY_ORDER)
+});
+
 const OUT_ZAPI_STATUS=z.looseObject({
  service:z.string(),
  upstream_mcp_endpoint:z.string(),
@@ -560,7 +588,7 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 });
 
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
-export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
+export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_GAMEPLAY_LINKS,OUT_GAMEPLAY_AUDIT,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
 async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
  const ex=auth?.extra||{};
@@ -749,7 +777,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   reg('crm_gameplay_links','Galeria e jogos de Natal 2026 por nome ou pedido',
    'Consulta somente leitura. Use para encontrar os links de jogos e galeria de um pedido Natal 2026, por order_id, UUID ou nome. Em nomes repetidos devolve todos os pedidos separados. Não envia WhatsApp nem cria sessão.',
    z.object({order_id:z.number().int().positive().optional(),order_uuid:z.string().uuid().optional(),
-    nome_cliente:z.string().min(2).max(100).optional()}),OUT_GENERIC,async({order_id,order_uuid,nome_cliente})=>{
+    nome_cliente:z.string().min(2).max(100).optional()}),OUT_GAMEPLAY_LINKS,async({order_id,order_uuid,nome_cliente})=>{
      if([order_id,order_uuid,nome_cliente].filter(x=>x!==undefined).length!==1)throw Error('gameplay_locator_invalid');
      const f={...natalFilter,...(order_id?{'order.id':order_id}:{}),
       ...(order_uuid?{'order.uuid':order_uuid}:{}),
@@ -775,7 +803,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
    'Use para auditar apenas pedidos com status ATUAL Aguardando Retirada ou Pedido Concluído. Retorna contagens e uma página de pedidos com pendências. Para ver revisões publicadas ainda não homologadas no navegador, use incluir_publicados=true. Não devolve links secretos em lote.',
    z.object({pagina:z.number().int().min(1).max(100).default(1),
     limite:z.number().int().min(1).max(50).default(20),
-    incluir_publicados:z.boolean().default(false)}),OUT_GENERIC,async({pagina,limite,incluir_publicados})=>{
+    incluir_publicados:z.boolean().default(false)}),OUT_GAMEPLAY_AUDIT,async({pagina,limite,incluir_publicados})=>{
      const orders=[],seen=new Set();
      for(const status of eligibleStatus){
        const found=await findOrders({...natalFilter,'order.status':status});
