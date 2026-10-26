@@ -140,6 +140,10 @@ export async function auditRealOrderGameplay({
    complete_population:true,rechecked_after_gameplay:crmRechecked},
   gameplay:gameplayReport||{verification:'not_checked',photo_counts_verified:false},
   gameplay_live_metadata_verified:Boolean(gameplayReport),
+  // A valid private API reply cannot establish that it targets the currently
+  // deployed production database or that WebP/media actually opens.
+  gameplay_dataset_provenance_verified:false,
+  media_bytes_verified:false,
   browser_runtime_verified:false,customer_data_release_approved:false,
   includes_customer_data:false,includes_capability_urls:false
  });
