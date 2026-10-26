@@ -1461,7 +1461,8 @@ if ($action === 'customers.forensic360') {
     $natal2026Block = null;
     if (class_exists(\App\Services\Reports\NatalValidOrdersQuery::class)) {
         try {
-            $nvq = new \App\Services\Reports\NatalValidOrdersQuery();
+            /** @var \App\Services\Reports\NatalValidOrdersQuery $nvq */
+            $nvq = app(\App\Services\Reports\NatalValidOrdersQuery::class);
             $nowRef = CarbonImmutable::now('America/Sao_Paulo');
             $n2026Row = $nvq->validNatalOrders(
                 $nowRef,
@@ -1470,7 +1471,8 @@ if ($action === 'customers.forensic360') {
                 'natal'
             )->where('o.customer_id', $customer->id)
                 ->orderByDesc('o.id')
-                ->first(['o.id', 'o.uuid']);
+                ->select('o.id', 'o.uuid')
+                ->first();
             $natal2026Block = [
                 'purchased' => $n2026Row !== null,
                 'mode' => $n2026Row !== null ? 'buyer_2026' : 'prospect',
