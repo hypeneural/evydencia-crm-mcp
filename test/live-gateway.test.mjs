@@ -438,3 +438,18 @@ test('Gameplay discovery requires full CRM operator mode, never just a valid Gam
  const capabilities=await fullClient.callTool({name:'crm_capacidades',arguments:{}});
  assert.equal(capabilities.structuredContent.gameplay_read_enabled,true);
 });
+
+test('Gameplay bulk audit fails closed when CRM canonical pagination bridge is absent',async()=>{
+ const g=gw({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_GAMEPLAY_READ_ENABLED:'1',
+  EVYD_GAMEPLAY_READ_ORIGIN:'http://127.0.0.1:51234',
+  EVYD_GAMEPLAY_READ_TOKEN:'synthetic-gameplay-read-bearer-for-test-00001'
+ });
+ const auth=await connect(g,'fake-op7-read-000001');
+ const client=await mcp(g,auth.tokens.access_token);
+ const result=await client.callTool({name:'crm_gameplay_auditoria',arguments:{}});
+ assert.equal(result.isError,true);
+ assert.match(result.content[0]?.text||'',/legacy_read_canonical_pagination_unavailable/);
+});
