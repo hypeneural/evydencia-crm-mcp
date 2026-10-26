@@ -13,6 +13,7 @@ import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {createGameplayReadClient} from './gameplay-read-client.mjs';
+import {gameplayOrderStatus} from './gameplay-order-status.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
@@ -515,13 +516,34 @@ const OUT_GAMEPLAY_RECORD=z.looseObject({
  crm_order_uuid:z.string().uuid(),state:OUT_GAMEPLAY_STATE,
  photo_count:z.number().int().nonnegative(),expected_blobs:z.number().int().nonnegative(),
  ready_blobs:z.number().int().nonnegative(),
+ preparation:z.looseObject({
+  state:z.enum(['none','staged','invalid']),revision_id:z.string().uuid().nullable(),
+  photo_count:z.number().int().nonnegative().nullable(),
+  expected_blobs:z.number().int().nonnegative(),ready_blobs:z.number().int().nonnegative()
+ }).optional(),
  hub_url:z.string().url().nullable(),gallery_url:z.string().url().nullable(),
  games_runtime_verified:z.literal(false)
 });
+const OUT_GAMEPLAY_OPERATIONAL=z.looseObject({
+ crm_order_uuid:z.string().uuid(),crm_status_key:z.string().nullish(),
+ crm_status_id:z.number().int().nullish(),publication_required_by_crm:z.boolean(),
+ digital_experience_status:z.enum([
+  'no_gameplay_session','access_revoked','publication_incomplete',
+  'album_not_published','album_published_runtime_unverified',
+  'album_in_preparation','preparation_invalid'
+ ]),
+ publication_pending:z.boolean(),published_photo_count:z.number().int().nonnegative().nullable(),
+ preparing_photo_count:z.number().int().nonnegative().nullable(),
+ published_variants_ready:z.number().int().nonnegative().nullable(),
+ preparing_variants_ready:z.number().int().nonnegative().nullable(),
+ individual_games_verified:z.literal(false),browser_runtime_verified:z.literal(false)
+});
 const OUT_GAMEPLAY_ORDER=z.looseObject({
- order_id:z.number().int().nullish(),crm_order_url:z.string().url().nullish(),
- customer_name:z.string().nullish(),status_key:z.string().nullish(),
- expected_now:z.boolean().optional(),gameplay:OUT_GAMEPLAY_RECORD.nullish()
+ order_id:z.number().int().nullish(),crm_order_uuid:z.string().uuid().optional(),
+ crm_order_url:z.string().url().nullish(),customer_name:z.string().nullish(),
+ package_name:z.string().nullish(),status_id:z.number().int().nullish(),
+ status_key:z.string().nullish(),expected_now:z.boolean().optional(),
+ operational:OUT_GAMEPLAY_OPERATIONAL.optional(),gameplay:OUT_GAMEPLAY_RECORD.nullish()
 });
 const OUT_GAMEPLAY_LINKS=z.looseObject({
  source:z.literal('crm_gameplay_join'),total:z.number().int().nonnegative(),
@@ -532,7 +554,11 @@ const OUT_GAMEPLAY_AUDIT=z.looseObject({
  statuses:z.array(z.enum(['waiting_product_retrieve','order_completed'])),
  counts:z.looseObject({total:z.number().int().nonnegative(),
   pending_publication:z.number().int().nonnegative(),
-  published_without_browser_proof:z.number().int().nonnegative()}),
+  published_without_browser_proof:z.number().int().nonnegative(),
+  published_photo_count:z.number().int().nonnegative().optional(),
+  preparing_photo_count:z.number().int().nonnegative().optional(),
+  orders_in_preparation:z.number().int().nonnegative().optional(),
+  orders_without_gameplay_session:z.number().int().nonnegative().optional()}),
  pagination:z.looseObject({page:z.number().int(),per_page:z.number().int(),
   total_matching:z.number().int(),has_more:z.boolean()}),
  orders:z.array(OUT_GAMEPLAY_ORDER)
@@ -816,14 +842,20 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      // Never retrieve capability links for a broad name search.
      if((nome_cliente && orders.length>1) || orders.length>10)return {source:'crm_gameplay_join',selection_required:true,
       total:orders.length,orders:orders.slice(0,20).map(o=>({
-       order_id:o.order_id,customer_name:o.customer_name,status_key:o.status_key,
+       order_id:o.order_id,crm_order_uuid:o.order_uuid||o.uuid,
+       customer_name:o.customer_name,package_name:o.package_name,
+       status_id:o.status_id,status_key:o.status_key,
        crm_order_url:o.crm_order_url}))};
      const snapshots=await Promise.all(orders.map(async o=>{
        const uuid=String(o.order_uuid||o.uuid).toLowerCase();
        const res=await gameplay.lookup([uuid],{includeLinks:true});
-       return {order_id:o.order_id,crm_order_url:o.crm_order_url,
-        customer_name:o.customer_name,status_key:o.status_key,
-        expected_now:eligibleStatus.has(o.status_key),gameplay:res.results[0]};
+       const gameplayResult=res.results[0];
+       const operational=gameplayOrderStatus(o,gameplayResult);
+       return {order_id:o.order_id,crm_order_uuid:uuid,
+        crm_order_url:o.crm_order_url,customer_name:o.customer_name,
+        package_name:o.package_name,status_id:o.status_id,
+        status_key:o.status_key,expected_now:operational.publication_required_by_crm,
+        operational,gameplay:gameplayResult};
      }));
      return {source:'crm_gameplay_join',total:orders.length,
       orders:snapshots};
@@ -848,14 +880,24 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
        const result=await gameplay.lookup(orders.slice(i,i+50).map(o=>o.order_uuid||o.uuid));
        for(const row of result.results)map.set(row.crm_order_uuid,row);
      }
-     const entries=orders.map(o=>({order_id:o.order_id,crm_order_url:o.crm_order_url,
-      customer_name:o.customer_name,status_key:o.status_key,
-      gameplay:map.get(String(o.order_uuid||o.uuid).toLowerCase())||null}));
+     const entries=orders.map(o=>{
+      const uuid=String(o.order_uuid||o.uuid).toLowerCase();
+      const snapshot=map.get(uuid);
+      if(!snapshot)throw Error('gameplay_contract_invalid');
+      return {order_id:o.order_id,crm_order_uuid:uuid,
+       crm_order_url:o.crm_order_url,customer_name:o.customer_name,
+       package_name:o.package_name,status_id:o.status_id,
+       status_key:o.status_key,operational:gameplayOrderStatus(o,snapshot),gameplay:snapshot};
+     });
      const counts={total:entries.length};
      for(const e of entries){const state=e.gameplay?.state||'not_verified';counts[state]=(counts[state]||0)+1}
      counts.pending_publication=['not_found','not_published','partial','revoked']
        .reduce((sum,state)=>sum+(counts[state]||0),0);
      counts.published_without_browser_proof=counts.published_unverified||0;
+     counts.published_photo_count=entries.reduce((n,e)=>n+(e.operational.published_photo_count||0),0);
+     counts.preparing_photo_count=entries.reduce((n,e)=>n+(e.operational.preparing_photo_count||0),0);
+     counts.orders_in_preparation=entries.filter(e=>e.operational.digital_experience_status==='album_in_preparation').length;
+     counts.orders_without_gameplay_session=counts.not_found||0;
      const selected=incluir_publicados?entries:
        entries.filter(e=>e.gameplay?.state!=='published_unverified');
      const start=(pagina-1)*limite;
