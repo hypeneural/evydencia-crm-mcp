@@ -65,6 +65,12 @@ test('canonical fallback rejects forged page totals and missing rows',async()=>{
  }),{status:200}));
  await assert.rejects(client.search(filters,opts),/legacy_read_canonical_pagination_unavailable/);
 });
+test('null total is rejected rather than silently interpreted as zero',async()=>{
+ const client=clientWith(async()=>new Response(JSON.stringify({
+  data:[],meta:{current_page:1,per_page:200,total:null,last_page:1}
+ }),{status:200}));
+ await assert.rejects(client.search(filters,opts),/legacy_read_canonical_pagination_unavailable/);
+});
 test('regular non-canonical search keeps existing behavior',async()=>{
  const client=clientWith(async()=>{throw Error('SYNTHETIC_NETWORK_STOP')});
  await assert.rejects(client.search({'order.id':12345},{page:1,limit:25,detailLevel:'resumo'}),/SYNTHETIC_NETWORK_STOP/);
