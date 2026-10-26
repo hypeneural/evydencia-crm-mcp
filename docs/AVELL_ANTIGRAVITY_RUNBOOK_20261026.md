@@ -124,3 +124,10 @@ Se houver arquivos locais modificados, `--refresh` para em vez de sobrescrever. 
 ## Estado de liberacao
 
 **PR pronta para revisar e testar, nao equivale a publicacao real de fotos.** Caddy /internal, integridade backup/restore SQLite, autorizacao de sessao e piloto nao podem ser ignorados.
+
+## Revisao forense do preparador (26/10/2026)
+- Em Windows, `npm` usa launcher `.cmd` e precisa ser invocado com `cmd.exe`; o preparador usa uma allowlist fixa de `npm ci`, `npm test` e `npm run gateway:test`, sem execucao arbitraria de shell.
+- Repositorios preexistentes sao verificados por remote/branch, `--refresh` requer `git status --porcelain` limpo e `git merge --ff-only`. Sem `reset --hard`, `clean -fd` ou troca de branch no checkout operacional.
+- Paths apontando via junction/symlink para printserver, EvydFlow ou instalacao MCP operacional sao recusados antes de escrever clones.
+- As ferramentas de links so existem para operadores OAuth com acesso CRM completo; nao usar token da Gameplay como substituto da identidade CRM.
+- O GitHub CI de cada PR permanece referencia da suite completa e nao comprova que fotos reais foram publicadas em producao.
