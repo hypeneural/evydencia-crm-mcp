@@ -417,3 +417,24 @@ test('Regression P0 — write scope enforcement, securitySchemes metadata, opera
   await c7.close();
  }
 });
+
+test('Gameplay discovery requires full CRM operator mode, never just a valid Gameplay bearer',async()=>{
+ const options={EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_GAMEPLAY_READ_ENABLED:'1',
+  EVYD_GAMEPLAY_READ_ORIGIN:'http://127.0.0.1:51234',
+  EVYD_GAMEPLAY_READ_TOKEN:'synthetic-gameplay-read-bearer-for-test-00001'};
+ const plain=gw({...options,EVYD_ENABLE_OPERATOR_FULL_CRM:'0'});
+ const plainAuth=await connect(plain,'fake-op7-read-000001');
+ const plainClient=await mcp(plain,plainAuth.tokens.access_token);
+ const plainNames=(await plainClient.listTools()).tools.map(t=>t.name);
+ assert.equal(plainNames.includes('crm_gameplay_links'),false);
+ assert.equal(plainNames.includes('crm_gameplay_auditoria'),false);
+ const full=gw({...options,EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
+ const fullAuth=await connect(full,'fake-op7-read-000001');
+ const fullClient=await mcp(full,fullAuth.tokens.access_token);
+ const fullNames=(await fullClient.listTools()).tools.map(t=>t.name);
+ assert.equal(fullNames.includes('crm_gameplay_links'),true);
+ assert.equal(fullNames.includes('crm_gameplay_auditoria'),true);
+ const capabilities=await fullClient.callTool({name:'crm_capacidades',arguments:{}});
+ assert.equal(capabilities.structuredContent.gameplay_read_enabled,true);
+});
