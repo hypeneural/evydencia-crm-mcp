@@ -11,7 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -116,7 +116,7 @@ function ensureRepo(target, workspace, args) {
     const dirty = git(dir, ['status', '--porcelain'], { output: true });
     if (args.refresh) {
       if (dirty) throw Error('TARGET_HAS_LOCAL_EDITS_NO_REFRESH:' + target.key);
-      git(dir, ['fetch', '--depth', '1', 'origin', target.branch], { timeout: 300000 });
+      git(dir, ['fetch', 'origin', target.branch], { timeout: 300000 });
       git(dir, ['merge', '--ff-only', 'FETCH_HEAD'], { timeout: 120000 });
     }
     if (target.sparse && args.fullGameplay) {
