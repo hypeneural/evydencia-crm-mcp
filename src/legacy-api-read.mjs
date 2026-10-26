@@ -1156,7 +1156,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
     params.set('page',String(page));
     const raw=await get('/api/orders/search',params);
     const rows=raw?.data,meta=raw?.meta;
-    const validInt=v=>Number.isSafeInteger(Number(v))&&Number(v)>=0;
+    const validInt=v=>v!==null&&v!==undefined&&v!==''&&Number.isSafeInteger(Number(v))&&Number(v)>=0;
     const current=Number(meta?.current_page);
     const perPage=Number(meta?.per_page);
     const total=Number(meta?.total);
