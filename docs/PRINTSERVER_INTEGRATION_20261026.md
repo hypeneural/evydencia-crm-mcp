@@ -39,3 +39,11 @@ npm run validate:local
 Sem env: testar que o catálogo atual de 30 tools não muda. Com env sintético e mocks HTTP: exigir confirmation, allowlist independente e escopo, status diferente de 10 bloqueia, cliente não confirmado bloqueia, 409 é conflito e não faz retry. Nenhum pedido real, WhatsApp ou impressão real deve ser acionado no teste.
 
 Documentação: https://modelcontextprotocol.io/specification/2025-06-18/server/tools ; https://www.sumatrapdfreader.org/docs/Printing ; https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/register-scheduledtask
+
+## Homologação física offline — referência canônica para Antigravity
+
+O plano local do Antigravity foi auditado e revisto em `hypeneural/printserver` PR #1:
+- [Plano revisado Windows/Sumatra/Caddy](https://github.com/hypeneural/printserver/blob/feat/windows-label-mcp-broker-20261026/docs/HOMOLOGACAO_ANTIGRAVITY_REVISADA_20261026.md)
+- [Prompt cirúrgico de execução](https://github.com/hypeneural/printserver/blob/feat/windows-label-mcp-broker-20261026/docs/ANTIGRAVITY_PROMPT_CIRURGICO_20261026.md)
+
+**Importante:** o teste físico no AnnaHelena é offline e não requer o MCP nem o broker. O SumatraPDF `paper=Etiqueta` solicita a mídia 100×40, mas não garante o avanço físico; isso exige uma etiqueta sintética conferida pelo operador. Não copiar `tls internal` para o broker com clientes externos sem CA confiável. O MCP permanece OFF durante essa homologação; nenhum token, job real, baixa de CRM ou mensagem WhatsApp será utilizado.
