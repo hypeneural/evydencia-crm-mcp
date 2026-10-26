@@ -55,6 +55,15 @@ test('Laravel status 11 stays ineligible even when returned by the server',async
  assert.equal(result.orders[0].status_key,'product_retrieve_confirmed');
  assert.notEqual(result.orders[0].status_key,'order_completed');
 });
+test('HTTP fallback projects early statuses for safe customer-name search',async()=>{
+ const early=row(0);
+ early.status={id:4,name:'Aguardando Pagamento'};
+ const client=clientWith(async()=>new Response(JSON.stringify({
+  data:[early],meta:{current_page:1,per_page:200,total:1,last_page:1}
+ }),{status:200}));
+ const result=await client.search(filters,opts);
+ assert.equal(result.orders[0].status_key,'waiting_payment');
+});
 test('canonical fallback refuses unpaged Laravel response',async()=>{
  const client=clientWith(async()=>new Response(JSON.stringify({data:[row(0)]}),{status:200}));
  await assert.rejects(client.search(filters,opts),/legacy_read_canonical_pagination_unavailable/);
