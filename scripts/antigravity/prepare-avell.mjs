@@ -61,17 +61,19 @@ export function parseArgs(argv) {
   args.workspace = resolve(args.workspace);
   return args;
 }
-function command(bin, argv, { cwd, timeout = 180000, output = false } = {}) {
-  // On Windows, npm is commonly npm.cmd, which is not directly executable
-  // via spawnSync without cmd.exe (Node child_process Windows contract).
-  // Only invoke fixed, developer-authored npm subcommands, never user input.
-  if (process.platform === 'win32' && bin === 'npm') {
+export function resolveCommand(bin, argv, platform = process.platform) {
+  if (platform === 'win32' && bin === 'npm') {
+    // npm uses npm.cmd on Windows; dispatch through cmd.exe with a fixed
+    // allowlist to avoid passing user-supplied arguments into cmd shell.
     const allowed = new Set(['ci --ignore-scripts --no-audit --no-fund', 'test', 'run gateway:test']);
     if (!allowed.has(argv.join(' '))) throw Error('UNSAFE_NPM_ARGUMENTS');
-    return command(process.env.ComSpec || 'cmd.exe',
-      ['/d', '/s', '/c', 'npm ' + argv.join(' ')], { cwd, timeout, output });
+    return { bin: 'cmd.exe', argv: ['/d', '/s', '/c', 'npm ' + argv.join(' ')] };
   }
-  const result = spawnSync(bin, argv, {
+  return { bin, argv };
+}
+function command(bin, argv, { cwd, timeout = 180000, output = false } = {}) {
+  const resolved = resolveCommand(bin, argv);
+  const result = spawnSync(resolved.bin, resolved.argv, {
     cwd, windowsHide: true, timeout, encoding: 'utf8',
     stdio: output ? ['ignore', 'pipe', 'pipe'] : 'inherit',
   });
@@ -95,11 +97,15 @@ function within(parent, child) {
 }
 function assertSafeWorkspace(where) {
   if (within(SCRIPT_ROOT, where)) throw Error('WORKSPACE_MUST_NOT_BE_INSIDE_RUNNING_MCP');
-  const parts = where.toLowerCase().split(/[\\/]+/);
-  if (parts.some(p => ['printserver', 'print-server', 'evydflow', 'node_modules', 'data', 'queue', 'secrets'].includes(p))) {
-    throw Error('WORKSPACE_MUST_NOT_BE_INSIDE_OPERATIONAL_DIRECTORY');
+  const blocked = ['printserver', 'print-server', 'evydflow', 'node_modules', 'data', 'queue', 'secrets'];
+  const disallowed = path => path.toLowerCase().split(/[\\/]+/).some(p => blocked.includes(p));
+  if (disallowed(where)) throw Error('WORKSPACE_MUST_NOT_BE_INSIDE_OPERATIONAL_DIRECTORY');
+  if (existsSync(where)) {
+    if (!statSync(where).isDirectory()) throw Error('WORKSPACE_NOT_DIRECTORY');
+    const real = realpathSync(where);
+    if (disallowed(real)) throw Error('WORKSPACE_JUNCTION_POINTS_TO_OPERATIONAL_DIRECTORY');
+    if (within(SCRIPT_ROOT, real)) throw Error('WORKSPACE_JUNCTION_POINTS_INSIDE_RUNNING_MCP');
   }
-  if (existsSync(where) && !statSync(where).isDirectory()) throw Error('WORKSPACE_NOT_DIRECTORY');
 }
 function ensureRepo(target, workspace, args) {
   const dir = join(workspace, target.key);
@@ -200,6 +206,7 @@ export function main(argv = process.argv.slice(2)) {
   if (args.dryRun) return 0;
   command('git', ['--version'], { output: true });
   mkdirSync(args.workspace, { recursive: true });
+  assertSafeWorkspace(args.workspace); // Resolve junctions before writing any cloned files.
   const repos = TARGETS.map(target => ensureRepo(target, args.workspace, args));
   runQuickTest(repos[0], args);
   const gameReadinessPath = join(repos[1].path, 'deploy', 'readiness.json');
