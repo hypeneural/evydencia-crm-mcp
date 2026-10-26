@@ -246,6 +246,11 @@ function safeCustomerUrl(string $uuid): string
     return "https://evydencia.com/gestao/clientes/{$uuid}/consultar";
 }
 
+function safeOrderUrl(string $uuid): string
+{
+    return "https://evydencia.com/gestao/pedidos/{$uuid}/detalhes";
+}
+
 function projectCustomer(?Customer $c, bool $fullProfile, PagarmeCardProfileService $cardSvc): ?array
 {
     if (!$c) {
