@@ -49,7 +49,22 @@ test('expanded goal rejects accidental base-goal value in reais',()=>{
 test('aging and purchase-time figures are explicitly marked as non-canonical in the bridge',()=>{
  assert.match(php,/financial_aging_vs_canonical/);
  assert.match(php,/NEEDS_REVIEW_DIFFERENT_PAYMENT_BASIS_OR_SCOPE/);
+ assert.match(php,/partial_or_split_face_overstatement_cents/);
+ assert.match(php,/increase_or_excess_understatement_cents/);
+ assert.match(php,/reconciled_formula_matches_delta/);
+ assert.match(php,/receipts_economic_breakdown_2026/);
+ assert.match(php,/'economic_nature'\s*=>\s*'non_cash_barter'/);
+ assert.match(php,/'payment_rail'\s*=>\s*'debit_card'/);
  assert.match(php,/purchase_timing_semantics/);
  assert.match(php,/'basis' => 'order_created_at'/);
  assert.match(php,/'confirmed_sale_time_available' => false/);
+});
+
+test('readonly Redis cache driver is non-static and bridge emits telemetry + explicit ano=todos scope',()=>{
+ assert.match(php,/Cache::extend\('mcp_readonly_proxy',\s*fn\s*\(\)\s*=>/);
+ assert.doesNotMatch(php,/Cache::extend\('mcp_readonly_proxy',\s*static\s+fn/);
+ assert.match(php,/nbBuildBridgeTelemetry/);
+ assert.match(php,/'primary_population_year'\s*=>\s*\$targetYear/);
+ assert.match(php,/'historical_comparison_years'\s*=>\s*\[2024,\s*2025,\s*2026\]/);
+ assert.match(php,/peak_days_accum_semantics/);
 });

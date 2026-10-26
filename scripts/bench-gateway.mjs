@@ -40,16 +40,23 @@ const clients=await Promise.all(Array.from({length:CONC},async()=>{
 }));
 for(const c of clients)await c.callTool({name:'crm_cliente_resumo',arguments:{telefone:'11999990001'}}); // warm-up
 global.gc?.();
-const cpu0=process.cpuUsage(),t0=performance.now(),lat=[];let errors=0,next=0;
+const cpu0=process.cpuUsage(),t0=performance.now(),lat=[];let errors=0,next=0,totalBytes=0;
 await Promise.all(clients.map(async c=>{
  while(next<CALLS){next++;const s=performance.now();
   const r=await c.callTool({name:'crm_cliente_resumo',arguments:{telefone:'11999990001'}});
-  if(r.isError)errors++;lat.push(performance.now()-s);}
+  if(r.isError)errors++;
+  totalBytes+=Buffer.byteLength(JSON.stringify(r??null),'utf8');
+  lat.push(performance.now()-s);}
 }));
 const wall=performance.now()-t0,cpu=process.cpuUsage(cpu0),mem=process.memoryUsage();
+const perfSnap=gateway.perf?.snapshot?.()||null;
 lat.sort((a,b)=>a-b);const p=x=>+lat[Math.min(lat.length-1,Math.floor(x*lat.length))].toFixed(2);
 console.log(JSON.stringify({benchmark:'live-gateway-http',calls:lat.length,concurrency:CONC,crm_latency_ms:LAT,errors,
- latency_ms:{p50:p(.5),p95:p(.95),p99:p(.99),max:+lat.at(-1).toFixed(2)},throughput_rps:+(lat.length/(wall/1000)).toFixed(1),
+ error_rate:lat.length?+(errors/lat.length).toFixed(4):0,
+ latency_ms:{p50:p(.5),p95:p(.95),p99:p(.99),max:+lat.at(-1).toFixed(2)},
+ gateway_telemetry:perfSnap?{gateway_ms:perfSnap.gateway_ms,response_bytes:perfSnap.response_bytes,error_rate:perfSnap.error_rate}:null,
+ avg_wire_response_bytes:lat.length?Math.round(totalBytes/lat.length):0,
+ throughput_rps:+(lat.length/(wall/1000)).toFixed(1),
  cpu_ms_per_call:+((cpu.user+cpu.system)/1000/lat.length).toFixed(3),rss_mb:+(mem.rss/1048576).toFixed(1),heap_used_mb:+(mem.heapUsed/1048576).toFixed(1),
  note:'gateway + fake CRM + clients share one process; CPU/RSS are upper bounds for the gateway'}));
 for(const c of clients)await c.close();

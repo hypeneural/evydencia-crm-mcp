@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {createHash,randomBytes} from 'node:crypto';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
-import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES,FORENSIC_CRM_TOOL_NAMES,PROPOSAL_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
+import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES,FORENSIC_CRM_TOOL_NAMES,PROPOSAL_CRM_TOOL_NAMES,UI_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
 import {gatewayConfig,createSealer,redirectAllowed} from '../src/oauth-gateway.mjs';
 
 const R=['extension:bootstrap','extension:customer-read'];
@@ -333,11 +333,13 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
  const client=await mcp(g,tokens.access_token);
  try{
   const {tools}=await client.listTools();
-  assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES].sort());
+  assert.deepEqual(tools.map(t=>t.name).sort(),[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES].sort());
   assert.ok(tools.every(t=>t.outputSchema?.type==='object'),'every tool publishes a valid JSON Schema outputSchema');
   const cap=await client.callTool({name:'crm_capacidades',arguments:{}});
   assert.equal(cap.structuredContent.version,'0.12.0');
   assert.equal(cap.structuredContent.forensic_audit_enabled,true);
+  assert.equal(cap.structuredContent.mcp_ui_apps_enabled,true);
+  assert.equal(cap.structuredContent.legacy_v012_tools_preserved_count,17);
   assert.equal(cap.structuredContent.write_requires_explicit_confirmation,true);
   assert.ok(!cap.structuredContent.tools.some(t=>t.state==='MOCK_ONLY'),'live capability inventory excludes legacy MOCK_ONLY tools');
   assert.equal(typeof cap.structuredContent.build_commit,'string');

@@ -9,7 +9,7 @@ test('routing golden set covers historical, finances, demographics, avatars, cap
  assert.equal(golden.schema_version,'1.0');
  const ids=new Set(golden.cases.map(c=>c.id));
  assert.equal(ids.size,golden.cases.length,'duplicate prompt id');
- for(const id of ['sales-today','current-compare','top-weeks','children-3','families-2','baby-packages','repeat-buyers','buy-timing','open-balance','order-avatar','cross-order','capabilities','zapi-online','no-unprompted-send','ambiguous-write','unrelated-weather']){
+ for(const id of ['sales-today','current-compare','top-weeks','children-3','families-2','baby-packages','repeat-buyers','buy-timing','open-balance','order-avatar','visual-card-order','visual-card-customer','demographics-all-years','cross-order','capabilities','zapi-online','zapi-oauth-status','proposal-preview-not-zapi','no-unprompted-send','ambiguous-write','unrelated-weather']){
   assert.ok(ids.has(id),'missing '+id);
  }
  for(const c of golden.cases){

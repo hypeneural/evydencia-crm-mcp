@@ -208,6 +208,55 @@
       },
       "classification": "read_only",
       "should_send_external_message": false
+    },
+    {
+      "id": "visual-card-order",
+      "prompt": "Mostre um card visual interativo do pedido sintético #9999 no ChatGPT Web.",
+      "expected_tool": "crm_renderizar_card_visual",
+      "expected_args": {
+        "tipo": "pedido",
+        "order_id": 9999
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "visual-card-customer",
+      "prompt": "Abra a ficha visual Cliente 360 da cliente sintética Larissa Exemplo.",
+      "expected_tool": "crm_renderizar_card_visual",
+      "expected_args": {
+        "tipo": "cliente_360"
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "demographics-all-years",
+      "prompt": "Mostre o perfil demográfico de participantes comparando todos os anos disponíveis.",
+      "expected_tool": "crm_natal_participantes_estatisticas",
+      "expected_args": {
+        "ano": "todos"
+      },
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "zapi-oauth-status",
+      "prompt": "O OAuth do MCP oficial da Z-API está autorizado nesta sessão?",
+      "expected_tool": "zapi_status_conexao",
+      "expected_args": {},
+      "classification": "read",
+      "should_send_external_message": false
+    },
+    {
+      "id": "proposal-preview-not-zapi",
+      "prompt": "Simule uma prévia da proposta oficial de Natal 2026 para (48) 99999-0000 sem disparar nada.",
+      "expected_tool": "crm_previa_proposta_natal",
+      "expected_args": {
+        "telefone": "(48) 99999-0000"
+      },
+      "classification": "read_only",
+      "should_send_external_message": false
     }
   ]
 }

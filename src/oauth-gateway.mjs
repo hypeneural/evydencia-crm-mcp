@@ -102,6 +102,7 @@ export function gatewayConfig(env){
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
   allowedOperators,redirects,internalReadToken,
   operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
+  uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
   zapiEnabled,zapiMcpUrl,zapiIssuer,zapiStorePath,zapiRestStatus,
   zapiDiagEnabled:Boolean(zapiEnabled||zapiDiagInstances.length>0),

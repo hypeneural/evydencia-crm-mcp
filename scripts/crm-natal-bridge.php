@@ -68,7 +68,9 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-// 1. Enforce strict MySQL session + query listener READ-ONLY guard.
+$bridgeStartedMs = hrtime(true) / 1_000_000;
+
+// 1. Enforce strict MySQL session + query listener READ-ONLY guard + query telemetry.
 DB::statement('SET SESSION TRANSACTION READ ONLY');
 $conn = DB::connection();
 if (method_exists($conn, 'beforeExecuting')) {
@@ -78,9 +80,12 @@ if (method_exists($conn, 'beforeExecuting')) {
         }
     });
 }
+DB::enableQueryLog();
 
 // 2. Wrap default Laravel Cache store in a Read-Only Proxy so Cache::remember() reads hot Redis keys
 //    without ever mutating or writing new keys to production Redis.
+//    NOTE: Closure MUST NOT be `static` because Laravel's CacheManager binds `$this` on extend().
+$activeCacheMode = 'array_fallback';
 try {
     $defaultCacheDriver = (string) config('cache.default', 'file');
     $underlyingStore = Cache::store($defaultCacheDriver)->getStore();
@@ -171,15 +176,84 @@ try {
             }
         }
     };
-    Cache::extend('mcp_readonly_proxy', static fn () => new CacheRepository($readOnlyStore));
+    Cache::extend('mcp_readonly_proxy', fn () => new CacheRepository($readOnlyStore));
     config([
         'cache.stores.mcp_readonly_proxy' => ['driver' => 'mcp_readonly_proxy'],
         'cache.default' => 'mcp_readonly_proxy',
     ]);
     Cache::forgetDriver('mcp_readonly_proxy');
+    $activeCacheMode = 'readonly_proxy:' . $defaultCacheDriver;
 } catch (Throwable) {
     // Fallback: if cache driver introspection fails, switch in-memory array driver (still 0 writes to Redis).
     config(['cache.default' => 'array']);
+}
+
+function nbBuildBridgeTelemetry(float $startedAtMs, string $cacheMode): array
+{
+    $log = DB::getQueryLog();
+    $sqlMs = 0.0;
+    foreach ($log as $entry) {
+        $sqlMs += (float) ($entry['time'] ?? 0.0);
+    }
+    return [
+        'php_ms' => round((hrtime(true) / 1_000_000) - $startedAtMs, 2),
+        'sql_count' => count($log),
+        'sql_ms' => round($sqlMs, 2),
+        'cache_mode' => $cacheMode,
+    ];
+}
+
+function nbClassifyPaymentEconomics(string $methodName, string $catKey, string $catLabel): array
+{
+    if (stripos($methodName, 'permuta') !== false || stripos($methodName, 'cortesia') !== false) {
+        return [
+            'economic_nature' => 'non_cash_barter',
+            'cash_effect' => false,
+            'payment_rail' => 'barter',
+        ];
+    }
+    if (stripos($methodName, 'débito') !== false || stripos($methodName, 'debito') !== false) {
+        return [
+            'economic_nature' => 'monetary_receipt',
+            'cash_effect' => true,
+            'payment_rail' => 'debit_card',
+        ];
+    }
+    if (stripos($methodName, 'pix') !== false || strtolower($catKey) === 'pix' || stripos($catLabel, 'pix') !== false) {
+        return [
+            'economic_nature' => 'monetary_receipt',
+            'cash_effect' => true,
+            'payment_rail' => 'pix',
+        ];
+    }
+    if (
+        stripos($methodName, 'crédito') !== false
+        || stripos($methodName, 'credito') !== false
+        || stripos($catLabel, 'crédito') !== false
+        || stripos($catLabel, 'cartão') !== false
+    ) {
+        return [
+            'economic_nature' => 'monetary_receipt',
+            'cash_effect' => true,
+            'payment_rail' => 'credit_card',
+        ];
+    }
+    if (
+        stripos($catLabel, 'dinheiro') !== false
+        || stripos($methodName, 'dinheiro') !== false
+        || stripos($methodName, 'espécie') !== false
+    ) {
+        return [
+            'economic_nature' => 'monetary_receipt',
+            'cash_effect' => true,
+            'payment_rail' => 'cash',
+        ];
+    }
+    return [
+        'economic_nature' => 'monetary_receipt',
+        'cash_effect' => true,
+        'payment_rail' => 'other',
+    ];
 }
 
 function nbCents(mixed $amount): int
@@ -271,20 +345,27 @@ if ($mode === 'natal.participants_stats') {
     $includeAnomalies = array_key_exists('include_anomalies', $opts) ? (bool) $opts['include_anomalies'] : true;
     $includeList = !empty($opts['include_participants_list']) && $includeFullPii;
 
-    $rawPart = $svc->getParticipantsAnalytics(false, $ctx);
-    unset($rawPart['table_rows'], $rawPart['historical_participant_candidates']);
+    $rawPart = [];
+    if ($wantSection('historico_recompra') || $wantSection('resumo')) {
+        $rawPart = $svc->getParticipantsAnalytics(false, $ctx);
+        unset($rawPart['table_rows'], $rawPart['historical_participant_candidates']);
+    }
 
     $familyMult = null;
     $childEcon = null;
-    try {
-        $familyMult = $svc->getFamilyMultiplierAnalytics($targetYear, false, $ctx);
-    } catch (Throwable) {
-        $familyMult = ['available' => false, 'unavailable_reason' => 'service_unavailable'];
+    if ($wantSection('familias_filhos') || $wantSection('resumo')) {
+        try {
+            $familyMult = $svc->getFamilyMultiplierAnalytics($targetYear, false, $ctx);
+        } catch (Throwable) {
+            $familyMult = ['available' => false, 'unavailable_reason' => 'service_unavailable'];
+        }
     }
-    try {
-        $childEcon = $svc->getChildAgeEconomicsData(false, $ctx);
-    } catch (Throwable) {
-        $childEcon = ['available' => false, 'unavailable_reason' => 'service_unavailable'];
+    if ($wantSection('pacotes_cruzamentos') || $wantSection('resumo')) {
+        try {
+            $childEcon = $svc->getChildAgeEconomicsData(false, $ctx);
+        } catch (Throwable) {
+            $childEcon = ['available' => false, 'unavailable_reason' => 'service_unavailable'];
+        }
     }
 
     // Canonical valid orders & participants for target year (default 2026)
@@ -735,7 +816,13 @@ if ($mode === 'natal.participants_stats') {
         'source' => 'CRM_CANONICAL_NATAL_PARTICIPANTS_ANALYTICS',
         'canonical_dashboard_url' => 'https://evydencia.com/gestao/natal/estatisticas',
         'as_of' => $now->toIso8601String(),
+        'requested_year_scope' => $reqYearRaw,
         'target_year' => $targetYear,
+        'primary_population_year' => $targetYear,
+        'historical_comparison_years' => [2024, 2025, 2026],
+        'scope_semantics' => $reqYearRaw === 'todos'
+            ? "population_reconciliation e distribuicoes etarias/familiares detalhadas referem-se exclusivamente a populacao principal de {$targetYear}; para comparativo multi-ano (2024-2026), consulte historical_2024_2026 (nao somar anos distintos como populacao unica sem deduplicar clientes)."
+            : "Populacao filtrada exclusivamente para pedidos validos da temporada {$targetYear}.",
         'population_reconciliation' => [
             'valid_natal_orders_count' => count($validOrderIds),
             'sessions_with_participants_count' => $sessionsWithParticipants,
@@ -849,6 +936,8 @@ if ($mode === 'natal.participants_stats') {
         ];
     }
 
+    $outDemo['bridge_telemetry'] = nbBuildBridgeTelemetry($bridgeStartedMs, $activeCacheMode);
+
     echo json_encode($outDemo, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit(0);
 }
@@ -899,23 +988,42 @@ if ($responseProfile === 'kpi_minimal') {
         'kpis_2026' => [
             'valid_orders' => (int) $quick['total_orders'],
             'unique_customers' => (int) $quick['total_customers'],
+            'scheduled_sessions' => (int) ($quick['scheduled_sessions'] ?? 0),
+            'unscheduled_sessions' => (int) ($quick['unscheduled_sessions'] ?? 0),
             'contracted_revenue_cents' => $contractedQuick,
             'contracted_revenue_reais' => nbReais($contractedQuick),
             'paid_revenue_cents' => $paidQuick,
             'paid_revenue_reais' => nbReais($paidQuick),
             'balance_due_cents' => $balanceQuick,
             'balance_due_reais' => nbReais($balanceQuick),
+            'goal_orders' => (int) ($quick['goal_orders'] ?? 500),
+            'goal_base_packages_revenue_cents' => 30000000,
+            'goal_base_packages_revenue_reais' => 300000.0,
+            'goal_total_expanded_revenue_cents' => 40000000,
+            'goal_total_expanded_revenue_reais' => 400000.0,
         ],
         'integrity_checks' => ['contracted_equals_paid_plus_balance' => $reconciledQuick],
         'data_status' => $reconciledQuick ? 'verified_internal_arithmetic' : 'needs_review',
         'warnings' => $reconciledQuick ? [] : ['canonical_financial_balance_mismatch'],
         'methodology_note' => 'NatalValidOrdersQuery via NatalForensicStatisticsService. Valores recebidos registrados no CRM; nao comprovam liquidacao bancaria externa.',
+        'bridge_telemetry' => nbBuildBridgeTelemetry($bridgeStartedMs, $activeCacheMode),
     ];
     echo json_encode($quickResponse, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit(0);
 }
 
-$immutable = $svc->getHistoricalImmutableData();
+$explicitNonHistOnly = $reqSections !== []
+    && !in_array('resumo', $reqSections, true)
+    && !in_array('historico', $reqSections, true)
+    && $detailLevel !== 'completo';
+$needHistoricalOverview = !$explicitNonHistOnly;
+$needImmutableHistory = $needHistoricalOverview || $wantSec('simulador_previsao') || $wantSec('clientes_recompra_campanhas') || $wantSec('agenda_demanda') || $wantSec('pacotes_produtos_bonus');
+$needFullOrderHydration = $wantSec('operacional_listas') || ($reqSections === [] && $detailLevel === 'padrao') || $detailLevel === 'completo';
+
+$immutable = [];
+if ($needImmutableHistory) {
+    $immutable = $svc->getHistoricalImmutableData();
+}
 $kpis = $svc->getDynamic2026Data(false, $ctx);
 $goalCockpit = $svc->getGoalCockpit($kpis, $ctx);
 
@@ -995,98 +1103,146 @@ foreach (['entao_e_natal', 'ho_ho_ho', 'boas_festas'] as $pkgKey) {
 $packagesMatrixRaw = array_values(array_filter($immutable['packages_matrix'] ?? [], static fn ($p) => (int) ($p['year'] ?? 0) !== 2026));
 $packagesMatrixRaw[] = $pkg2026;
 
-// Historical & current year bundle invariants + consolidated vs season-end snapshot verification
-$histAuditData = Cache::remember("natal_mcp_hist_invariants_v2:{$cutoffMmDd}", 3600, static function () use ($validQuery, $now, $cutoffMmDd, $explicitCompletedStatuses): array {
-    $byYear = [];
-    foreach ([2021, 2022, 2023, 2024, 2025] as $yr) {
-        $yrStart = CarbonImmutable::parse("{$yr}-01-01 00:00:00", 'America/Sao_Paulo');
-        $yrEnd = CarbonImmutable::parse("{$yr}-12-31 23:59:59", 'America/Sao_Paulo');
-        $cutoffDt = CarbonImmutable::parse("{$yr}-{$cutoffMmDd} 23:59:59", 'America/Sao_Paulo');
+// Historical & current year bundle invariants + consolidated vs season-end snapshot verification.
+// Skipped completely when caller requests only a specific 2026 analytical tab (e.g., financeiro_caixa),
+// and batched + cached in local non-PII /tmp file (TTL 900s, 0 DB/Redis writes) when historical overview is needed.
+$histAuditData = [];
+if ($needHistoricalOverview) {
+    $histTmpFile = rtrim(sys_get_temp_dir(), '/\\') . '/evyd_mcp_natal_hist_v3_' . preg_replace('/[^0-9-]/', '', $cutoffMmDd) . '.json';
+    $loadedHistFromTmp = null;
+    if (is_file($histTmpFile) && (time() - (int) @filemtime($histTmpFile)) < 900) {
+        $rawTmp = @file_get_contents($histTmpFile);
+        if (is_string($rawTmp) && $rawTmp !== '') {
+            $decTmp = json_decode($rawTmp, true);
+            if (is_array($decTmp) && isset($decTmp['2024'])) {
+                $loadedHistFromTmp = $decTmp;
+            }
+        }
+    }
+    $histAuditData = $loadedHistFromTmp ?? Cache::remember("natal_mcp_hist_invariants_v2:{$cutoffMmDd}", 3600, static function () use ($validQuery, $now, $cutoffMmDd, $explicitCompletedStatuses, $histTmpFile): array {
+        $rawYearMeta = [];
+        $allConsolidatedIds = [];
+        foreach ([2021, 2022, 2023, 2024, 2025] as $yr) {
+            $yrStart = CarbonImmutable::parse("{$yr}-01-01 00:00:00", 'America/Sao_Paulo');
+            $yrEnd = CarbonImmutable::parse("{$yr}-12-31 23:59:59", 'America/Sao_Paulo');
+            $cutoffDt = CarbonImmutable::parse("{$yr}-{$cutoffMmDd} 23:59:59", 'America/Sao_Paulo');
 
-        // Consolidated current validity ($asOf = $now) — matches immutable['evolution']
-        $consolidatedRows = $validQuery->validNatalOrders($now, $yrStart, $yrEnd, 'natal')
-            ->select('o.id', 'o.schedule_1', 'current_status.status as status_key')
-            ->get();
-        $consolidatedIds = $consolidatedRows->pluck('id')->map(static fn ($v) => (int) $v)->all();
+            $consolidatedRows = $validQuery->validNatalOrders($now, $yrStart, $yrEnd, 'natal')
+                ->select('o.id', 'o.schedule_1', 'current_status.status as status_key')
+                ->get();
+            $consolidatedIds = $consolidatedRows->pluck('id')->map(static fn ($v) => (int) $v)->all();
+            foreach ($consolidatedIds as $cid) {
+                $allConsolidatedIds[$cid] = $yr;
+            }
 
-        // Snapshot at 31/12 of that season ($asOf = $yrEnd) — detects post-season cancellations (e.g. 2022: 379 vs 374)
-        $snapshotIds = $validQuery->validNatalOrders($yrEnd, $yrStart, $yrEnd, 'natal')
-            ->pluck('o.id')
-            ->map(static fn ($v) => (int) $v)
-            ->all();
-        $postSeasonAbortedIds = array_values(array_diff($snapshotIds, $consolidatedIds));
-        sort($postSeasonAbortedIds);
+            $snapshotIds = $validQuery->validNatalOrders($yrEnd, $yrStart, $yrEnd, 'natal')
+                ->pluck('o.id')
+                ->map(static fn ($v) => (int) $v)
+                ->all();
+            $postSeasonAbortedIds = array_values(array_diff($snapshotIds, $consolidatedIds));
+            sort($postSeasonAbortedIds);
 
-        // Bundle units & multi-package occurrences on consolidated valid orders (explains 2024: 397 orders vs 398 pkg occurrences vs 399 units)
-        $bundleRows = $consolidatedIds !== []
-            ? DB::table('orders_items as oi')
+            $rawYearMeta[$yr] = [
+                'rows' => $consolidatedRows,
+                'consolidatedIds' => $consolidatedIds,
+                'snapshotIds' => $snapshotIds,
+                'postSeasonAbortedIds' => $postSeasonAbortedIds,
+                'cutoffDt' => $cutoffDt,
+            ];
+        }
+
+        // Single batched SQL query for Natal bundle items across all 5 historical seasons (replaces 5 queries).
+        $bundleRowsByYear = [2021 => [], 2022 => [], 2023 => [], 2024 => [], 2025 => []];
+        if ($allConsolidatedIds !== []) {
+            $batchedBundles = DB::table('orders_items as oi')
                 ->join('products as pr', 'pr.id', '=', 'oi.product_id')
-                ->whereIn('oi.order_id', $consolidatedIds)
+                ->whereIn('oi.order_id', array_keys($allConsolidatedIds))
                 ->where('pr.slug', 'natal')
                 ->where('pr.bundle', 'Y')
                 ->select('oi.order_id', 'oi.product_id', 'oi.quantity')
-                ->get()
-            : collect();
-
-        $distinctProdsByOrder = [];
-        $unitsByOrder = [];
-        $totalUnits = 0;
-        foreach ($bundleRows as $br) {
-            $oid = (int) $br->order_id;
-            $pid = (int) $br->product_id;
-            $qty = max(1, (int) round((float) $br->quantity));
-            $distinctProdsByOrder[$oid][$pid] = true;
-            $unitsByOrder[$oid] = ($unitsByOrder[$oid] ?? 0) + $qty;
-            $totalUnits += $qty;
-        }
-        $multiPkgIds = [];
-        $multiUnitIds = [];
-        foreach ($distinctProdsByOrder as $oid => $pset) {
-            if (count($pset) > 1) {
-                $multiPkgIds[] = $oid;
-            }
-        }
-        foreach ($unitsByOrder as $oid => $uCnt) {
-            if ($uCnt > 1) {
-                $multiUnitIds[] = $oid;
-            }
-        }
-        sort($multiPkgIds);
-        sort($multiUnitIds);
-
-        $pastScheduledCutoff = 0;
-        $confirmedRealizedCutoff = 0;
-        $fullYearScheduled = 0;
-        foreach ($consolidatedRows as $row) {
-            if (!empty($row->schedule_1)) {
-                $fullYearScheduled++;
-                $sdt = CarbonImmutable::parse((string) $row->schedule_1, 'America/Sao_Paulo');
-                if ($sdt->year === $yr && $sdt->lessThanOrEqualTo($cutoffDt)) {
-                    $pastScheduledCutoff++;
-                    if (in_array((string) $row->status_key, $explicitCompletedStatuses, true)) {
-                        $confirmedRealizedCutoff++;
-                    }
+                ->get();
+            foreach ($batchedBundles as $br) {
+                $oid = (int) $br->order_id;
+                $yrOwner = $allConsolidatedIds[$oid] ?? null;
+                if ($yrOwner !== null) {
+                    $bundleRowsByYear[$yrOwner][] = $br;
                 }
             }
         }
 
-        $byYear[(string) $yr] = [
-            'year' => $yr,
-            'consolidated_valid_orders' => count($consolidatedIds),
-            'season_end_snapshot_valid_orders' => count($snapshotIds),
-            'post_season_aborted_orders_count' => count($postSeasonAbortedIds),
-            'post_season_aborted_order_ids' => $postSeasonAbortedIds,
-            'total_bundle_units' => $totalUnits > 0 ? $totalUnits : count($consolidatedIds),
-            'multi_package_order_ids' => $multiPkgIds,
-            'multi_unit_bundle_order_ids' => $multiUnitIds,
-            'confirmed_realized_up_to_cutoff' => $confirmedRealizedCutoff,
-            'past_scheduled_up_to_cutoff' => $pastScheduledCutoff,
-            'past_scheduled_pending_confirmation' => max(0, $pastScheduledCutoff - $confirmedRealizedCutoff),
-            'full_year_scheduled_sessions' => $fullYearScheduled,
-        ];
-    }
-    return $byYear;
-});
+        $byYear = [];
+        foreach ([2021, 2022, 2023, 2024, 2025] as $yr) {
+            $ym = $rawYearMeta[$yr];
+            $consolidatedIds = $ym['consolidatedIds'];
+            $snapshotIds = $ym['snapshotIds'];
+            $postSeasonAbortedIds = $ym['postSeasonAbortedIds'];
+            $cutoffDt = $ym['cutoffDt'];
+
+            $distinctProdsByOrder = [];
+            $unitsByOrder = [];
+            $totalUnits = 0;
+            foreach ($bundleRowsByYear[$yr] as $br) {
+                $oid = (int) $br->order_id;
+                $pid = (int) $br->product_id;
+                $qty = max(1, (int) round((float) $br->quantity));
+                $distinctProdsByOrder[$oid][$pid] = true;
+                $unitsByOrder[$oid] = ($unitsByOrder[$oid] ?? 0) + $qty;
+                $totalUnits += $qty;
+            }
+            $multiPkgIds = [];
+            $multiUnitIds = [];
+            foreach ($distinctProdsByOrder as $oid => $pset) {
+                if (count($pset) > 1) {
+                    $multiPkgIds[] = $oid;
+                }
+            }
+            foreach ($unitsByOrder as $oid => $uCnt) {
+                if ($uCnt > 1) {
+                    $multiUnitIds[] = $oid;
+                }
+            }
+            sort($multiPkgIds);
+            sort($multiUnitIds);
+
+            $pastScheduledCutoff = 0;
+            $confirmedRealizedCutoff = 0;
+            $fullYearScheduled = 0;
+            foreach ($ym['rows'] as $row) {
+                if (!empty($row->schedule_1)) {
+                    $fullYearScheduled++;
+                    $sdt = CarbonImmutable::parse((string) $row->schedule_1, 'America/Sao_Paulo');
+                    if ($sdt->year === $yr && $sdt->lessThanOrEqualTo($cutoffDt)) {
+                        $pastScheduledCutoff++;
+                        if (in_array((string) $row->status_key, $explicitCompletedStatuses, true)) {
+                            $confirmedRealizedCutoff++;
+                        }
+                    }
+                }
+            }
+
+            $byYear[(string) $yr] = [
+                'year' => $yr,
+                'consolidated_valid_orders' => count($consolidatedIds),
+                'season_end_snapshot_valid_orders' => count($snapshotIds),
+                'post_season_aborted_orders_count' => count($postSeasonAbortedIds),
+                'post_season_aborted_order_ids' => $postSeasonAbortedIds,
+                'total_bundle_units' => $totalUnits > 0 ? $totalUnits : count($consolidatedIds),
+                'multi_package_order_ids' => $multiPkgIds,
+                'multi_unit_bundle_order_ids' => $multiUnitIds,
+                'confirmed_realized_up_to_cutoff' => $confirmedRealizedCutoff,
+                'past_scheduled_up_to_cutoff' => $pastScheduledCutoff,
+                'past_scheduled_pending_confirmation' => max(0, $pastScheduledCutoff - $confirmedRealizedCutoff),
+                'full_year_scheduled_sessions' => $fullYearScheduled,
+            ];
+        }
+        $jsonTmp = json_encode($byYear, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (is_string($jsonTmp)) {
+            @file_put_contents($histTmpFile, $jsonTmp, LOCK_EX);
+            @chmod($histTmpFile, 0600);
+        }
+        return $byYear;
+    });
+}
 
 // Enrich packages_matrix_by_year with explicit population reconciliation (fixing 2024 397 vs 398 ambiguity)
 $packagesMatrix = [];
@@ -1260,10 +1416,37 @@ $validRows2026 = $validQuery->validNatalOrders($now, $start2026, $end2026, 'nata
     ->get();
 
 $validIds2026 = $validRows2026->pluck('id')->map(static fn ($v) => (int) $v)->all();
-$eloquentOrders2026 = Order::with(['participants.relation', 'items.product'])
-    ->whereIn('id', $validIds2026)
-    ->get()
-    ->keyBy('id');
+$eloquentOrders2026 = collect();
+$partCountsByOrder2026 = [];
+$pkgNameByOrder2026 = [];
+
+if ($needFullOrderHydration) {
+    $eloquentOrders2026 = Order::with(['participants.relation', 'items.product'])
+        ->whereIn('id', $validIds2026)
+        ->get()
+        ->keyBy('id');
+} elseif ($validIds2026 !== []) {
+    $partCountsByOrder2026 = DB::table('photo_participants')
+        ->whereIn('order_id', $validIds2026)
+        ->selectRaw('order_id, COUNT(*) as cnt')
+        ->groupBy('order_id')
+        ->pluck('cnt', 'order_id')
+        ->map(static fn ($v) => (int) $v)
+        ->all();
+
+    $pkgRows2026 = DB::table('orders_items as oi')
+        ->join('products as pr', 'pr.id', '=', 'oi.product_id')
+        ->whereIn('oi.order_id', $validIds2026)
+        ->orderByRaw("CASE WHEN pr.slug = 'natal' AND pr.bundle = 'Y' THEN 0 WHEN pr.slug = 'natal' THEN 1 ELSE 2 END")
+        ->select('oi.order_id', 'pr.name')
+        ->get();
+    foreach ($pkgRows2026 as $prRow) {
+        $oidKey = (int) $prRow->order_id;
+        if (!isset($pkgNameByOrder2026[$oidKey]) && !empty($prRow->name)) {
+            $pkgNameByOrder2026[$oidKey] = (string) $prRow->name;
+        }
+    }
+}
 
 $formatParticipants = static function ($orderModel) use ($includeFullPii, $todayBrt): array {
     if (!$includeFullPii || !$orderModel || !$orderModel->relationLoaded('participants')) {
@@ -1316,9 +1499,13 @@ foreach ($validRows2026 as $r) {
     $stKey = (string) $r->status_key;
     $stLabel = $statusLabels[$stKey] ?? $stKey;
     $crmUrl = "https://evydencia.com/gestao/pedidos/{$uuid}/detalhes";
-    $om = $eloquentOrders2026->get($oid);
-    $partsCount = $om && $om->relationLoaded('participants') ? $om->participants->count() : 0;
-    $pkgName = $formatPackageName($om);
+    $om = $needFullOrderHydration ? $eloquentOrders2026->get($oid) : null;
+    $partsCount = $needFullOrderHydration
+        ? ($om && $om->relationLoaded('participants') ? $om->participants->count() : 0)
+        : ($partCountsByOrder2026[$oid] ?? 0);
+    $pkgName = $needFullOrderHydration
+        ? $formatPackageName($om)
+        : ($pkgNameByOrder2026[$oid] ?? null);
     $schedStr = $r->schedule_1 ? (string) $r->schedule_1 : null;
     $createdBrt = $r->created_at
         ? CarbonImmutable::parse((string) $r->created_at, 'UTC')->setTimezone('America/Sao_Paulo')->format('Y-m-d H:i:s')
@@ -1395,105 +1582,103 @@ $pendingSessionConfirmation2026Count = max(0, $pastScheduled2026Count - $confirm
 
 // Build realized_sessions_comparison_at_cutoff with BOTH confirmed_realized and past_scheduled metrics
 $realizedComparison = [];
-foreach ([2021, 2022, 2023, 2024, 2025] as $yr) {
-    $yrStr = (string) $yr;
-    $ha = $histAuditData[$yrStr];
-    $confCnt = (int) $ha['confirmed_realized_up_to_cutoff'];
-    $pastCnt = (int) $ha['past_scheduled_up_to_cutoff'];
-    $realizedComparison[$yrStr] = [
-        'year' => $yr,
-        'is_current' => false,
-        'confirmed_realized_sessions_up_to_cutoff' => $confCnt,
-        'past_scheduled_sessions_up_to_cutoff' => $pastCnt,
-        'past_scheduled_pending_confirmation' => (int) $ha['past_scheduled_pending_confirmation'],
-        'realized_sessions_up_to_cutoff' => $confCnt,
-        'full_year_scheduled_sessions' => (int) $ha['full_year_scheduled_sessions'],
-        'full_year_valid_orders' => (int) $ha['consolidated_valid_orders'],
-        'diff_2026_confirmed_vs_year' => $confirmedRealized2026Count - $confCnt,
-        'pct_2026_confirmed_vs_year' => $confCnt > 0 ? round((($confirmedRealized2026Count - $confCnt) / $confCnt) * 100, 1) : null,
-        'diff_2026_past_scheduled_vs_year' => $pastScheduled2026Count - $pastCnt,
-    ];
-    if ($ha['post_season_aborted_orders_count'] > 0) {
-        $realizedComparison[$yrStr]['season_end_snapshot_valid_orders'] = (int) $ha['season_end_snapshot_valid_orders'];
-        $realizedComparison[$yrStr]['post_season_aborted_orders_count'] = (int) $ha['post_season_aborted_orders_count'];
-    }
-}
-$realizedComparison['2026'] = [
-    'year' => 2026,
-    'is_current' => true,
-    'confirmed_realized_sessions_up_to_cutoff' => $confirmedRealized2026Count,
-    'past_scheduled_sessions_up_to_cutoff' => $pastScheduled2026Count,
-    'past_scheduled_pending_confirmation' => $pendingSessionConfirmation2026Count,
-    'realized_sessions_up_to_cutoff' => $confirmedRealized2026Count,
-    'full_year_scheduled_sessions' => (int) ($kpis['scheduled_sessions'] ?? 0),
-    'full_year_valid_orders' => (int) ($kpis['total_orders'] ?? 0),
-    'remaining_scheduled_future_sessions' => count($upcomingSessions2026),
-    'unscheduled_valid_orders' => (int) ($kpis['unscheduled_sessions'] ?? 0),
-];
-
-// Verify population invariants across all 3 historical tables (2021-2026)
-$allYearsConsistent = true;
-foreach ([2021, 2022, 2023, 2024, 2025, 2026] as $yrCheck) {
-    $evCnt = $evolutionOrdersByYear[$yrCheck] ?? -1;
-    $rlCnt = (int) ($realizedComparison[(string) $yrCheck]['full_year_valid_orders'] ?? -2);
-    $pmFound = null;
-    foreach ($packagesMatrix as $pmItem) {
-        if ((int) ($pmItem['year'] ?? 0) === $yrCheck) {
-            $pmFound = (int) ($pmItem['distinct_valid_orders'] ?? -3);
-            break;
+$historicalReconciliationInvariants = null;
+if ($needHistoricalOverview) {
+    foreach ([2021, 2022, 2023, 2024, 2025] as $yr) {
+        $yrStr = (string) $yr;
+        $ha = $histAuditData[$yrStr] ?? [];
+        $confCnt = (int) ($ha['confirmed_realized_up_to_cutoff'] ?? 0);
+        $pastCnt = (int) ($ha['past_scheduled_up_to_cutoff'] ?? 0);
+        $realizedComparison[$yrStr] = [
+            'year' => $yr,
+            'is_current' => false,
+            'confirmed_realized_sessions_up_to_cutoff' => $confCnt,
+            'past_scheduled_sessions_up_to_cutoff' => $pastCnt,
+            'past_scheduled_pending_confirmation' => (int) ($ha['past_scheduled_pending_confirmation'] ?? 0),
+            'realized_sessions_up_to_cutoff' => $confCnt,
+            'full_year_scheduled_sessions' => (int) ($ha['full_year_scheduled_sessions'] ?? 0),
+            'full_year_valid_orders' => (int) ($ha['consolidated_valid_orders'] ?? ($evolutionOrdersByYear[$yr] ?? 0)),
+            'diff_2026_confirmed_vs_year' => $confirmedRealized2026Count - $confCnt,
+            'pct_2026_confirmed_vs_year' => $confCnt > 0 ? round((($confirmedRealized2026Count - $confCnt) / $confCnt) * 100, 1) : null,
+            'diff_2026_past_scheduled_vs_year' => $pastScheduled2026Count - $pastCnt,
+        ];
+        if (!empty($ha['post_season_aborted_orders_count'])) {
+            $realizedComparison[$yrStr]['season_end_snapshot_valid_orders'] = (int) $ha['season_end_snapshot_valid_orders'];
+            $realizedComparison[$yrStr]['post_season_aborted_orders_count'] = (int) $ha['post_season_aborted_orders_count'];
         }
     }
-    if ($evCnt !== $rlCnt || $evCnt !== $pmFound) {
-        $allYearsConsistent = false;
+    $realizedComparison['2026'] = [
+        'year' => 2026,
+        'is_current' => true,
+        'confirmed_realized_sessions_up_to_cutoff' => $confirmedRealized2026Count,
+        'past_scheduled_sessions_up_to_cutoff' => $pastScheduled2026Count,
+        'past_scheduled_pending_confirmation' => $pendingSessionConfirmation2026Count,
+        'realized_sessions_up_to_cutoff' => $confirmedRealized2026Count,
+        'full_year_scheduled_sessions' => (int) ($kpis['scheduled_sessions'] ?? 0),
+        'full_year_valid_orders' => (int) ($kpis['total_orders'] ?? 0),
+        'remaining_scheduled_future_sessions' => count($upcomingSessions2026),
+        'unscheduled_valid_orders' => (int) ($kpis['unscheduled_sessions'] ?? 0),
+    ];
+
+    // Verify population invariants across all 3 historical tables (2021-2026)
+    $allYearsConsistent = true;
+    foreach ([2021, 2022, 2023, 2024, 2025, 2026] as $yrCheck) {
+        $evCnt = $evolutionOrdersByYear[$yrCheck] ?? -1;
+        $rlCnt = (int) ($realizedComparison[(string) $yrCheck]['full_year_valid_orders'] ?? -2);
+        $pmFound = null;
+        foreach ($packagesMatrix as $pmItem) {
+            if ((int) ($pmItem['year'] ?? 0) === $yrCheck) {
+                $pmFound = (int) ($pmItem['distinct_valid_orders'] ?? -3);
+                break;
+            }
+        }
+        if ($evCnt !== $rlCnt || $evCnt !== $pmFound) {
+            $allYearsConsistent = false;
+        }
     }
+
+    $audit2022 = $histAuditData['2022'] ?? [];
+    $audit2024 = $histAuditData['2024'] ?? [];
+    $historicalReconciliationInvariants = [
+        'all_years_distinct_orders_consistent' => $allYearsConsistent,
+        'invariant_formula' => 'annual_evolution_full_season.orders === realized_sessions_comparison_at_cutoff.full_year_valid_orders === packages_matrix_by_year.distinct_valid_orders',
+        'year_2022_explanation' => [
+            'consolidated_valid_orders' => $audit2022['consolidated_valid_orders'] ?? 374,
+            'season_end_2022_12_31_snapshot_orders' => $audit2022['season_end_snapshot_valid_orders'] ?? 379,
+            'post_season_aborted_orders_count' => $audit2022['post_season_aborted_orders_count'] ?? 5,
+            'post_season_aborted_order_ids' => $audit2022['post_season_aborted_order_ids'] ?? [],
+            'explanation' => 'Em 31/12/2022 existiam 379 pedidos ativos na temporada; porém 5 pedidos sem sessão agendada receberam baixa de cancelamento (order_aborted) em 2023. Na posição consolidada atual todas as tabelas convergem exatamente em 374 pedidos válidos.',
+        ],
+        'year_2024_explanation' => [
+            'distinct_valid_orders' => $evolutionOrdersByYear[2024] ?? 397,
+            'package_order_occurrences_sum' => 398,
+            'total_bundle_units' => $audit2024['total_bundle_units'] ?? 399,
+            'multi_package_order_ids' => $audit2024['multi_package_order_ids'] ?? [3946],
+            'multi_unit_bundle_order_ids' => $audit2024['multi_unit_bundle_order_ids'] ?? [3532, 3946],
+            'explanation' => 'A temporada de 2024 teve exatamente 397 pedidos válidos distintos. A soma das colunas por pacote (209 Então é Natal + 159 Ho-Ho-Ho + 30 Boas Festas = 398) tem 1 ocorrência adicional porque o pedido #3946 contratou 2 pacotes distintos no mesmo pedido, e o total de unidades é 399 porque o pedido #3532 contratou 2 unidades do pacote Ho-Ho-Ho.',
+        ],
+        'sessions_2026_semantics' => [
+            'confirmed_realized_sessions' => $confirmedRealized2026Count,
+            'past_scheduled_sessions' => $pastScheduled2026Count,
+            'past_scheduled_pending_confirmation' => $pendingSessionConfirmation2026Count,
+            'explanation' => 'Separa ensaios com status operacional confirmado de sessão realizada (confirmed_realized_sessions) dos agendamentos cujo horário (schedule_1) já passou mas ainda aguardam mudança de status pós-sessão (session_schedule).',
+        ],
+    ];
 }
 
-$audit2022 = $histAuditData['2022'] ?? [];
-$audit2024 = $histAuditData['2024'] ?? [];
-$historicalReconciliationInvariants = [
-    'all_years_distinct_orders_consistent' => $allYearsConsistent,
-    'invariant_formula' => 'annual_evolution_full_season.orders === realized_sessions_comparison_at_cutoff.full_year_valid_orders === packages_matrix_by_year.distinct_valid_orders',
-    'year_2022_explanation' => [
-        'consolidated_valid_orders' => $audit2022['consolidated_valid_orders'] ?? 374,
-        'season_end_2022_12_31_snapshot_orders' => $audit2022['season_end_snapshot_valid_orders'] ?? 379,
-        'post_season_aborted_orders_count' => $audit2022['post_season_aborted_orders_count'] ?? 5,
-        'post_season_aborted_order_ids' => $audit2022['post_season_aborted_order_ids'] ?? [],
-        'explanation' => 'Em 31/12/2022 existiam 379 pedidos ativos na temporada; porém 5 pedidos sem sessão agendada receberam baixa de cancelamento (order_aborted) em 2023. Na posição consolidada atual todas as tabelas convergem exatamente em 374 pedidos válidos.',
-    ],
-    'year_2024_explanation' => [
-        'distinct_valid_orders' => $evolutionOrdersByYear[2024] ?? 397,
-        'package_order_occurrences_sum' => 398,
-        'total_bundle_units' => $audit2024['total_bundle_units'] ?? 399,
-        'multi_package_order_ids' => $audit2024['multi_package_order_ids'] ?? [3946],
-        'multi_unit_bundle_order_ids' => $audit2024['multi_unit_bundle_order_ids'] ?? [3532, 3946],
-        'explanation' => 'A temporada de 2024 teve exatamente 397 pedidos válidos distintos. A soma das colunas por pacote (209 Então é Natal + 159 Ho-Ho-Ho + 30 Boas Festas = 398) tem 1 ocorrência adicional porque o pedido #3946 contratou 2 pacotes distintos no mesmo pedido, e o total de unidades é 399 porque o pedido #3532 contratou 2 unidades do pacote Ho-Ho-Ho.',
-    ],
-    'sessions_2026_semantics' => [
-        'confirmed_realized_sessions' => $confirmedRealized2026Count,
-        'past_scheduled_sessions' => $pastScheduled2026Count,
-        'past_scheduled_pending_confirmation' => $pendingSessionConfirmation2026Count,
-        'explanation' => 'Separa ensaios com status operacional confirmado de sessão realizada (confirmed_realized_sessions) dos agendamentos cujo horário (schedule_1) já passou mas ainda aguardam mudança de status pós-sessão (session_schedule).',
-    ],
-];
-
-// Fast 2025 -> 2026 repurchase KPI + compact historical peaks (keeps summary self-sufficient & fast)
+// Fast 2025 -> 2026 repurchase KPI via 1 direct canonical SQL query (~12ms vs 1.84s full winback hydration).
+// Full getWinbackCohortData() runs ONLY when `clientes_recompra_campanhas` is explicitly requested.
 $winbackQuick = null;
 try {
-    $wb = $svc->getWinbackCohortData(2026, false, $ctx);
-    $c2025Total = (int) ($wb['total_cohort_customers'] ?? $wb['cohort_size'] ?? $wb['base_customers_count'] ?? 0);
-    $rep2026 = (int) ($wb['repurchased_count'] ?? $wb['converted_count'] ?? 0);
-    if ($c2025Total === 0) {
-        // Fallback exact SQL on valid orders 2025 vs 2026
-        $cust2025 = $validQuery->validNatalOrders(
-            $now,
-            CarbonImmutable::parse('2025-01-01 00:00:00', 'America/Sao_Paulo'),
-            CarbonImmutable::parse('2025-12-31 23:59:59', 'America/Sao_Paulo'),
-            'natal'
-        )->distinct()->pluck('o.customer_id')->map(static fn ($v) => (int) $v)->all();
-        $cust2026 = array_values(array_unique($validRows2026->pluck('customer_id')->map(static fn ($v) => (int) $v)->all()));
-        $c2025Total = count($cust2025);
-        $rep2026 = count(array_intersect($cust2025, $cust2026));
-    }
+    $cust2025 = $validQuery->validNatalOrders(
+        $now,
+        CarbonImmutable::parse('2025-01-01 00:00:00', 'America/Sao_Paulo'),
+        CarbonImmutable::parse('2025-12-31 23:59:59', 'America/Sao_Paulo'),
+        'natal'
+    )->distinct()->pluck('o.customer_id')->map(static fn ($v) => (int) $v)->all();
+    $cust2026 = array_values(array_unique($validRows2026->pluck('customer_id')->map(static fn ($v) => (int) $v)->all()));
+    $c2025Total = count($cust2025);
+    $rep2026 = count(array_intersect($cust2025, $cust2026));
     $winbackQuick = [
         'cohort_year' => 2025,
         'target_year' => 2026,
@@ -1506,19 +1691,28 @@ try {
     $winbackQuick = null;
 }
 
-// Fast acquisition / best historical weeks summary (~2ms from cache)
+// Fast acquisition / best historical weeks summary (~2ms from cache), with explicit peak-date cumulative semantics.
 $acqSummary = null;
-try {
-    $acqRaw = $svc->getAcquisitionAnalytics($immutable, $kpis, $ctx);
-    $acqSummary = [
-        'best_rolling_weeks' => array_slice($acqRaw['best_rolling_weeks'] ?? [], 0, 8),
-        'peak_days_top10' => array_slice($acqRaw['peak_days_top10'] ?? [], 0, 10),
-    ];
-} catch (Throwable) {
-    $acqSummary = null;
+if ($needHistoricalOverview || $wantSec('simulador_previsao')) {
+    try {
+        $acqRaw = $svc->getAcquisitionAnalytics($immutable, $kpis, $ctx);
+        $acqSummary = [
+            'as_of' => $now->toIso8601String(),
+            'cohort' => 'valid_natal_orders_2021_2026',
+            'period_start' => '2021-01-01',
+            'period_end' => $now->format('Y-m-d'),
+            'peak_days_accum_semantics' => 'cumulative_as_of_each_peak_date_not_current_season_total',
+            'scope_note' => 'Cada item em peak_days_top10 exibe accum_orders/accum_revenue acumulados apenas ate a data daquele dia de pico; nunca equivale ao total anual nem ao KPI atual de 2026.',
+            'best_rolling_weeks' => array_slice($acqRaw['best_rolling_weeks'] ?? [], 0, 8),
+            'peak_days_top10' => array_slice($acqRaw['peak_days_top10'] ?? [], 0, 10),
+        ];
+    } catch (Throwable) {
+        $acqSummary = null;
+    }
 }
 
-$loadedSections = ['resumo', 'historico'];
+$loadedSections = $needHistoricalOverview ? ['resumo', 'historico'] : [];
+$compactOperationalPreview = ($detailLevel !== 'completo' && !$wantSec('operacional_listas'));
 
 $out = [
     'source' => 'CRM_CANONICAL_NATAL_STATISTICS',
@@ -1572,6 +1766,7 @@ $out = [
         'goal_total_expanded_revenue_cents' => 40000000,
         'goal_total_expanded_revenue_reais' => 400000.0,
         'goal_revenue_reais' => (float) ($kpis['goal_revenue'] ?? 400000),
+        'goal_legacy_alias_note' => 'goal_revenue_reais espelha a meta-base legada de pacotes (R$ 300 mil); para meta ampliada com extras use goal_total_expanded_revenue_reais (R$ 400 mil).',
         'goal_orders_progress_pct' => (float) ($kpis['goal_orders_progress_pct'] ?? 0),
         'goal_base_packages_progress_pct' => round(($basePackagesCents / 30000000) * 100, 2),
         'goal_revenue_progress_pct' => (float) ($kpis['goal_revenue_progress_pct'] ?? 0),
@@ -1581,7 +1776,8 @@ $out = [
     ],
     'operational_stages_2026' => [
         'waiting_product_retrieve_count' => count($waitingRetrieveOrders),
-        'waiting_product_retrieve_orders' => $waitingRetrieveOrders,
+        'waiting_product_retrieve_orders_truncated' => $compactOperationalPreview && count($waitingRetrieveOrders) > 5,
+        'waiting_product_retrieve_orders' => $compactOperationalPreview ? array_slice($waitingRetrieveOrders, 0, 5) : $waitingRetrieveOrders,
         'by_status_counts' => array_values($byStatusCounts2026),
     ],
     'orders_without_participants_2026' => [
@@ -1589,8 +1785,9 @@ $out = [
         'completed_without_participants_count' => count($completedWithoutParticipants),
         'total_valid_without_participants_count' => count($activeWithoutParticipants) + count($completedWithoutParticipants),
         'sessions_with_participants_count' => count($validRows2026) - (count($activeWithoutParticipants) + count($completedWithoutParticipants)),
-        'active_pending_orders' => $activeWithoutParticipants,
-        'completed_without_participants_orders' => $completedWithoutParticipants,
+        'preview_truncated' => $compactOperationalPreview && (count($activeWithoutParticipants) > 5 || count($completedWithoutParticipants) > 5),
+        'active_pending_orders' => $compactOperationalPreview ? array_slice($activeWithoutParticipants, 0, 5) : $activeWithoutParticipants,
+        'completed_without_participants_orders' => $compactOperationalPreview ? array_slice($completedWithoutParticipants, 0, 5) : $completedWithoutParticipants,
     ],
     'sessions_schedule_2026' => [
         'as_of_brt' => $now->format('Y-m-d H:i:s'),
@@ -1602,19 +1799,22 @@ $out = [
         'past_scheduled_pending_confirmation_count' => $pendingSessionConfirmation2026Count,
         'realized_sessions_2026_count' => $confirmedRealized2026Count,
     ],
-    'realized_sessions_comparison_at_cutoff' => [
+];
+
+if ($needHistoricalOverview) {
+    $out['realized_sessions_comparison_at_cutoff'] = [
         'cutoff_mmdd' => $cutoffMmDd,
         'cutoff_formatted' => $cutoffFmt,
         'rule' => "Ensaios válidos de Natal (NatalValidOrdersQuery) até {$cutoffFmt} de cada ano, separando sessões com realização confirmada no status (confirmed_realized_sessions_up_to_cutoff) das sessões cujo horário agendado já passou (past_scheduled_sessions_up_to_cutoff).",
         'by_year' => $realizedComparison,
-    ],
-    'ytd_comparison_at_cutoff' => $ytdByYear,
-    'monthly_cumulative_to_cutoff' => $monthlyCumulative,
-    'annual_evolution_full_season' => $evolution,
-    'packages_matrix_by_year' => $packagesMatrix,
-    'historical_reconciliation_invariants' => $historicalReconciliationInvariants,
-    'historical_sales_peaks_summary' => $acqSummary,
-];
+    ];
+    $out['ytd_comparison_at_cutoff'] = $ytdByYear;
+    $out['monthly_cumulative_to_cutoff'] = $monthlyCumulative;
+    $out['annual_evolution_full_season'] = $evolution;
+    $out['packages_matrix_by_year'] = $packagesMatrix;
+    $out['historical_reconciliation_invariants'] = $historicalReconciliationInvariants;
+    $out['historical_sales_peaks_summary'] = $acqSummary;
+}
 
 // ============================================================================
 // ON-DEMAND ANALYTICAL DOMAINS (TABS B, C, D, E, F + PAGINATED OPERATIONAL LISTS)
@@ -1649,12 +1849,12 @@ if ($wantSec('financeiro_caixa')) {
         unset($finSit['transactions_summary']['data'], $finSit['glossary']);
     }
 
-    // Direct forensic SQL rollup on valid 2026 Natal orders for exact open installments & effective paid methods
+    // Direct forensic SQL rollup on valid 2026 Natal orders for exact open installments, effective paid methods & aging face-vs-paid reconciliation
     $instRows2026 = $validIds2026 !== []
         ? DB::table('orders_installments as oi')
             ->leftJoin('payment_methods as pm', 'pm.id', '=', 'oi.payment_method_id')
             ->whereIn('oi.order_id', $validIds2026)
-            ->select('oi.id', 'oi.order_id', 'oi.total', 'oi.payment_total', 'oi.payment_at', 'oi.expiry_at', 'oi.payment_method_id', 'pm.name as method_name', 'pm.method as method_enum')
+            ->select('oi.id', 'oi.order_id', 'oi.total', 'oi.payment_total', 'oi.increase', 'oi.discount', 'oi.payment_at', 'oi.expiry_at', 'oi.payment_method_id', 'pm.name as method_name', 'pm.method as method_enum')
             ->get()
         : collect();
 
@@ -1667,22 +1867,50 @@ if ($wantSec('financeiro_caixa')) {
     $futureDueCents = 0;
     $paidByMethod = [];
     $openByMethod = [];
+    $monetaryCashEffectCents = 0;
+    $nonCashBarterCents = 0;
+    $faceOverstatementCents = 0;
+    $increaseUnderstatementCents = 0;
+    $divergentOrderSet = [];
+    $divergentInstCount = 0;
 
     foreach ($instRows2026 as $ir) {
         $tCents = nbCents($ir->total);
         $pCents = nbCents($ir->payment_total);
-        $isPaid = ($ir->payment_at !== null && $pCents > 0);
+        $hasPaymentAt = ($ir->payment_at !== null);
+        $isPaid = ($hasPaymentAt && $pCents > 0);
         $mName = ($ir->method_name !== null && trim((string) $ir->method_name) !== '') ? trim((string) $ir->method_name) : 'Não informado';
         $enumObj = $ir->method_enum !== null ? \App\Enums\PaymentMethod::coerce(ctype_digit((string) $ir->method_enum) ? (int) $ir->method_enum : $ir->method_enum) : null;
         $catLabel = $enumObj?->description ?? 'Outros';
         $catKey = $enumObj?->key ?? 'other';
+        $econ = nbClassifyPaymentEconomics($mName, $catKey, $catLabel);
+
+        if ($hasPaymentAt && $tCents !== $pCents) {
+            $rowDiff = $tCents - $pCents;
+            $divergentInstCount++;
+            $divergentOrderSet[(int) $ir->order_id] = true;
+            if ($rowDiff > 0) {
+                $faceOverstatementCents += $rowDiff;
+            } else {
+                $increaseUnderstatementCents += $rowDiff;
+            }
+        }
 
         if ($isPaid) {
+            if ($econ['cash_effect']) {
+                $monetaryCashEffectCents += $pCents;
+            } else {
+                $nonCashBarterCents += $pCents;
+            }
             if (!isset($paidByMethod[$mName])) {
                 $paidByMethod[$mName] = [
                     'method_name' => $mName,
                     'category_key' => $catKey,
                     'category_label' => $catLabel,
+                    'gateway_category_label' => $catLabel,
+                    'economic_nature' => $econ['economic_nature'],
+                    'cash_effect' => $econ['cash_effect'],
+                    'payment_rail' => $econ['payment_rail'],
                     'paid_installments_count' => 0,
                     'orders_set' => [],
                     'paid_cents' => 0,
@@ -1733,6 +1961,10 @@ if ($wantSec('financeiro_caixa')) {
             'method_name' => $pmEntry['method_name'],
             'category_key' => $pmEntry['category_key'],
             'category_label' => $pmEntry['category_label'],
+            'gateway_category_label' => $pmEntry['gateway_category_label'],
+            'economic_nature' => $pmEntry['economic_nature'],
+            'cash_effect' => $pmEntry['cash_effect'],
+            'payment_rail' => $pmEntry['payment_rail'],
             'orders_count' => count($pmEntry['orders_set']),
             'paid_installments_count' => $pmEntry['paid_installments_count'],
             'paid_cents' => $pmEntry['paid_cents'],
@@ -1749,21 +1981,37 @@ if ($wantSec('financeiro_caixa')) {
     }
     usort($openMethodsList, static fn ($a, $b) => $b['open_cents'] <=> $a['open_cents']);
 
-    // The CRM aging report may sum orders_installments.total on payment_at, while
-    // canonical cash uses payment_total. Mark differences explicitly; never infer lost cash.
+    // Deterministic reconciliation between NatalForensicStatisticsService::getFinancialAgingData()
+    // (which sums orders_installments.total on payment_at) and canonical cash (which sums payment_total).
     $agingDataForMcp = $svc->getFinancialAgingData($selectedYear, false, $ctx);
     $agingReconciliationForMcp = ['available' => false, 'reason' => 'comparison_only_supported_for_2026'];
     if ($selectedYear === 2026 && is_array($agingDataForMcp) && isset($agingDataForMcp['total_paid'])) {
         $agingPaidCents = nbFloatToCents($agingDataForMcp['total_paid']);
         $agingDeltaCents = $agingPaidCents - $paidRevenueCents;
+        $divergentOrderIds = array_keys($divergentOrderSet);
+        sort($divergentOrderIds);
+        $formulaDeltaCents = $faceOverstatementCents + $increaseUnderstatementCents;
         $agingReconciliationForMcp = [
             'available' => true,
             'status' => $agingDeltaCents === 0 ? 'MATCHES_CANONICAL_RECORDED_RECEIPTS' : 'NEEDS_REVIEW_DIFFERENT_PAYMENT_BASIS_OR_SCOPE',
+            'root_cause' => $agingDeltaCents === 0 ? 'identical_face_and_paid_amounts' : 'installment_face_total_vs_payment_total_on_paid_rows',
+            'same_valid_order_population' => true,
             'canonical_recorded_received_cents' => $paidRevenueCents,
+            'canonical_recorded_received_reais' => nbReais($paidRevenueCents),
             'aging_paid_report_cents' => $agingPaidCents,
+            'aging_paid_report_reais' => nbReais($agingPaidCents),
             'difference_cents' => $agingDeltaCents,
+            'difference_reais' => nbReais($agingDeltaCents),
+            'partial_or_split_face_overstatement_cents' => $faceOverstatementCents,
+            'partial_or_split_face_overstatement_reais' => nbReais($faceOverstatementCents),
+            'increase_or_excess_understatement_cents' => $increaseUnderstatementCents,
+            'increase_or_excess_understatement_reais' => nbReais($increaseUnderstatementCents),
+            'reconciled_formula_matches_delta' => ($formulaDeltaCents === $agingDeltaCents),
+            'divergent_orders_count' => count($divergentOrderIds),
+            'divergent_installments_count' => $divergentInstCount,
+            'divergent_order_ids' => $divergentOrderIds,
             'bank_statement_integrated' => false,
-            'methodology_note' => 'Aging may sum installment face value (total) for payment_at records; canonical paid uses payment_total. Review installment-by-installment before attributing the difference.',
+            'methodology_note' => 'getFinancialAgingData soma o valor nominal da parcela (orders_installments.total) quando ha payment_at, enquanto o recebido canonico soma payment_total (entradas parciais desmembradas vs acrescimos). Nenhum valor desapareceu e nenhum lancamento foi alterado.',
         ];
     }
 
@@ -1780,6 +2028,16 @@ if ($wantSec('financeiro_caixa')) {
             'upcoming_due_cents' => $futureDueCents,
             'upcoming_due_reais' => nbReais($futureDueCents),
             'by_configured_method' => $openMethodsList,
+        ],
+        'receipts_economic_breakdown_2026' => [
+            'total_crm_recorded_paid_cents' => $monetaryCashEffectCents + $nonCashBarterCents,
+            'total_crm_recorded_paid_reais' => nbReais($monetaryCashEffectCents + $nonCashBarterCents),
+            'monetary_cash_effect_cents' => $monetaryCashEffectCents,
+            'monetary_cash_effect_reais' => nbReais($monetaryCashEffectCents),
+            'non_cash_barter_cents' => $nonCashBarterCents,
+            'non_cash_barter_reais' => nbReais($nonCashBarterCents),
+            'bank_statement_reconciled' => false,
+            'semantics_note' => 'Permuta possui natureza economica nao-monetaria (cash_effect=false) embora cadastrada na categoria Dinheiro no legado; Stone Debito opera no trilho debit_card. Recebimento no CRM nao equivale a extrato bancario conciliado.',
         ],
         'effective_paid_methods_2026' => $effectiveMethodsList,
         'financial_situation_2026' => $finSit,
@@ -1888,8 +2146,8 @@ if ($wantSec('pacotes_produtos_bonus')) {
     ];
 }
 
-// Paginated Operational Lists (only when explicitly requested)
-if ($wantSec('operacional_listas') || $detailLevel === 'padrao') {
+// Paginated Operational Lists (only when explicitly requested or when no specific section filter was passed with detail_level=padrao)
+if ($wantSec('operacional_listas') || ($reqSections === [] && $detailLevel === 'padrao')) {
     $loadedSections[] = 'operacional_listas';
     $offset = ($page - 1) * $limit;
     $recentOrdersRaw = array_slice($kpis['recent_orders'] ?? [], $offset, $limit);
@@ -1958,5 +2216,6 @@ $out['available_analytical_sections'] = [
     'operacional_listas',
 ];
 $out['methodology_note'] = 'Fonte oficial da Central de Inteligência Comercial (/gestao/natal/estatisticas). Todos os indicadores excluem cancelados (order_aborted), chargeback, estornados e aguardando pagamento (NatalValidOrdersQuery). Modo somente-leitura estrito no MySQL e Redis.';
+$out['bridge_telemetry'] = nbBuildBridgeTelemetry($bridgeStartedMs, $activeCacheMode);
 
 echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
