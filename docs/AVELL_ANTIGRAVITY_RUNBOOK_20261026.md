@@ -131,3 +131,14 @@ Se houver arquivos locais modificados, `--refresh` para em vez de sobrescrever. 
 - Paths apontando via junction/symlink para printserver, EvydFlow ou instalacao MCP operacional sao recusados antes de escrever clones.
 - As ferramentas de links so existem para operadores OAuth com acesso CRM completo; nao usar token da Gameplay como substituto da identidade CRM.
 - O GitHub CI de cada PR permanece referencia da suite completa e nao comprova que fotos reais foram publicadas em producao.
+
+## Etapa 3 — após walkthrough local aprovado
+A última execução reportada do Antigravity concluiu clones limpos, 179/179 testes MCP e 17/17 testes gateway em Avell. **Não repetir a Etapa 1.**
+
+A auditoria de código posterior encontrou e corrigiu a paginação do Laravel: no CRM `GET /api/orders/search` usa `paginate(200)` e responde `data/meta/links`. O MCP (PR #11) prefere o bridge PHP, mas agora aceita o fallback HTTP quando os metadados da **paginação de servidor** são completos e reconciliáveis, sem `.slice()` local. O `OrderResource.status` tem `id/name`, não `key`: IDs 10/11/12 foram normalizados no adaptador. Os testes são totalmente sintéticos, sem clientes reais.
+
+O único comando de retomada deve vir de `docs/PROMPT_ANTIGRAVITY_FLASH_AVELL_20261026.md`: verifica worktrees limpas, atualiza por `--refresh` e executa somente os testes afetados. Não usar `--run-mcp-tests` novamente sem causa.
+
+`node scripts/antigravity/inspect-canonical-bridge.mjs --json` verifica só os arquivos locais do PHP. No Avell, `false` é esperado; nem `true` neste probe comprova que o MCP na VPS possui conexão/auth/latência/resultado corretos.
+
+**Próximo gate externo:** quando autorizado, verificar read-only na VPS a opção bridge PHP ou o endpoint HTTP paginado sob a credencial de serviço de leitura. Não trazer bearer ou dados de clientes ao Avell. Enquanto isso manter `CRM_CANONICAL_SEARCH_VPS=not_verified` e `GAMEPLAY_RUNTIME=not_verified`; nunca considerar CI como autorização de fotos reais.
