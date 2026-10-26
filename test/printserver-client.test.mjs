@@ -47,3 +47,15 @@ test('409 requires manual reconciliation',async()=>{
  const api=printserverClient(config,{fetchFn:async()=>new Response('{}',{status:409})});
  await assert.rejects(api.enqueue({order_id:1}),/manual_reconciliation/);
 });
+
+test('broker agent heartbeat uses admin-scoped GET and never queues a print',async()=>{
+ const calls=[];
+ const api=printserverClient(config,{fetchFn:async(url,opts)=>{
+  calls.push({url,method:opts.method});
+  return new Response(JSON.stringify({agent_online:true,agent_poll_age_seconds:3,physical_print_verified:false}),{status:200});
+ }});
+ const r=await api.agentStatus();
+ assert.equal(r.agent_online,true);
+ assert.equal(r.physical_print_verified,false);
+ assert.deepEqual(calls,[{url:'https://print.example.org/v1/agent/status',method:'GET'}]);
+});
