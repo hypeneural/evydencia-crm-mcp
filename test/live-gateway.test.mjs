@@ -481,6 +481,10 @@ test('PrintServer tool scope uses a dedicated operator allowlist and never print
   assert.ok(!t9.some(t=>t.name==='crm_solicitar_impressao_etiqueta'));
   const printTool=t7.find(t=>t.name==='crm_solicitar_impressao_etiqueta');
   assert.deepEqual(printTool._meta?.securitySchemes,[{type:'oauth2',scopes:['crm.read','print.jobs.write']}]);
+  assert.equal(printTool.annotations?.readOnlyHint,false);
+  assert.equal(printTool.annotations?.destructiveHint,true,'printing is an irreversible physical action');
+  assert.equal(printTool.annotations?.openWorldHint,false,'only the fixed private LABEL fleet');
+  assert.equal(printTool.annotations?.idempotentHint,true,'broker deduplicates arrival labels per order');
   const c7Caps=await c7.callTool({name:'crm_capacidades',arguments:{}});
   const c9Caps=await c9.callTool({name:'crm_capacidades',arguments:{}});
   assert.equal(c7Caps.structuredContent.oauth_authorization.print_scope_granted,true);
