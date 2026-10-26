@@ -15,10 +15,14 @@ try{
  if(job?.job_id!==syntheticJobId||job?.order_id!==999999)throw Error('synthetic_job_contract_mismatch');
  const state=job.state;
  if(!['spooled','queued','claimed','failed','unknown','expired'].includes(state))throw Error('synthetic_job_state_invalid');
+ // An older broker can lack this endpoint; preserve the core durable-job smoke.
+ const agent=await client.agentStatus().catch(()=>null);
  console.log(JSON.stringify({
   source:'PRINTSERVER_READ_ONLY_SMOKE',broker_reachable:true,
   job_is_synthetic:true,job_state:state,
   spooled:state==='spooled',physical_print_verified:false,
+  agent_online:typeof agent?.agent_online==='boolean'?agent.agent_online:null,
+  agent_poll_age_seconds:Number.isSafeInteger(agent?.agent_poll_age_seconds)?agent.agent_poll_age_seconds:null,
   changes_applied:false
  }));
  if(state!=='spooled')process.exitCode=2;
