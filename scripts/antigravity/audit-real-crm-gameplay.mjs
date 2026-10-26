@@ -35,7 +35,7 @@ export async function runRealReadOnlyAudit({
  const cfg=strictConfig(env,argv);
  const crm=legacyReadClient({
   baseUrl:cfg.crmBase,token:env.EVYD_INTERNAL_READ_TOKEN,
-  fetchFn,timeoutMs:7000,includeParticipants:true,
+  fetchFn,timeoutMs:7000,includeParticipants:true,bypassBridgeCache:true,
   operatorContext:{
    requireOperator:true,operatorId:cfg.operatorId,
    authScope:'crm.read',
