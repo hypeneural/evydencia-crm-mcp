@@ -582,8 +582,14 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   }
  }):null;
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
- const gameplayCfg=gameplayReadConfig(process.env);
- const gameplay=gameplayCfg&&direct?createGameplayReadClient(gameplayCfg,{fetchFn}):null;
+ // A missing/misconfigured optional Gameplay integration must never bring down CRM and Z-API.
+ let gameplay=null;
+ if(direct){
+  try{
+   const readConfig=gameplayReadConfig(process.env);
+   if(readConfig)gameplay=createGameplayReadClient(readConfig,{fetchFn});
+  }catch{log({evt:'gameplay_config_invalid',op:ex.operatorTag})}
+ }
  const resolvePhone=async({telefone,nome_cliente},{allowLookupMiss=false}={})=>{
   const handleLookup=r=>{
    if(typeof r==='string')return {status:'matched',phone:r};
