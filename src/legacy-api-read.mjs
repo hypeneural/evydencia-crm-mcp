@@ -1177,7 +1177,13 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
       const projected=forensicOrderProjection(r,{includeParticipants,fullProfile,detailLevel});
       // Laravel OrderResource.status exposes {id,name}, not enum key.
       // These IDs are pinned to App/Enums/OrderStatus.php on CRM main.
-      const byId={10:'waiting_product_retrieve',11:'product_retrieve_confirmed',12:'order_completed'};
+      const byId={
+       1:'order_aborted',2:'payment_chargeback',3:'order_created',
+       4:'waiting_payment',5:'payment_confirmed',6:'session_schedule',
+       7:'session_schedule_confirmed',8:'selection_schedule',
+       9:'selection_schedule_confirmed',10:'waiting_product_retrieve',
+       11:'product_retrieve_confirmed',12:'order_completed',13:'payment_refunded'
+      };
       return {...projected,status_key:projected.status_key||byId[projected.status_id]||null};
      }),
     };
