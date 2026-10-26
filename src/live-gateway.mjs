@@ -15,6 +15,7 @@ import {legacyReadClient} from './legacy-api-read.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
+import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
 import {createZapiBridge} from './zapi-mcp-client.mjs';
 import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME,getZapiRequiredScopes} from './zapi-mcp-tools.mjs';
@@ -568,7 +569,7 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
 export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
-async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg}){
+async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
  const grantedScopes=new Set(Array.isArray(auth?.scopes)&&auth.scopes.length?auth.scopes:[GATEWAY_SCOPE]);
@@ -957,16 +958,23 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      if(o.status_key!=='waiting_product_retrieve')throw Error('printserver_status_not_ready');
      if(o.remaining_cents!==0)throw Error('printserver_financial_not_verified');
      if(typeof o.customer_name!=='string'||o.customer_name.trim().length<2)throw Error('printserver_invalid_customer');
+     // Render the exact configured CRM image (background, product/global overrides,
+     // QR and dynamic fields) after the authorization/status/finance guard.
+     // Fail closed if enabled and Laravel cannot render; NEVER silently print plain text.
+     const artwork=labelRenderEnabled
+      ? await labelRenderer({orderUuid:o.order_uuid,orderId:order_id,env:labelRenderEnv})
+      : {};
      const result=await printer.enqueue({
       request_id:request_id||randomUUID(),operator_id:ex.operatorId,
       order_id,status_key:'waiting_product_retrieve',
       confirmed_by_operator:true,purpose:'arrival',
       customer_name:o.customer_name,
-      package_name:o.package_name||'Pedido de fotos'
+      package_name:o.package_name||'Pedido de fotos',
+      ...artwork
      });
      return {source:'PRINTSERVER',printed_physically:false,crm_status_updated:false,
       whatsapp_sent:false,job_id:result?.job?.job_id??null,
-      print_state:result?.job?.state??'unknown',replay:Boolean(result?.replay),
+      print_state:result?.job?.state??'unknown',render_source:result?.job?.render_source??null,replay:Boolean(result?.replay),
       order_id,crm_order_url:o.crm_order_url??null};
     },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
    reg('crm_consultar_impressao_etiqueta','Consultar estado do trabalho de impressão',
@@ -1153,7 +1161,7 @@ function rateLimiter(now){
  };
 }
 
-export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now()}={}){
+export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now(),labelRenderer=renderCanonicalCrmLabel}={}){
  const cfg=gatewayConfig(env);
  const printCfg=printserverConfig(env);
  const perf=createGatewayPerfTracker();
@@ -1183,7 +1191,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  const resourceUrl=new URL(cfg.resource);
  const resourceMetadataUrl=getOAuthProtectedResourceMetadataUrl(resourceUrl);
  const gate=requireBearerAuth({verifier:oauth.verifier,requiredScopes:[GATEWAY_SCOPE],resourceMetadataUrl,expectedResource:resourceUrl});
- mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
+ mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:supportedGatewayScopes(cfg),resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
