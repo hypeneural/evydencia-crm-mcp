@@ -165,12 +165,20 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,perfSnapshot=null}={}){
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,perfSnapshot=null,gameplayEnabled=false}={}){
  const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
  });
+ if(gameplayEnabled && directEnabled){
+  for(const name of GAMEPLAY_CRM_TOOL_NAMES){
+   tools.push({tool:name,capability:name==='crm_gameplay_links'?'christmas_gallery_links':'christmas_publication_audit',
+    access:'read',required_scope:GATEWAY_SCOPE,source:'crm_gameplay_join',supports_filters:true,
+    supports_pagination:name==='crm_gameplay_auditoria',supports_history:false,
+    registered:true,state:'LIVE_ACTIVE'});
+  }
+ }
  if(zapiContext?.diagEnabled){
   tools.push(
    {
@@ -229,7 +237,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
  }
  const activeTools=tools.filter(t=>t.registered);
  const uiSet=new Set(UI_CRM_TOOL_NAMES);
- const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)).length;
+ const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!GAMEPLAY_CRM_TOOL_NAMES.includes(t.tool)).length;
  const mcpUiActive=Boolean(directEnabled&&operatorFullCrm&&uiAppsEnabled);
  return {
   service:'evydencia-crm-mcp-live',
@@ -239,6 +247,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   mode:(operatorFullCrm||zapiContext?.enabled||zapiContext?.diagEnabled)?'LIVE_OPERATOR_FULL_OAUTH':'LIVE_READ_ONLY_OAUTH',
   mock_mode:false,
   direct_crm_read_enabled:Boolean(directEnabled),
+  gameplay_read_enabled:Boolean(gameplayEnabled&&directEnabled),
   forensic_audit_enabled:Boolean(directEnabled&&operatorFullCrm),
   proposal_dispatch_enabled:Boolean(operatorFullCrm),
   mcp_ui_apps_enabled:mcpUiActive,
@@ -248,6 +257,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   legacy_v012_tools_preserved_count:legacyPreservedCount,
   tools,
   ...(directEnabled?{direct_crm_tools:DIRECT_CRM_TOOL_NAMES}:{}),
+  ...(gameplayEnabled&&directEnabled?{gameplay_crm_tools:GAMEPLAY_CRM_TOOL_NAMES}:{}),
   ...(directEnabled&&operatorFullCrm?{forensic_crm_tools:FORENSIC_CRM_TOOL_NAMES}:{}),
   ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{}),
   ...(mcpUiActive?{ui_crm_tools:UI_CRM_TOOL_NAMES,ui_resource_uri:MCP_UI_CARD_RESOURCE_URI,ui_fallback_resource_uri:MCP_UI_CARD_V1_FALLBACK_URI}:{}),
@@ -709,7 +719,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null}));
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay)}));
  if(gameplay){
   const eligibleStatus=new Set(['waiting_product_retrieve','order_completed']);
   const findOrders=async(filter)=>{
