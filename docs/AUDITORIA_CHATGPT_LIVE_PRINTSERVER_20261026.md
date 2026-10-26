@@ -52,3 +52,25 @@ O resultado `spooled` atesta apenas a fila, não a saída física da etiqueta.
 - [Especificação oficial de ferramentas MCP](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
 - [OpenAI Plugins — autenticação por ferramenta](https://developers.openai.com/plugins/build/auth)
 - [MCP Authorization/Scopes](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
+
+## Revalidação LIVE após deploy `f6f93b5` (26/10/2026)
+
+Esta seção é a **evidência posterior** ao hotfix e prevalece sobre o diagnóstico histórico acima; não apagar os relatos de falha anteriores.
+
+Em uma sessão ChatGPT autenticada, todas as 33 ferramentas estavam invocáveis e foram executadas exclusivamente operações de leitura/recusa de escrita:
+- `crm_capacidades`: `build_commit=f6f93b5`, `tools_active_count=33`, `legacy_v012_tools_preserved_count=29`; `oauth_authorization.operator_id="2"`, `granted_scopes` inclui `print.jobs.write`, `print_scope_granted=true`, `print_tool_enabled=true`.
+- `crm_consultar_impressao_etiqueta({order_id:999999,job_id:"95bab7dc-62e9-498f-afbd-68775f05e549"})`: `synthetic_test=true`, `print_state="spooled"`, `printed_physically=false`. O antigo `legacy_read_order_not_found` desapareceu.
+- `crm_solicitar_impressao_etiqueta({order_id:999999,confirmado_pelo_operador:false})`: erro esperado `operator_confirmation_required`, sem criar novo job.
+- `crm_previa_malotes_retirada({order_ids:[5127,5126]})`: ambos `session_schedule`, saldos pendentes, `print_eligible=false`, `changes_applied=false`. Não armazenar nomes nem dados identificáveis nesta evidência.
+- `crm_conexao_privada`: identidade do operador #2 confirmada e token válido, separado dos escopos OAuth MCP.
+
+Telemetria de `crm_capacidades.performance_telemetry.by_tool` na janela observada:
+- `crm_capacidades`: `last_gateway_ms=1.11`;
+- `crm_consultar_impressao_etiqueta`: `last_gateway_ms=116.27`;
+- `crm_solicitar_impressao_etiqueta` (recusa): `last_gateway_ms=0.54`;
+- `crm_previa_malotes_retirada`: `last_gateway_ms=490.47`.
+As cinco chamadas paralelas levaram aproximadamente 7,8s observados externamente; isso inclui transporte/orquestração e **não** é soma de tempos internos. São amostras, não p95.
+
+**Conclusão:** integração ChatGPT → MCP OAuth → PrintServer broker provada para leitura do job sintético persistido. Bloqueio de confirmação comprovado. A gravação de uma nova etiqueta real, o retorno físico do rolo e a transição de status 10+WhatsApp não foram testados aqui e não devem ser marcados como 100% homologados.
+
+**Auditoria do PrintServer:** a PR #1 recebeu hardening posterior de rollback de job em memória em falha de persistência e limites de texto na etiqueta 100×40, com teste sintético. Essas mudanças são de branch; não presumir que estejam implantadas no broker Windows/VPS até registrar SHA de deploy.
