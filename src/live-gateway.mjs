@@ -301,6 +301,10 @@ function summarizeToolResult(tool,res){
    return `OK [crm_estatisticas_natal]: perfil=${res.response_profile||'default'}, corte=${res.cutoff_mmdd||'atual'}, nivel=${res.detail_level||'resumo'}, pedidos_validos_2026=${res.kpis_2026?.valid_orders??'n/d'}, sessoes_confirmadas_2026=${res.kpis_2026?.confirmed_realized_sessions??res.kpis_2026?.confirmed_realized_sessions_to_date??res.kpis_2026?.realized_sessions_to_date??'n/d'}. Consulte structuredContent.`;
   case 'crm_natal_participantes_estatisticas':
    return `OK [crm_natal_participantes_estatisticas]: escopo=${res.year_scope||'2026'}, pop_primaria=${res.primary_population_year??res.year_scope??'2026'}, total_participantes=${res.population_reconciliation?.total_participants_count??'n/d'}, reconciliado=${Boolean(res.population_reconciliation?.reconciled)}. Consulte structuredContent.`;
+  case 'crm_gameplay_links':
+   return `OK [crm_gameplay_links]: pedidos=${res.total??0}, escolha_id=${Boolean(res.selection_required)}. Consulte structuredContent para status do CRM, fotos publicadas/preparadas e links individuais autorizados.`;
+  case 'crm_gameplay_auditoria':
+   return `OK [crm_gameplay_auditoria]: pedidos_elegiveis=${res.counts?.total??'n/d'}, pendentes=${res.counts?.pending_publication??'n/d'}, fotos_publicadas=${res.counts?.published_photo_count??'n/d'}, fotos_em_preparacao=${res.counts?.preparing_photo_count??'n/d'}. Jogos no navegador NAO verificados. Consulte structuredContent.`;
   case 'crm_pedidos_buscar':
    return `OK [crm_pedidos_buscar]: retornados=${Array.isArray(res.orders)?res.orders.length:0}, total_correspondente=${res.pagination?.total_matching_orders??'n/d'}. Consulte structuredContent.`;
   case 'crm_pedido_detalhe':
