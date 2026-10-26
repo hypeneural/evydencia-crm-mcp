@@ -417,3 +417,32 @@ test('Regression P0 — write scope enforcement, securitySchemes metadata, opera
   await c7.close();
  }
 });
+
+test('PrintServer tool scope uses a dedicated operator allowlist and never prints without confirmation',async()=>{
+ const g=gw({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48)
+ });
+ const op7=await connect(g,'fake-op7-read-000001');
+ const op9=await connect(g,'fake-op9-read-000002');
+ assert.ok(op7.tokens.scope.split(/\s+/).includes('print.jobs.write'),'explicitly allowed operator gets print scope even with read-only CRM ability');
+ assert.ok(!op9.tokens.scope.split(/\s+/).includes('print.jobs.write'),'unlisted operator cannot print');
+ const c7=await mcp(g,op7.tokens.access_token);
+ const c9=await mcp(g,op9.tokens.access_token);
+ try{
+  const t7=(await c7.listTools()).tools;
+  const t9=(await c9.listTools()).tools;
+  assert.ok(t7.some(t=>t.name==='crm_solicitar_impressao_etiqueta'));
+  assert.ok(!t9.some(t=>t.name==='crm_solicitar_impressao_etiqueta'));
+  const printTool=t7.find(t=>t.name==='crm_solicitar_impressao_etiqueta');
+  assert.deepEqual(printTool._meta?.securitySchemes,[{type:'oauth2',scopes:['crm.read','print.jobs.write']}]);
+  const result=await c7.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:{order_id:5001,confirmado_pelo_operador:false}});
+  assert.equal(result.isError,true);
+  assert.equal(JSON.parse(result.content[0].text).error,'operator_confirmation_required');
+ }finally{
+  await c7.close();
+  await c9.close();
+  await g.close();
+ }
+});
