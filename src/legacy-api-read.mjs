@@ -1140,11 +1140,6 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const page=Math.max(1,Number(opts?.page)||1);
    const detailLevel=['resumo','padrao','forense'].includes(opts?.detailLevel)?opts.detailLevel:'padrao';
    const canonicalPaginationRequired=opts?.canonicalPaginationRequired===true;
-   if(canonicalPaginationRequired&&(!fullProfile||!canUseForensicBridge())){
-    // Legacy /api/orders/search is projected and paginated client-side;
-    // it cannot prove complete coverage of a Christmas publication audit.
-    fail('canonical_pagination_unavailable');
-   }
    if(fullProfile&&canUseForensicBridge()){
     const bridgeFilters={};
     const keyMap={'customer.name':'customer_name','customer.whatsapp':'customer_whatsapp','customer.uuid':'customer_uuid','order.uuid':'order_uuid','order.id':'order_id','order.status':'order_status','product.slug':'product_slug','order.created-start':'created_start','order.created-end':'created_end','order.session-start':'session_start','order.session-end':'session_end','payment_method_name':'payment_method_name','has_open_balance':'has_open_balance'};
@@ -1152,6 +1147,34 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      if(v!==undefined&&v!==null&&v!==''&&keyMap[k])bridgeFilters[keyMap[k]]=v;
     }
     return await runForensicBridge({action:'orders.search',filters:bridgeFilters,limit:max,page,detail_level:detailLevel,full_profile:true});
+   }
+   if(canonicalPaginationRequired){
+    // Fallback only when Laravel proves server-side pagination. The CRM
+    // OrderService uses paginate(200): requesting page 2 is NOT equivalent
+    // to slicing page 2 out of a locally received page 1.
+    const params=legacyFilters(filters);
+    params.set('page',String(page));
+    const raw=await get('/api/orders/search',params);
+    const rows=raw?.data,meta=raw?.meta;
+    const validInt=v=>Number.isSafeInteger(Number(v))&&Number(v)>=0;
+    const current=Number(meta?.current_page);
+    const perPage=Number(meta?.per_page);
+    const total=Number(meta?.total);
+    const lastPage=Number(meta?.last_page);
+    if(!Array.isArray(rows)||!validInt(meta?.current_page)||current!==page||
+       !validInt(meta?.per_page)||perPage<1||perPage>200||
+       !validInt(meta?.total)||!validInt(meta?.last_page)||
+       lastPage!==Math.max(1,Math.ceil(total/perPage))||
+       page>lastPage || rows.length!==Math.min(perPage,Math.max(0,total-(page-1)*perPage))){
+      fail('canonical_pagination_unavailable');
+    }
+    return {
+     source:'CRM_API_SERVER_PAGINATED',scope:'PAGINATED_CANONICAL_ORDER_LIST',
+     detail_level:detailLevel,
+     pagination:{page,per_page:perPage,returned_count:rows.length,
+      total_matching_orders:total,total_pages:lastPage,has_more:page<lastPage},
+     orders:rows.map(r=>forensicOrderProjection(r,{includeParticipants,fullProfile,detailLevel})),
+    };
    }
    const cleanFilters={};
    for(const [k,v] of Object.entries(filters||{})){if(allKeys.has(k)&&v!==undefined&&v!==null&&v!=='')cleanFilters[k]=v}
