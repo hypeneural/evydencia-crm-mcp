@@ -1022,7 +1022,7 @@ export function legacyOrderProjection(raw,{includeParticipants=false,fullProfile
  return forensicOrderProjection(raw,{includeParticipants,fullProfile});
 }
 
-export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,includeParticipants=false,operatorContext=null}){
+export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,includeParticipants=false,operatorContext=null,bypassBridgeCache=false}){
  const base=baseURL(baseUrl);if(typeof token!=='string'||token.length<12)fail('missing_token');
  const fullProfile=Boolean(includeParticipants);
  const opCtx=operatorContext&&typeof operatorContext==='object'?operatorContext:null;
@@ -1090,7 +1090,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      fail(SAFE_BRIDGE_CODE.test(safeErr)?safeErr:`${kind}_contract_error`);
     }
     return parsed;
-   },{effectiveTtlMs:readCacheTtlMs()});
+   },{effectiveTtlMs:bypassBridgeCache?0:readCacheTtlMs()});
   }catch(e){
    if(typeof e?.message==='string'&&e.message.startsWith('legacy_read_'))throw e;
    fail(classifyBridgeExecError(e,kind));
