@@ -42,6 +42,8 @@ export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GA
 export {ZAPI_INSTANCE_TOOL_NAMES};
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
+// A physical print is an externally visible, potentially irreversible action in a private device fleet.
+const PRINT_WRITE={readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false};
 const SAFE_ERR=/^(printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
 
 function classifyToolError(code){
@@ -944,7 +946,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      return {source:'CRM_READ_ONLY',orders:rows,changes_applied:false,automatic_pickup_status_write_available:false};
     });
    reg('crm_solicitar_impressao_etiqueta','Imprimir etiqueta de pedido já disponível',
-    'SOMENTE após operador confirmar expressamente. Consulta o pedido no CRM; exige status 10, saldo verificado zero, escopo print.jobs.write; gera etiqueta simplificada 100x40 no PrintServer. NÃO altera o CRM nem envia WhatsApp. Repetição é deduplicada por pedido no broker.',
+    'Ação física: enfileira UMA impressão térmica 100x40 mm, potencialmente irreversível. Exige confirmação expressa do operador, status 10, saldo zero e escopo print.jobs.write; deduplicada pelo pedido. NÃO altera status CRM nem envia WhatsApp. Um resultado spooled não comprova impressão física; não repetir se o estado for incerto.',
     z.object({order_id:z.number().int().min(1),confirmado_pelo_operador:z.boolean(),request_id:z.string().uuid().optional()}),
     OUT_GENERIC,async({order_id,confirmado_pelo_operador,request_id})=>{
      if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canPrint)throw Error('insufficient_operator_write_scope');
@@ -966,7 +968,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       whatsapp_sent:false,job_id:result?.job?.job_id??null,
       print_state:result?.job?.state??'unknown',replay:Boolean(result?.replay),
       order_id,crm_order_url:o.crm_order_url??null};
-    },WRITE_IDEMPOTENT,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
+    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
    reg('crm_consultar_impressao_etiqueta','Consultar estado do trabalho de impressão',
     'Consulta fila remota. spooled significa entregue ao executável/spooler do Windows, não etiqueta fisicamente impressa.',
     z.object({order_id:z.number().int().min(1),job_id:z.string().uuid()}),OUT_GENERIC,
