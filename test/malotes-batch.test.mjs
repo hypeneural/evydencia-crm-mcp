@@ -46,3 +46,26 @@ test('mode-scoped permissions never require extra privilege for one-action batch
  assert.deepEqual({...requiredMalotesModeScopes('baixa_e_imprime')},{requiresReady:true,requiresPrint:true});
  assert.throws(()=>requiredMalotesModeScopes('inventado'),/malotes_invalid_batch_mode/);
 });
+
+test('print-only batch works with no CRM write capability or status mutation',async()=>{
+ let writes=0,prints=0,reads=0;
+ const order={order_id:6002,status_event_id:41,status_key:'waiting_product_retrieve',remaining_cents:0};
+ const r=await processMalotes({modo:'so_imprime',pedidos:[{order_id:6002,expected_status_event_id:41}],
+  load:async()=>{reads++;return {...order}},
+  markReady:async()=>{writes++;throw Error('unexpected_write')},
+  printLabel:async()=>{prints++;return {state:'queued',job_id:'synthetic-queue-ref'}}});
+ assert.equal(writes,0);assert.equal(prints,1);assert.equal(reads,3);
+ assert.equal(r.processed_count,1);assert.equal(r.results[0].baixa,'not_requested');
+ assert.equal(r.results[0].impressao,'queued');assert.equal(r.printed_physically,false);
+});
+test('status-only batch never initializes or invokes printer',async()=>{
+ let prints=0;
+ const order={...source};
+ const r=await processMalotes({modo:'so_baixa',pedidos:[{order_id:6002,expected_status_event_id:41}],
+  load:async()=>({...order}),
+  markReady:async()=>{order.status_key='waiting_product_retrieve';order.status_event_id=42;
+   return {state:'ready',status_key:'waiting_product_retrieve'}},
+  printLabel:async()=>{prints++;throw Error('unexpected_print')}});
+ assert.equal(prints,0);assert.equal(r.processed_count,1);
+ assert.equal(r.results[0].impressao,'not_requested');assert.equal(r.results[0].baixa,'ready');
+});
