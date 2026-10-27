@@ -139,6 +139,14 @@ export async function auditRealOrderGameplay({
    by_current_status:population.totals,pages:population.pages,
    complete_population:true,rechecked_after_gameplay:crmRechecked},
   gameplay:gameplayReport||{verification:'not_checked',photo_counts_verified:false},
+  // No proof of Z-API/SMS delivery has been joined to the CRM order and
+  // the exact active Gameplay revision. All eligible orders are unknown.
+  link_delivery:{
+   source:'not_integrated',status:'not_verified',
+   orders_with_verified_delivery:0,
+   orders_with_unverified_delivery:population.orders.length,
+   orders_proven_not_sent:null
+  },
   gameplay_live_metadata_verified:Boolean(gameplayReport),
   // A valid private API reply cannot establish that it targets the currently
   // deployed production database or that WebP/media actually opens.
