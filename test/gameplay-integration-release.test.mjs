@@ -53,15 +53,15 @@ test('synthetic authenticated contract passes without leaking URLs or secret',as
 });
 test('stale sidecar serving public HTML is refused even when health is 200',async()=>{
  const fake=service({publicRouteStatus:200});
- await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),/SIDE_public_denied_HTTP_200/);
+ await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),/SIDE_PUBLIC_DENIED_HTTP_200/);
 });
 test('unexpectedly enabled customer links fails closed',async()=>{
  const fake=service({linkStatus:200});
- await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),/SIDE_links_disabled_HTTP_200/);
+ await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),/SIDE_LINKS_DISABLED_HTTP_200/);
 });
 test('bad private bearer response cannot be mistaken for ready',async()=>{
  const fake=service({positiveStatus:403});
- await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),/SIDE_authorized_batch_HTTP_403/);
+ await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),/SIDE_AUTHORIZED_BATCH_HTTP_403/);
 });
 test('the integration branch preserves PrintServer and malotes exports next to Gameplay',()=>{
  assert.deepEqual([...GAMEPLAY_CRM_TOOL_NAMES],['crm_gameplay_links','crm_gameplay_auditoria']);
