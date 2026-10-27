@@ -46,6 +46,8 @@ test('CRM-only execution confirms real-client contract but never claims Gameplay
  assert.equal(result.crm.complete_population,true);
  assert.equal(result.gameplay.verification,'not_checked');
  assert.equal(result.gameplay_live_metadata_verified,false);
+ assert.equal(result.link_delivery.orders_with_unverified_delivery,2);
+ assert.equal(result.link_delivery.orders_proven_not_sent,null);
  assert.equal(JSON.stringify(result).includes(U1),false);
 });
 test('cross-check reconciles UUID, status and publication/photo totals without leaking private IDs',async()=>{
@@ -56,6 +58,10 @@ test('cross-check reconciles UUID, status and publication/photo totals without l
  assert.equal(result.gameplay.published_photo_count,30);
  assert.equal(result.gameplay.preparing_photo_count,20);
  assert.equal(result.gameplay.publication_pending,1);
+ assert.equal(result.link_delivery.source,'not_integrated');
+ assert.equal(result.link_delivery.status,'not_verified');
+ assert.equal(result.link_delivery.orders_with_unverified_delivery,2);
+ assert.equal(result.link_delivery.orders_proven_not_sent,null);
  assert.equal(result.gameplay_live_metadata_verified,true);
  assert.equal(result.gameplay_dataset_provenance_verified,false);
  assert.equal(result.media_bytes_verified,false);
