@@ -879,6 +879,7 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
   customer_phone_masked:maskPhone(c.whatsapp||c.phone),
   status_id:statusId,
   status_key:statusKey,
+  status_event_id:Number.isSafeInteger(x.status_event_id)?x.status_event_id:null,
   status_label:statusLabel,
   created_at:typeof x.created_at==='string'?x.created_at:null,
   created_at_brt:toBrt(x.created_at),
@@ -1062,7 +1063,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
   return 15000;
  };
 
- async function execPhpJsonBridge(scriptPath,payload,{bridgeTimeoutMs,kind}){
+ async function execPhpJsonBridge(scriptPath,payload,{bridgeTimeoutMs,kind,fresh=false}){
   assertOperatorAuthorized();
   const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
   const cacheKey=buildScopedBridgeCacheKey({
@@ -1071,7 +1072,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    authScope:`${opCtx?.authScope||'direct_read'}|fp:${fullProfile?1:0}`,
    upstreamGrantHash:opCtx?.upstreamGrantHash||'none',
    projectionVersion:BRIDGE_PROJECTION_VERSION,
-   kind,
+   kind:fresh?kind+'_fresh':kind,
    base,
    appPath:crmAppPath,
    payload
@@ -1090,17 +1091,17 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      fail(SAFE_BRIDGE_CODE.test(safeErr)?safeErr:`${kind}_contract_error`);
     }
     return parsed;
-   },{effectiveTtlMs:readCacheTtlMs()});
+   },{effectiveTtlMs:fresh?0:readCacheTtlMs()});
   }catch(e){
    if(typeof e?.message==='string'&&e.message.startsWith('legacy_read_'))throw e;
    fail(classifyBridgeExecError(e,kind));
   }
  }
 
- async function runForensicBridge(payload){
+ async function runForensicBridge(payload,{fresh=false}={}){
   return await execPhpJsonBridge(FORENSIC_BRIDGE_SCRIPT,payload,{
    bridgeTimeoutMs:Math.max(timeoutMs,15000),
-   kind:'forensic_bridge'
+   kind:'forensic_bridge',fresh
   });
  }
 
@@ -1259,6 +1260,8 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const orderId=isObj&&Number.isSafeInteger(locator.order_id)?locator.order_id:null;
    const detailLevel=isObj&&['resumo','padrao','forense'].includes(locator.detailLevel)?locator.detailLevel:'forense';
    const includeCalendarSync=isObj&&typeof locator.includeCalendarSync==='boolean'?locator.includeCalendarSync:undefined;
+   // A write-adjacent print guard must never consume the 15s diagnostic cache.
+   const fresh=isObj&&locator.fresh===true;
    if(idUuid!==undefined&&idUuid!==null&&idUuid!==''&&!uuid(idUuid))fail('invalid_uuid');
    if(!idUuid&&(!orderId||orderId<1))fail('invalid_uuid');
 
@@ -1269,7 +1272,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      detail_level:detailLevel,
      ...(includeCalendarSync!==undefined?{include_calendar_sync:includeCalendarSync}:{}),
      full_profile:true
-    });
+    },{fresh});
     if(res?.order)res.order=await attachProbedAvatarToOrder(res.order);
     return res;
    }

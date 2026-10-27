@@ -13,7 +13,11 @@ import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
-import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
+import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
+import {printserverConfig,printserverClient} from './printserver-client.mjs';
+import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
+import {readyForPickupClient} from './malotes-ready-client.mjs';
+import {processMalotes,requiredMalotesModeScopes} from './malotes-batch.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
 import {createZapiBridge} from './zapi-mcp-client.mjs';
 import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME,getZapiRequiredScopes} from './zapi-mcp-tools.mjs';
@@ -34,13 +38,18 @@ export const BUILD_INFO=Object.freeze(resolveBuildInfo());
 export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_campanha_publica','crm_horarios_publicos','crm_conexao_privada','crm_cliente_resumo','crm_cliente_360']);
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
+export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
+export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
+export const MALOTES_BATCH_TOOL_NAME='crm_processar_malotes_retirada';
 export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
 export {UI_CRM_TOOL_NAMES};
 export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GATEWAY_TOOL_NAMES]);
 export {ZAPI_INSTANCE_TOOL_NAMES};
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
-const SAFE_ERR=/^(crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
+// A physical print is an externally visible, potentially irreversible action in a private device fleet.
+const PRINT_WRITE={readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false};
+const SAFE_ERR=/^(printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
 
 function classifyToolError(code){
  if(code==='crm_public_package_or_campaign_not_found'){
@@ -61,6 +70,9 @@ function classifyToolError(code){
  if(['insufficient_operator_scope','insufficient_operator_write_scope','operator_token_revoked','operator_confirmation_required','legacy_read_missing_operator_context','crm_http_401','crm_http_403'].includes(code)){
   return {error_category:'UNAUTHORIZED'};
  }
+ if(code==='printserver_manual_reconciliation_required'){return {error_category:'CONFLICT',hint:'Impressão com resultado incerto: conferir fila LABEL e o histórico antes de repetir.'}}
+ if(code==='printserver_invalid_request'){return {error_category:'INVALID_INPUT'}}
+ if(code==='printserver_unauthorized'){return {error_category:'UNAUTHORIZED'}}
  if(code.endsWith('_timeout')){
   return {error_category:'TIMEOUT'};
  }
@@ -160,11 +172,16 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_clientes_buscar',capability:'customers_and_leads_search',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct,full})=>Boolean(direct&&full)},
  {tool:'crm_previa_proposta_natal',capability:'natal_proposal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:true,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PROPOSAL_WRITE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
- {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)}
+ {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)},
+ {tool:'crm_previa_malotes_retirada',capability:'printserver_order_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_read_only',supports_filters:true,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
+ {tool:MALOTES_READY_TOOL_NAME,capability:'crm_order_ready_write',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_ORDERS_READY_WRITE,source:'crm_extension_sanctum',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,ready})=>Boolean(full&&ready)},
+ {tool:MALOTES_BATCH_TOOL_NAME,capability:'malotes_photo_batch_workflow',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+(crm.orders.write or print.jobs.write; varies by modo)',source:'crm_malotes_saga',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,batch})=>Boolean(full&&batch)},
+ {tool:'crm_solicitar_impressao_etiqueta',capability:'printserver_job_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
+ {tool:'crm_consultar_impressao_etiqueta',capability:'printserver_job_status',access:'read',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,perfSnapshot=null}={}){
- const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled)};
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,malotesBatchEnabled=false,perfSnapshot=null}={}){
+ const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled),batch:Boolean(malotesBatchEnabled)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
@@ -227,7 +244,9 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
  }
  const activeTools=tools.filter(t=>t.registered);
  const uiSet=new Set(UI_CRM_TOOL_NAMES);
- const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)).length;
+ // Count only original v0.12 tools; UI and PrintServer are additive.
+ const printSet=new Set(PRINTSERVER_TOOL_NAMES);
+ const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)).length;
  const mcpUiActive=Boolean(directEnabled&&operatorFullCrm&&uiAppsEnabled);
  return {
   service:'evydencia-crm-mcp-live',
@@ -323,6 +342,12 @@ const OUT_CAPACIDADES=z.looseObject({
  tools_total_catalog:z.number().int(),
  tools_active_count:z.number().int(),
  legacy_v012_tools_preserved_count:z.number().int().nullish(),
+ oauth_authorization:z.looseObject({
+  operator_id:z.string(),
+  granted_scopes:z.array(z.string()),
+  print_scope_granted:z.boolean(),
+  print_tool_enabled:z.boolean()
+ }).nullish(),
  tools:z.array(z.looseObject({
   tool:z.string(),
   capability:z.string(),
@@ -550,7 +575,7 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
 export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
-async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
+async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
  const grantedScopes=new Set(Array.isArray(auth?.scopes)&&auth.scopes.length?auth.scopes:[GATEWAY_SCOPE]);
@@ -699,13 +724,23 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,_meta:mergedMeta},safe(name,fn));
  };
 
- reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({}),OUT_CAPACIDADES,()=>manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
+ reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({}),OUT_CAPACIDADES,()=>({...manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
   enabled:Boolean(zapi),
   oauthStatus:zapi?zapi.auth.getOperatorState(ex.operatorId).oauth_status:null,
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null}));
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean((cfg.malotesBatchEnabled&&cfg.malotesReadyEnabled&&ex.canReady)||(cfg.malotesPrintBatchEnabled&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled)),perfSnapshot:perf?.snapshot()??null}),
+  // Report EFFECTIVE token scopes, not scopes_supported advertised by OAuth metadata.
+  // No access tokens, gateway secrets or upstream abilities in this response.
+  oauth_authorization:{
+   operator_id:String(ex.operatorId),
+   granted_scopes:[...grantedScopes].sort(),
+   print_scope_granted:grantedScopes.has(SCOPE_PRINT_WRITE),
+   orders_write_scope_granted:grantedScopes.has(SCOPE_ORDERS_READY_WRITE),
+   print_tool_enabled:Boolean(printCfg.enabled&&ex.canPrint&&grantedScopes.has(SCOPE_PRINT_WRITE))
+  }
+ }));
  reg('crm_status','Estado do CRM','Use quando precisar verificar rapidamente o liveness público do servidor CRM (evydencia.com). NÃO use para diagnóstico de WhatsApp/Z-API.',z.object({}),OUT_GENERIC,()=>crm.status());
  reg('crm_campanha_publica','Pacotes públicos','Use quando precisar consultar o catálogo público de pacotes e preços de uma campanha (padrão "natal"). NÃO use para relatórios de vendas ou estatísticas internas.',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
  reg('crm_horarios_publicos','Horários públicos','Use quando precisar verificar disponibilidade pública de horários de um pacote em janela de até 14 dias (AAAA-MM-DD). ATENÇÃO DE SLUG: informe o slug público da campanha/pacote retornado por crm_campanha_publica (ex.: "entao-e-natal", "ho-ho-ho", "boas-festas"), NUNCA a referência interna de produto ("enatal"). NÃO cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,async({campanha,pacote,inicio,fim})=>{
@@ -895,6 +930,154 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
    order_id:z.number().int().min(1).optional(),
    nivel_detalhe:z.enum(['resumo','padrao','forense']).default('forense')
   }),OUT_ORDER_DETAIL,({uuid,order_id,nivel_detalhe})=>direct.detail({uuid,order_id,detailLevel:nivel_detalhe}));
+  if(printCfg.enabled&&cfg.operatorFullCrm&&ex.canPrint){
+   const printer=printserverClient(printCfg,{fetchFn});
+   reg('crm_previa_malotes_retirada','Prévia de malotes por IDs (somente leitura)',
+    'Conferir um lote de IDs numéricos extraídos de fotos; não altera status, não envia WhatsApp e não imprime. Só indica possibilidade de impressão após status 10, sem substituir validações financeiras do CRM.',
+    z.object({order_ids:z.array(z.number().int().min(1)).min(1).max(20)}),OUT_GENERIC,
+    async({order_ids})=>{
+     const unique=[...new Set(order_ids)];
+     // Photos frequently arrive in batches of 5–20; prevent 20 concurrent PHP
+     // Laravel bootstraps / database probes while retaining the user's order.
+     const rows=new Array(unique.length);
+     let cursor=0;
+     await Promise.all(Array.from({length:Math.min(4,unique.length)},async()=>{
+      while(cursor<unique.length){
+       const index=cursor++,order_id=unique[index];
+       try{
+        const r=await direct.detail({order_id,detailLevel:'resumo'});
+        const o=r?.order;
+        rows[index]=(!o||o.order_id!==order_id)
+         ? {order_id,state:'not_found',print_eligible:false}
+         : {
+          order_id,state:'found',order_uuid:o.order_uuid??null,customer_name:o.customer_name??null,
+          status_key:o.status_key??null,status_label:o.status_label??null,
+          status_event_id:o.status_event_id??null,
+          remaining_cents:o.remaining_cents??null,
+          print_eligible:o.status_key==='waiting_product_retrieve'&&o.remaining_cents===0,
+          crm_order_url:o.crm_order_url??null
+         };
+       }catch{rows[index]={order_id,state:'not_found_or_unavailable',print_eligible:false}}
+      }
+     }));
+     return {source:'CRM_READ_ONLY',orders:rows,changes_applied:false,automatic_pickup_status_write_available:false};
+    });
+   reg('crm_solicitar_impressao_etiqueta','Imprimir etiqueta de pedido já disponível',
+    'Ação física: enfileira UMA impressão térmica 100x40 mm, potencialmente irreversível. Exige confirmação expressa do operador, status 10, saldo zero e escopo print.jobs.write; deduplicada pelo pedido. NÃO altera status CRM nem envia WhatsApp. Um resultado spooled não comprova impressão física; não repetir se o estado for incerto.',
+    z.object({order_id:z.number().int().min(1),confirmado_pelo_operador:z.boolean(),request_id:z.string().uuid().optional()}),
+    OUT_GENERIC,async({order_id,confirmado_pelo_operador,request_id})=>{
+     if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canPrint)throw Error('insufficient_operator_write_scope');
+     if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
+     const r=await direct.detail({order_id,detailLevel:'resumo',fresh:true});
+     const o=r?.order;
+     if(!o||o.order_id!==order_id)throw Error('printserver_order_not_found');
+     if(o.status_key!=='waiting_product_retrieve')throw Error('printserver_status_not_ready');
+     if(o.remaining_cents!==0)throw Error('printserver_financial_not_verified');
+     if(typeof o.customer_name!=='string'||o.customer_name.trim().length<2)throw Error('printserver_invalid_customer');
+     // Render the exact configured CRM image (background, product/global overrides,
+     // QR and dynamic fields) after the authorization/status/finance guard.
+     // Fail closed if enabled and Laravel cannot render; NEVER silently print plain text.
+     const artwork=labelRenderEnabled
+      ? await labelRenderer({orderUuid:o.order_uuid,orderId:order_id,env:labelRenderEnv})
+      : {};
+     const result=await printer.enqueue({
+      request_id:request_id||randomUUID(),operator_id:ex.operatorId,
+      order_id,status_key:'waiting_product_retrieve',
+      confirmed_by_operator:true,purpose:'arrival',
+      customer_name:o.customer_name,
+      package_name:o.package_name||'Pedido de fotos',
+      ...artwork
+     });
+     return {source:'PRINTSERVER',printed_physically:false,crm_status_updated:false,
+      whatsapp_sent:false,job_id:result?.job?.job_id??null,
+      print_state:result?.job?.state??'unknown',render_source:result?.job?.render_source??null,replay:Boolean(result?.replay),
+      order_id,crm_order_url:o.crm_order_url??null};
+    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
+   reg('crm_consultar_impressao_etiqueta','Consultar estado do trabalho de impressão',
+    'Consulta fila remota. spooled significa entregue ao executável/spooler do Windows, não etiqueta fisicamente impressa.',
+    z.object({order_id:z.number().int().min(1),job_id:z.string().uuid()}),OUT_GENERIC,
+    async({order_id,job_id})=>{
+     if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canPrint)throw Error('insufficient_operator_write_scope');
+     // Synthetic homologation job exists only in the broker, never in CRM.
+     // Do not bypass CRM validation for any real customer order.
+     const syntheticTest=(order_id===999999);
+     if(!syntheticTest){
+      const r=await direct.detail({order_id,detailLevel:'resumo'});
+      if(r?.order?.order_id!==order_id)throw Error('printserver_order_not_found');
+     }
+     const result=await printer.status(job_id);
+     if(result?.job?.order_id!==order_id)throw Error('printserver_order_mismatch');
+     return {source:'PRINTSERVER',order_id,job_id,print_state:result.job.state,
+      synthetic_test:syntheticTest,printed_physically:false};
+    },READ,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
+  }
+  if(cfg.malotesReadyEnabled&&cfg.operatorFullCrm&&ex.canReady){
+   reg(MALOTES_READY_TOOL_NAME,'Marcar pedido disponível para retirada (status 10)',
+    'AÇÃO COMERCIAL: marca SOMENTE o pedido informado como status 10 no CRM, após confirmação humana expressa. Não imprime. Eventos e aviso WhatsApp pertencem ao observer CRM, entrega de mensagens NÃO é comprovada por esta resposta. Exige snapshot status_event_id da prévia; conflito deve ser reconsultado antes de nova tentativa.',
+    z.object({order_id:z.number().int().min(1),expected_status_event_id:z.number().int().min(1),
+      confirmado_pelo_operador:z.literal(true),request_id:z.string().uuid().optional()}),
+    OUT_GENERIC,async({order_id,expected_status_event_id,confirmado_pelo_operador,request_id})=>{
+     if(!grantedScopes.has(SCOPE_ORDERS_READY_WRITE)||!ex.canReady)throw Error('insufficient_operator_write_scope');
+     if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
+     const detail=await direct.detail({order_id,detailLevel:'resumo',fresh:true});
+     if(detail?.order?.order_id!==order_id)throw Error('crm_malotes_order_not_found');
+     if(detail.order.status_event_id!==expected_status_event_id)throw Error('crm_malotes_conflict_refresh_required');
+     if(detail.order.status_key==='waiting_product_retrieve')
+      return {source:'CRM_EXTENSION_CANONICAL',order_id,state:'already_ready',replay:true,changes_applied:false,printed_physically:false,notification_delivery_verified:false};
+     if(![ 'session_schedule','session_schedule_confirmed','selection_schedule_confirmed'].includes(detail.order.status_key))
+      throw Error('crm_malotes_status_not_eligible');
+     if(detail.order.remaining_cents!==0)throw Error('crm_malotes_financial_not_verified');
+     const change=readyForPickupClient({baseUrl:cfg.crmBaseUrl,operatorToken:ex.upstream,fetchFn,timeoutMs:cfg.crmTimeoutMs});
+     return await change({order_id,expected_status_event_id,operator_id:ex.operatorId,
+      request_id:request_id||randomUUID(),confirmed_by_operator:true});
+    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_ORDERS_READY_WRITE]});
+  }
+  // Different operators may be authorized to print without authority to change
+  // commercial status. Each mode is independently available and checked.
+  const allowReadyBatch=Boolean(cfg.malotesBatchEnabled&&cfg.malotesReadyEnabled&&ex.canReady);
+  const allowPrintBatch=Boolean(cfg.malotesPrintBatchEnabled&&printCfg.enabled&&labelRenderEnabled&&ex.canPrint);
+  if(cfg.operatorFullCrm&&(allowReadyBatch||allowPrintBatch)){
+   const allowedBatchModes=[
+    ...(allowReadyBatch?['so_baixa']:[]),
+    ...(allowPrintBatch?['so_imprime']:[]),
+    ...(allowReadyBatch&&allowPrintBatch?['baixa_e_imprime']:[])
+   ];
+   reg(MALOTES_BATCH_TOOL_NAME,'Processar malotes por fotos: só baixa, só etiqueta ou ambos',
+    'AÇÃO EM LOTE (até 20 pedidos): primeiro confira cada pedido com crm_previa_malotes_retirada. Exige confirmação humana de TODOS os IDs e snapshot status_event_id. Para cada pedido, status10 via CRM antes da etiqueta canônica com QR. Falhas são por pedido, SEM retries automáticos. queued/spooled NÃO provam impressão física nem WhatsApp entregue.',
+    z.object({modo:z.enum(allowedBatchModes),
+      pedidos:z.array(z.object({order_id:z.number().int().min(1),
+       expected_status_event_id:z.number().int().min(1)})).min(1).max(20),
+      confirmado_pelo_operador:z.literal(true)}),
+    OUT_GENERIC,async({modo,pedidos,confirmado_pelo_operador})=>{
+     if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
+     const {requiresReady:wantsReady,requiresPrint:wantsPrint}=requiredMalotesModeScopes(modo);
+     if((wantsReady&&(!ex.canReady||!grantedScopes.has(SCOPE_ORDERS_READY_WRITE)))||
+        (wantsPrint&&(!ex.canPrint||!grantedScopes.has(SCOPE_PRINT_WRITE))))
+      throw Error('insufficient_operator_write_scope');
+     if(!allowedBatchModes.includes(modo))throw Error('insufficient_operator_write_scope');
+     const change=wantsReady?readyForPickupClient({baseUrl:cfg.crmBaseUrl,operatorToken:ex.upstream,fetchFn,timeoutMs:cfg.crmTimeoutMs}):null;
+     const printer=wantsPrint?printserverClient(printCfg,{fetchFn}):null;
+     return await processMalotes({modo,pedidos,
+      load:async(order_id)=>(await direct.detail({order_id,detailLevel:'resumo',fresh:true}))?.order,
+      markReady:({order_id,expected_status_event_id})=>{if(!change)throw Error('insufficient_operator_write_scope');return change({
+       order_id,expected_status_event_id,operator_id:ex.operatorId,
+       request_id:randomUUID(),confirmed_by_operator:true})},
+      printLabel:async({order_id,order:o})=>{
+       if(!printer)throw Error('insufficient_operator_write_scope');
+       if(typeof o.customer_name!=='string'||o.customer_name.trim().length<2)throw Error('printserver_invalid_customer');
+       const artwork=await labelRenderer({orderUuid:o.order_uuid,orderId:order_id,env:labelRenderEnv});
+       const result=await printer.enqueue({
+        request_id:randomUUID(),operator_id:ex.operatorId,
+        order_id,status_key:'waiting_product_retrieve',
+        confirmed_by_operator:true,purpose:'arrival',
+        customer_name:o.customer_name,package_name:o.package_name||'Pedido de fotos',
+        ...artwork
+       });
+       return {state:result?.job?.state||'unknown',job_id:result?.job?.job_id??null};
+      }
+     });
+    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE]});
+  }
   if(cfg.operatorFullCrm){
    reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
     busca:z.string().min(2).max(120).optional(),
@@ -1061,8 +1244,9 @@ function rateLimiter(now){
  };
 }
 
-export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now()}={}){
+export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now(),labelRenderer=renderCanonicalCrmLabel}={}){
  const cfg=gatewayConfig(env);
+ const printCfg=printserverConfig(env);
  const perf=createGatewayPerfTracker();
  const operators=operatorVerifier(cfg,{fetchFn,now});
  const oauth=createOAuthServer(cfg,{operators,now,log});
@@ -1083,14 +1267,14 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   now,
   log,
   diagnostics:zapiDiag,
-  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES,...ZAPI_INSTANCE_TOOL_NAMES],
+  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES,...PRINTSERVER_TOOL_NAMES,...ZAPI_INSTANCE_TOOL_NAMES],
   gatewayVersion:GATEWAY_VERSION,
   onToolsUpdated:()=>mcp?.notify?.toolsChanged?.()
  }):null;
  const resourceUrl=new URL(cfg.resource);
  const resourceMetadataUrl=getOAuthProtectedResourceMetadataUrl(resourceUrl);
  const gate=requireBearerAuth({verifier:oauth.verifier,requiredScopes:[GATEWAY_SCOPE],resourceMetadataUrl,expectedResource:resourceUrl});
- mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
+ mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:supportedGatewayScopes(cfg),resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
@@ -1113,6 +1297,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
     zapi_mcp_enabled:Boolean(zapi),
     zapi_diagnostics_enabled:Boolean(zapiDiag),
     mcp_ui_apps_enabled:Boolean(cfg.internalReadToken&&cfg.operatorFullCrm&&cfg.uiAppsEnabled),
+    printserver_enabled:Boolean(printCfg.enabled),
     telemetry_summary:{
      calls_total:snap.calls_total,
      error_rate:snap.error_rate,

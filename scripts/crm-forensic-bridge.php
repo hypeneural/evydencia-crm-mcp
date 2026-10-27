@@ -856,6 +856,7 @@ function projectOrdersBatch(
             'customer' => $isSummaryOnly ? null : $custProjected,
             'status_id' => $currentStatusEnum?->value ?? null,
             'status_key' => $currentStatusKey,
+            'status_event_id' => $lastStatusRow?->id,
             'status_label' => $currentStatusEnum?->description ?? null,
             'status' => [
                 'id' => $currentStatusEnum?->value ?? null,

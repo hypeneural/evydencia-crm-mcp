@@ -72,6 +72,16 @@ O conector expõe até **30 ferramentas ativas** divididas em 4 domínios funcio
 | `zapi_group_add_admin` | `zapi.group.manage` | Operador | Concessão de privilégio de administrador a participante do grupo. |
 | `zapi_group_remove_admin` | `zapi.group.manage` | Operador | Revogação de privilégio de administrador de participante do grupo. |
 
+### 3. Fila de Impressão Térmica Independente (Opt-in PrintServer — 3 Ferramentas)
+
+Disponíveis quando `EVYD_PRINTSERVER_ENABLED=1` e o operador está autorizado em `EVYD_PRINT_ALLOWED_OPERATOR_IDS` com escopo `print.jobs.write`:
+
+| Ferramenta | Escopo OAuth | Acesso | Descrição |
+|---|---|---|---|
+| `crm_previa_malotes_retirada` | `crm.read` / `print.jobs.write` | Operador | Leitura em lote de até 20 IDs de pedidos para conferência de saldo e status sem efeitos colaterais. |
+| `crm_solicitar_impressao_etiqueta` | `print.jobs.write` | Operador | Solicitação de impressão 100 × 40 mm; exige status 10 (`waiting_product_retrieve`), saldo zero e confirmação humana. |
+| `crm_consultar_impressao_etiqueta` | `print.jobs.write` | Operador | Consulta de status do trabalho de impressão enfileirado no broker. |
+
 Consulte detalhes adicionais em [Matriz de capacidades](docs/CAPABILITY_MATRIX.md) e [Relatório de Hardening](docs/RELATORIO_HARDENING_CIRURGICO_V012_20261026.md).
 
 ---

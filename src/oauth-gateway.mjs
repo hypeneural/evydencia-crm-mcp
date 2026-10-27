@@ -12,13 +12,17 @@ import {assertOperatorAbilities} from './live-abilities.mjs';
 
 export const GATEWAY_SCOPE='crm.read';
 export const SCOPE_PROPOSAL_WRITE='crm.proposal.write';
+export const SCOPE_PRINT_WRITE='print.jobs.write';
+export const SCOPE_ORDERS_READY_WRITE='crm.orders.write';
 export const SCOPE_ZAPI_SEND='zapi.message.send';
 export const SCOPE_ZAPI_GROUP='zapi.group.manage';
-export const ALL_WRITE_SCOPES=Object.freeze([SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]);
+export const ALL_WRITE_SCOPES=Object.freeze([SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]);
 export function supportedGatewayScopes(cfg){
  return [
   GATEWAY_SCOPE,
   ...(cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_PROPOSAL_WRITE]:[]),
+  ...(cfg.printserverEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_PRINT_WRITE]:[]),
+  ...(cfg.malotesReadyEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_ORDERS_READY_WRITE]:[]),
   ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[])
  ];
 }
@@ -52,6 +56,9 @@ export function gatewayConfig(env){
  const ops=String(env.EVYD_ALLOWED_OPERATOR_IDS||'').split(',').map(s=>s.trim()).filter(Boolean);
  if(!ops.length||ops.some(x=>!/^[1-9]\d{0,9}$/.test(x)))fail('operator_allowlist');
  const allowedOperators=new Set(ops);
+ const printOps=String(env.EVYD_PRINT_ALLOWED_OPERATOR_IDS||'').split(',').map(s=>s.trim()).filter(Boolean);
+ if(env.EVYD_PRINTSERVER_ENABLED==='1'&&(!printOps.length||printOps.some(id=>!allowedOperators.has(id))))fail('print_operator_allowlist');
+ const printAllowedOperators=new Set(printOps);
  const redirects=String(env.EVYD_OAUTH_REDIRECT_URIS||DEFAULT_REDIRECTS).split(',').map(s=>s.trim()).filter(Boolean);
  for(const r of redirects){let u;try{u=new URL(r.replace(/\*$/,'x'))}catch{fail('redirect_allowlist')}if(u.protocol!=='https:'&&!isLocal(u.hostname))fail('redirect_allowlist')}
  const internalReadToken=typeof env.EVYD_INTERNAL_READ_TOKEN==='string'&&env.EVYD_INTERNAL_READ_TOKEN.trim().length>=12?env.EVYD_INTERNAL_READ_TOKEN.trim():null;
@@ -113,6 +120,12 @@ export function gatewayConfig(env){
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
   allowedOperators,redirects,internalReadToken,
   operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
+  printserverEnabled:env.EVYD_PRINTSERVER_ENABLED==='1',
+  malotesReadyEnabled:env.EVYD_MALOTES_READY_WRITE_ENABLED==='1',
+  malotesBatchEnabled:env.EVYD_MALOTES_BATCH_ENABLED==='1',
+  // Distinct opt-in for print-only batches. CRM status write stays disabled.
+  malotesPrintBatchEnabled:env.EVYD_MALOTES_PRINT_BATCH_ENABLED==='1',
+  printAllowedOperators,
   uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
   zapiEnabled,zapiMcpUrl,zapiIssuer,zapiStorePath,zapiRestStatus,
@@ -197,7 +210,10 @@ export function operatorVerifier(cfg,{fetchFn=fetch,now=()=>Date.now()}={}){
   const abilities=Object.freeze(Array.isArray(b.token?.abilities)?b.token.abilities.filter(x=>typeof x==='string'):[]);
   const canReadProposal=abilities.includes('extension:proposal-read');
   const canWriteProposal=!cfg.strictReadOnlyToken&&abilities.includes('extension:proposal-write');
-  const value=Object.freeze({operatorId:op,upstreamExpiresAt:Number.isFinite(exp)?Math.floor(exp/1000):null,abilities,canReadProposal,canWriteProposal});
+  // Independent print authorization: explicit operator allowlist, not proposal-write.
+  const canPrint=!cfg.strictReadOnlyToken&&cfg.printserverEnabled&&cfg.printAllowedOperators.has(op);
+  const canReady=!cfg.strictReadOnlyToken&&cfg.malotesReadyEnabled&&cfg.printAllowedOperators.has(op)&&abilities.includes('extension:orders-ready-write');
+  const value=Object.freeze({operatorId:op,upstreamExpiresAt:Number.isFinite(exp)?Math.floor(exp/1000):null,abilities,canReadProposal,canWriteProposal,canPrint,canReady});
   if(cfg.operatorCacheMs>0){
    if(cache.size>=1000)cache.delete(cache.keys().next().value);
    cache.set(k,{value,until:now()+cfg.operatorCacheMs});
@@ -223,6 +239,8 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
  const eligibleScopesForOperator=v=>[
   GATEWAY_SCOPE,
   ...(cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canWriteProposal)?[SCOPE_PROPOSAL_WRITE]:[]),
+  ...(cfg.printserverEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canPrint)?[SCOPE_PRINT_WRITE]:[]),
+  ...(cfg.malotesReadyEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canReady)?[SCOPE_ORDERS_READY_WRITE]:[]),
   ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[])
  ];
  const computeGrantedScopes=(v,narrowWriteScopes=null)=>{
@@ -407,6 +425,8 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
      abilities:v?.abilities||[],
      canReadProposal:Boolean(v?.canReadProposal),
      canWriteProposal:!degraded&&Boolean(v?.canWriteProposal),
+     canPrint:!degraded&&Boolean(v?.canPrint),
+     canReady:!degraded&&Boolean(v?.canReady),
      cacheSecret:bridgeCache,
      degraded
     }
