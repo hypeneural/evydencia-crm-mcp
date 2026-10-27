@@ -40,7 +40,9 @@ export async function processMalotes({modo,pedidos,load,markReady,printLabel}){
      throw Error('malotes_print_result_unknown');
    }
    const final=await load(order_id);
-   if(final?.order_id===order_id)entry.status_event_id=final.status_event_id??null;
+   if(final?.order_id!==order_id||final?.status_key!=='waiting_product_retrieve')
+    throw Error('malotes_post_write_status_unverified');
+   entry.status_event_id=final.status_event_id??null;
    entry.state='processed';
   }catch(e){
    // No retry for 409, network timeout or uncertain physical output.
