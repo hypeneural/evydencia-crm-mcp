@@ -124,3 +124,16 @@ Auditado diretamente via GitHub CLI (`gh pr checks 14 -R hypeneural/evydencia-cr
 3. **Rollback de Emergência:**
    - **MCP:** `git checkout e872fac8aa0d5281ceb4ac66ba979ff0aad7293e && sudo systemctl restart evydencia-crm-mcp-live.service`.
    - **Sidecar:** `docker stop christmas-games-catalog-reader && docker rm christmas-games-catalog-reader`.
+
+---
+
+## Adendo de auditoria forense posterior — Etapa 3 (27/10/2026)
+
+**Este recibo preserva o histórico do Antigravity; não é um atestado dos HEADs atuais após as correções da Etapa 3.** A auditoria canônica atual está em [`AUDITORIA_FORENSE_ETAPA3_MCP_GAMEPLAY_20261027.md`](./AUDITORIA_FORENSE_ETAPA3_MCP_GAMEPLAY_20261027.md), com [prompt operacional](./PROMPT_ANTIGRAVITY_ETAPA3_MCP_GAMEPLAY_20261027.md).
+
+1. **SHAs não são intercambiáveis:** este recibo referiu `582cd9a...`; mensagem posterior indicou `9dce0bee...`; API GitHub no início da Etapa 3 retornou `9dce0beb795ad98b75724189f9af6ac8bd1c8b34`. Exigir consulta `gh pr view 14 --json headRefOid` e CI no HEAD atual antes de GO.
+2. **P0 corrigido na PR Gameplay #43:** o overlay de `catalog-reader` não declarava `command`; a imagem Node usaria seu comando padrão, sem herdar `catalog.command`. Corrigido para `['node','server/main.js']` e adicionada regressão de deployment boundary. Novo SHA requer `pnpm check`, `pnpm release:staging`, `pnpm release:verify` e CI próprios.
+3. **P1 corrigido na PR MCP #14:** o probe `gameplay:sidecar:verify` agora exige o JSON `error=CUSTOMER_LINKS_NOT_ENABLED` na resposta 409. Um 409 qualquer não valida a API Gameplay. Regressão adicionada; novo HEAD requer `npm test` e CI.
+4. **Inventário canônico LIVE conferido pelo ChatGPT:** build `e872fac`, 35 ferramentas ativas em 37 catalogadas. O nome real do card é `crm_renderizar_card_visual`. `crm_marcar_disponivel_retirada` e `crm_processar_malotes_retirada` seguem `NOT_AVAILABLE`. `gameplay_private_probe.private_contract_ok` com `dataset_proven=false`.
+5. **Substituir os vereditos antigos de rollout:** o reader Media VPS observado com GET `/` = 200 permanece **NO-GO**; após atualização autorizada de `catalog-reader`, exigir 200 health, 404 páginas públicas, 401 sem Bearer, 200 com Bearer reservado e 409 de JSON canônico. Backup existente não é prova de restauração.
+6. **Rollback revisado:** não executar `git checkout` em diretório LIVE nem `docker stop && docker rm` fora do `stackctl`; restaurar imagem/artefato/configuração imutáveis anteriores por operação de serviço isolada aprovada. `docker compose restart` não atualiza `command` nem volumes/env. Sem deploy/merge nesta auditoria.
