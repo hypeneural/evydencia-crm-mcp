@@ -1,9 +1,9 @@
 name: Validate MCP
 on:
   push:
-    branches: [main]
+    branches: [main, 'integration/live-35tools-gameplay-reconciled-*']
   pull_request:
-    branches: [main]
+    branches: [main, 'release/live-35tools-gameplay-printserver']
 permissions:
   contents: read
 jobs:
