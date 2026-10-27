@@ -1,3 +1,5 @@
+> **ATENÇÃO — INSTRUÇÕES SUBSTITUÍDAS (27/10/2026):** O gestor determinou que Antigravity atua **somente** no MCP e PrintServer, sem mutação no CRM nem release/deploy de produção. Todas as etapas abaixo referentes a Issue CRM #431, PR #432, ownership, MySQL/HIGH, merge, SSH, atualização de serviço ou alteração de ambiente de produção pertencem **exclusivamente ao Codex em outro computador**. Para Antigravity usar SOMENTE [handoff local canônico](./HANDOFF_ANTIGRAVITY_LOCAL_ONLY_MALOTES_20261027.md) e `npm run malotes:preflight:print`. Esta ressalva prevalece sobre qualquer comando anterior neste documento. O print-only em lote usa `EVYD_MALOTES_PRINT_BATCH_ENABLED=1` (operação Codex), mantendo toda escrita comercial desligada.
+
 # ANTIGRAVITY — GO-LIVE ÚNICO (sem loop) | Foto → status 10 → etiqueta QR Natal
 **Data:** 2026-10-27. **Execução obrigatória em uma passada**, preservando rollback. Não repita auditorias antigas. **Fonte de verdade:** HEAD real das PRs, VPS e Windows no momento da execução.
 
