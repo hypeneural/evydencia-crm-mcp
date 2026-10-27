@@ -536,7 +536,11 @@ const OUT_GAMEPLAY_OPERATIONAL=z.looseObject({
   'album_not_published','album_published_runtime_unverified',
   'album_in_preparation','preparation_invalid'
  ]),
- publication_pending:z.boolean(),published_photo_count:z.number().int().nonnegative().nullable(),
+ publication_pending:z.boolean(),
+ link_delivery_status:z.literal('not_verified'),
+ link_sent_confirmed:z.null(),link_opened_confirmed:z.null(),
+ delivery_receipt_verified:z.literal(false),
+ published_photo_count:z.number().int().nonnegative().nullable(),
  active_revision_manifest_photo_count:z.number().int().nonnegative().nullable(),
  preparing_photo_count:z.number().int().nonnegative().nullable(),
  published_variants_ready:z.number().int().nonnegative().nullable(),
@@ -563,7 +567,9 @@ const OUT_GAMEPLAY_AUDIT=z.looseObject({
   published_photo_count:z.number().int().nonnegative().optional(),
   preparing_photo_count:z.number().int().nonnegative().optional(),
   orders_in_preparation:z.number().int().nonnegative().optional(),
-  orders_without_gameplay_session:z.number().int().nonnegative().optional()}),
+  orders_without_gameplay_session:z.number().int().nonnegative().optional(),
+  orders_with_delivery_unverified:z.number().int().nonnegative().optional(),
+  published_orders_delivery_unverified:z.number().int().nonnegative().optional()}),
  pagination:z.looseObject({page:z.number().int(),per_page:z.number().int(),
   total_matching:z.number().int(),has_more:z.boolean()}),
  orders:z.array(OUT_GAMEPLAY_ORDER)
@@ -826,7 +832,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   };
   const natalFilter={'order.created-start':'2026-01-01','order.created-end':'2026-12-31','product.slug':'natal'};
   reg('crm_gameplay_links','Galeria e jogos de Natal 2026 por nome ou pedido',
-   'Consulta somente leitura por order_id, UUID ou nome no CRM Natal 2026. Relaciona pedido ao Gameplay por UUID e mostra status atual CRM, fotos publicadas, fotos em preparação e situação do álbum. Publicação não comprova jogos Phaser funcionando no celular. Toda busca por nome retorna apenas os candidatos, sem links; consulte novamente por ID ou UUID explícito para acessar o pedido autorizado. Nunca cria sessão ou envia WhatsApp.',
+   'Consulta somente leitura por order_id, UUID ou nome no CRM Natal 2026. Relaciona pedido ao Gameplay por UUID e mostra status atual CRM, fotos publicadas, fotos em preparação e situação do álbum. O estado envio do link permanece not_verified até existir comprovante do CRM/Z-API; publicação não prova envio nem jogos executados. Busca por nome apenas lista candidatos; consulte por ID ou UUID explícito para obter URLs autorizadas. Não envia WhatsApp.',
    z.object({order_id:z.number().int().positive().optional(),order_uuid:z.string().uuid().optional(),
     nome_cliente:z.string().min(2).max(100).optional()}),OUT_GAMEPLAY_LINKS,async({order_id,order_uuid,nome_cliente})=>{
      if([order_id,order_uuid,nome_cliente].filter(x=>x!==undefined).length!==1)throw Error('gameplay_locator_invalid');
@@ -866,7 +872,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
       orders:snapshots};
    });
   reg('crm_gameplay_auditoria','Pendências de galeria e jogos Natal 2026',
-   'Cruza pedidos Natal 2026 com status ATUAL Aguardando Retirada ou Pedido Concluído com o Gameplay pelo UUID. Conta pedidos sem sessão, em preparação e publicados; totaliza fotos publicadas e em preparação separadamente. Não comprova a execução dos jogos em navegadores. Para ver publicados use incluir_publicados=true; nunca retorna links de acesso em lote.',
+   'Cruza pedidos Natal 2026 com status ATUAL Aguardando Retirada ou Pedido Concluído com o Gameplay pelo UUID. Conta sessões, publicações, fotos publicadas e em preparação. ENVIO DE LINK: sem recibo canônico vinculado ao pedido, o estado é not_verified, não not_sent; não conclua que a família não recebeu link. Não comprova jogos no navegador. Para ver publicados use incluir_publicados=true; nunca retorna links capability em lote.',
    z.object({pagina:z.number().int().min(1).max(100).default(1),
     limite:z.number().int().min(1).max(50).default(20),
     incluir_publicados:z.boolean().default(false)}),OUT_GAMEPLAY_AUDIT,async({pagina,limite,incluir_publicados})=>{
@@ -906,6 +912,11 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      counts.preparing_photo_count=entries.reduce((n,e)=>n+(e.operational.preparing_photo_count||0),0);
      counts.orders_in_preparation=entries.filter(e=>e.operational.digital_experience_status==='album_in_preparation').length;
      counts.orders_without_gameplay_session=counts.not_found||0;
+     // Publication and customer delivery are independent state machines.
+     // Until a canonical CRM provider receipt can be joined to this order,
+     // *all* orders have an unknown delivery state, not a proven unsent state.
+     counts.orders_with_delivery_unverified=entries.length;
+     counts.published_orders_delivery_unverified=counts.published_unverified||0;
      const selected=incluir_publicados?entries:
        entries.filter(e=>e.gameplay?.state!=='published_unverified');
      const start=(pagina-1)*limite;
