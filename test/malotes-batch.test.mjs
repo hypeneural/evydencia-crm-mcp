@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {processMalotes} from '../src/malotes-batch.mjs';
+import {processMalotes,requiredMalotesModeScopes} from '../src/malotes-batch.mjs';
 const source={order_id:6002,status_event_id:41,status_key:'session_schedule',remaining_cents:0};
 test('status and canonical print are ordered, with a fresh status10 requery',async()=>{
  const stages=[],order={...source};
@@ -38,4 +38,11 @@ test('batch rejects duplicate IDs before executing anything',async()=>{
  await assert.rejects(processMalotes({modo:'so_baixa',pedidos:[{order_id:1,expected_status_event_id:1},{order_id:1,expected_status_event_id:1}],
   load:async()=>{count++}}),/malotes_duplicate_or_invalid_order/);
  assert.equal(count,0);
+});
+
+test('mode-scoped permissions never require extra privilege for one-action batches',()=>{
+ assert.deepEqual({...requiredMalotesModeScopes('so_baixa')},{requiresReady:true,requiresPrint:false});
+ assert.deepEqual({...requiredMalotesModeScopes('so_imprime')},{requiresReady:false,requiresPrint:true});
+ assert.deepEqual({...requiredMalotesModeScopes('baixa_e_imprime')},{requiresReady:true,requiresPrint:true});
+ assert.throws(()=>requiredMalotesModeScopes('inventado'),/malotes_invalid_batch_mode/);
 });
