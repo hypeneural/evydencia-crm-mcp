@@ -17,7 +17,7 @@ import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PRO
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {readyForPickupClient} from './malotes-ready-client.mjs';
-import {processMalotes} from './malotes-batch.mjs';
+import {processMalotes,requiredMalotesModeScopes} from './malotes-batch.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
 import {createZapiBridge} from './zapi-mcp-client.mjs';
 import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME,getZapiRequiredScopes} from './zapi-mcp-tools.mjs';
@@ -1042,7 +1042,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       confirmado_pelo_operador:z.literal(true)}),
     OUT_GENERIC,async({modo,pedidos,confirmado_pelo_operador})=>{
      if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
-     const wantsReady=modo!=='so_imprime',wantsPrint=modo!=='so_baixa';
+     const {requiresReady:wantsReady,requiresPrint:wantsPrint}=requiredMalotesModeScopes(modo);
      if((wantsReady&&(!ex.canReady||!grantedScopes.has(SCOPE_ORDERS_READY_WRITE)))||
         (wantsPrint&&(!ex.canPrint||!grantedScopes.has(SCOPE_PRINT_WRITE))))
       throw Error('insufficient_operator_write_scope');
