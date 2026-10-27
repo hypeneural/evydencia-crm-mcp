@@ -13,9 +13,10 @@ import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
-import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
+import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
+import {readyForPickupClient} from './malotes-ready-client.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
 import {createZapiBridge} from './zapi-mcp-client.mjs';
 import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME,getZapiRequiredScopes} from './zapi-mcp-tools.mjs';
@@ -37,6 +38,7 @@ export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
 export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
+export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
 export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
 export {UI_CRM_TOOL_NAMES};
 export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GATEWAY_TOOL_NAMES]);
@@ -170,12 +172,13 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PROPOSAL_WRITE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)},
  {tool:'crm_previa_malotes_retirada',capability:'printserver_order_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_read_only',supports_filters:true,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
+ {tool:MALOTES_READY_TOOL_NAME,capability:'crm_order_ready_write',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_ORDERS_READY_WRITE,source:'crm_extension_sanctum',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,ready})=>Boolean(full&&ready)},
  {tool:'crm_solicitar_impressao_etiqueta',capability:'printserver_job_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
  {tool:'crm_consultar_impressao_etiqueta',capability:'printserver_job_status',access:'read',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,perfSnapshot=null}={}){
- const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled)};
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,perfSnapshot=null}={}){
+ const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
@@ -724,13 +727,14 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),perfSnapshot:perf?.snapshot()??null}),
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),perfSnapshot:perf?.snapshot()??null}),
   // Report EFFECTIVE token scopes, not scopes_supported advertised by OAuth metadata.
   // No access tokens, gateway secrets or upstream abilities in this response.
   oauth_authorization:{
    operator_id:String(ex.operatorId),
    granted_scopes:[...grantedScopes].sort(),
    print_scope_granted:grantedScopes.has(SCOPE_PRINT_WRITE),
+   orders_write_scope_granted:grantedScopes.has(SCOPE_ORDERS_READY_WRITE),
    print_tool_enabled:Boolean(printCfg.enabled&&ex.canPrint&&grantedScopes.has(SCOPE_PRINT_WRITE))
   }
  }));
@@ -945,6 +949,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
          : {
           order_id,state:'found',order_uuid:o.order_uuid??null,customer_name:o.customer_name??null,
           status_key:o.status_key??null,status_label:o.status_label??null,
+          status_event_id:o.status_event_id??null,
           remaining_cents:o.remaining_cents??null,
           print_eligible:o.status_key==='waiting_product_retrieve'&&o.remaining_cents===0,
           crm_order_url:o.crm_order_url??null
@@ -1002,6 +1007,27 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      return {source:'PRINTSERVER',order_id,job_id,print_state:result.job.state,
       synthetic_test:syntheticTest,printed_physically:false};
     },READ,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
+  }
+  if(cfg.malotesReadyEnabled&&cfg.operatorFullCrm&&ex.canReady){
+   reg(MALOTES_READY_TOOL_NAME,'Marcar pedido disponível para retirada (status 10)',
+    'AÇÃO COMERCIAL: marca SOMENTE o pedido informado como status 10 no CRM, após confirmação humana expressa. Não imprime. Eventos e aviso WhatsApp pertencem ao observer CRM, entrega de mensagens NÃO é comprovada por esta resposta. Exige snapshot status_event_id da prévia; conflito deve ser reconsultado antes de nova tentativa.',
+    z.object({order_id:z.number().int().min(1),expected_status_event_id:z.number().int().min(1),
+      confirmado_pelo_operador:z.literal(true),request_id:z.string().uuid().optional()}),
+    OUT_GENERIC,async({order_id,expected_status_event_id,confirmado_pelo_operador,request_id})=>{
+     if(!grantedScopes.has(SCOPE_ORDERS_READY_WRITE)||!ex.canReady)throw Error('insufficient_operator_write_scope');
+     if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
+     const detail=await direct.detail({order_id,detailLevel:'resumo',fresh:true});
+     if(detail?.order?.order_id!==order_id)throw Error('crm_malotes_order_not_found');
+     if(detail.order.status_event_id!==expected_status_event_id)throw Error('crm_malotes_conflict_refresh_required');
+     if(detail.order.status_key==='waiting_product_retrieve')
+      return {source:'CRM_EXTENSION_CANONICAL',order_id,state:'already_ready',replay:true,changes_applied:false,printed_physically:false,notification_delivery_verified:false};
+     if(![ 'session_schedule','session_schedule_confirmed','selection_schedule_confirmed'].includes(detail.order.status_key))
+      throw Error('crm_malotes_status_not_eligible');
+     if(detail.order.remaining_cents!==0)throw Error('crm_malotes_financial_not_verified');
+     const change=readyForPickupClient({baseUrl:cfg.crmBaseUrl,operatorToken:ex.upstream,fetchFn,timeoutMs:cfg.crmTimeoutMs});
+     return await change({order_id,expected_status_event_id,operator_id:ex.operatorId,
+      request_id:request_id||randomUUID(),confirmed_by_operator:true});
+    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_ORDERS_READY_WRITE]});
   }
   if(cfg.operatorFullCrm){
    reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
