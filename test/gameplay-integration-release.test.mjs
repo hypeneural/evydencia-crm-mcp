@@ -9,7 +9,7 @@ const record={crm_order_uuid:UUID,state:'not_found',hub_url:null,gallery_url:nul
 const response=(payload,status=200)=>new Response(payload===null?null:JSON.stringify(payload),{
  status,headers:{'content-type':'application/json'}
 });
-function service({publicRouteStatus=404,linkStatus=409,positiveStatus=200}={}) {
+function service({publicRouteStatus=404,linkStatus=409,positiveStatus=200,linkError='CUSTOMER_LINKS_NOT_ENABLED'}={}) {
  const calls=[];
  const fetchFn=async(input,options)=>{
   const url=new URL(input),auth=options.headers.Authorization;
@@ -19,7 +19,7 @@ function service({publicRouteStatus=404,linkStatus=409,positiveStatus=200}={}) {
    if(auth!== 'Bearer '+SECRET)return response({error:'UNAUTHORIZED'},401);
    if(url.pathname.endsWith('lookup-batch'))
     return response({schema_version:1,source:'gameplay_catalog',results:[record]},positiveStatus);
-   return response({error:'CUSTOMER_LINKS_NOT_ENABLED'},linkStatus);
+   return response({error:linkError},linkStatus);
   }
   return response(options.method==='HEAD'?null:{error:'NOT_FOUND'},publicRouteStatus);
  };
@@ -58,6 +58,11 @@ test('stale sidecar serving public HTML is refused even when health is 200',asyn
 test('unexpectedly enabled customer links fails closed',async()=>{
  const fake=service({linkStatus:200});
  await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),/SIDE_LINKS_DISABLED_HTTP_200/);
+});
+test('generic HTTP 409 from another service cannot masquerade as Gameplay contract',async()=>{
+ const fake=service({linkError:'CONFLICT'});
+ await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),
+  /SIDE_LINKS_DISABLED_CONTRACT_INVALID/);
 });
 test('bad private bearer response cannot be mistaken for ready',async()=>{
  const fake=service({positiveStatus:403});
