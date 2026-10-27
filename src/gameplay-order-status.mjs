@@ -41,6 +41,13 @@ export function gameplayOrderStatus(order, gameplay) {
   publication_required_by_crm:required,
   digital_experience_status:phase,
   publication_pending:required && gameplay.state!=='published_unverified',
+  // A published capability URL is not evidence of sending it via WhatsApp/SMS.
+  // No canonical, order-bound CRM/Z-API delivery receipt is available in this
+  // read-only contract. Never report `not_sent` without such evidence.
+  link_delivery_status:'not_verified',
+  link_sent_confirmed:null,
+  link_opened_confirmed:null,
+  delivery_receipt_verified:false,
   published_photo_count:publishedCount,
   active_revision_manifest_photo_count:manifestCount,
   preparing_photo_count:preparedCount,
