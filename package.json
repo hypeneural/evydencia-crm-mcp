@@ -28,9 +28,10 @@
     "gateway:bench": "node scripts/bench-gateway.mjs",
     "printserver:smoke:read": "node scripts/verify-printserver-smoke.mjs",
     "crm:label:php:lint": "php -l scripts/crm-label-render-bridge.php",
-    "malotes:preflight:read": "node scripts/verify-malotes-release-readonly.mjs",
+    "malotes:preflight:read": "node scripts/validate-agent-local.mjs",
     "malotes:preflight:print": "node scripts/validate-agent-local.mjs",
-    "agent:validate:local": "node scripts/validate-agent-local.mjs"
+    "agent:validate:local": "node scripts/validate-agent-local.mjs",
+    "release:preflight:metadata": "node scripts/verify-malotes-release-readonly.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0",
