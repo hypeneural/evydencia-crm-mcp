@@ -37,3 +37,6 @@
 | Envio automático | recibo Z-API por pedido/revisão e aprovação específica | NÃO_AUTORIZADO |
 
 Sem alteração de VPS/segredos, ambiente CRM Laravel, Z-API ou impressão nesta etapa.
+
+## CI da PR de integração
+O workflow original `.github/workflows/ci.yml` era filtrado somente para `main`, logo uma PR com base em `release/live-35tools-gameplay-printserver` não herdava automaticamente os checks da #11. A branch isolada atualiza os filtros para o próprio prefixo `integration/live-35tools-gameplay-reconciled-*` em `push` e a branch de release como destino em `pull_request`. **Resultado do novo HEAD ainda não confirmado** pelo conector: exigir workflow/job URL + conclusão SUCCESS, ou registrar BLOCKED_CI e executar testes locais completos. Não declarar CI verde sem recibo do HEAD.
