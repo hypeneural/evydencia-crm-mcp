@@ -13,7 +13,7 @@ import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {createGameplayReadClient} from './gameplay-read-client.mjs';
-import {gameplayOrderStatus} from './gameplay-order-status.mjs';
+import {gameplayOrderStatus,gameplayOrderSelectionRequired} from './gameplay-order-status.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
@@ -826,7 +826,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   };
   const natalFilter={'order.created-start':'2026-01-01','order.created-end':'2026-12-31','product.slug':'natal'};
   reg('crm_gameplay_links','Galeria e jogos de Natal 2026 por nome ou pedido',
-   'Consulta somente leitura por order_id, UUID ou nome no CRM Natal 2026. Relaciona pedido ao Gameplay por UUID e mostra status atual CRM, fotos publicadas, fotos em preparação e situação do álbum. Publicação não comprova jogos Phaser funcionando no celular. Com nome ambíguo devolve identificadores sem links e exige selecionar o ID. Nunca cria sessão ou envia WhatsApp.',
+   'Consulta somente leitura por order_id, UUID ou nome no CRM Natal 2026. Relaciona pedido ao Gameplay por UUID e mostra status atual CRM, fotos publicadas, fotos em preparação e situação do álbum. Publicação não comprova jogos Phaser funcionando no celular. Toda busca por nome retorna apenas os candidatos, sem links; consulte novamente por ID ou UUID explícito para acessar o pedido autorizado. Nunca cria sessão ou envia WhatsApp.',
    z.object({order_id:z.number().int().positive().optional(),order_uuid:z.string().uuid().optional(),
     nome_cliente:z.string().min(2).max(100).optional()}),OUT_GAMEPLAY_LINKS,async({order_id,order_uuid,nome_cliente})=>{
      if([order_id,order_uuid,nome_cliente].filter(x=>x!==undefined).length!==1)throw Error('gameplay_locator_invalid');
@@ -845,7 +845,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
       throw Error('gameplay_crm_filter_mismatch');
      if(!orders.length)return {source:'crm_gameplay_join',orders:[],total:0};
      // Never retrieve capability links for a broad name search.
-     if((nome_cliente && orders.length>1) || orders.length>10)return {source:'crm_gameplay_join',selection_required:true,
+     if(gameplayOrderSelectionRequired({nome_cliente,orders_count:orders.length}))return {source:'crm_gameplay_join',selection_required:true,
       total:orders.length,orders:orders.slice(0,20).map(o=>({
        order_id:o.order_id,crm_order_uuid:o.order_uuid||o.uuid,
        customer_name:o.customer_name,package_name:o.package_name,
