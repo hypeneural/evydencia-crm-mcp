@@ -6,3 +6,5 @@
 - Publicidade de URL não implica acesso anônimo: `/s/:token` é uma capability privada na URL. A consulta individual requer operador OAuth autorizado e pedido CRM específico. Batch nunca traz tokens.
 - Separar testes e CI por domínio, registrar SHA e comparar inventário de ferramentas antes/depois. Sem force push, merge automático ou alteração de produção.
 - Estado de links: `hub_url` e `gallery_url` representam rotas distintas; `/s/:token` é o hub dos jogos, e `/s/:token/fotos` é a galeria. Links só podem ser apresentados como funcionais após publicação pública realmente homologada.
+
+- Implantação é uma operação separada: nenhuma PR de feature autoriza automaticamente deploy ou alteração de flags.
