@@ -1,6 +1,7 @@
 #requires -Version 5.1
 # Última etapa local: somente clones isolados, fast-forward e testes afetados.
 # Não interage com impressora, serviços, secrets, CRM LIVE ou SQLite de produção.
+param([switch]$SkipRefresh)
 $ErrorActionPreference = 'Stop'
 if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA_AUSENTE' }
 $workspace = Join-Path $env:LOCALAPPDATA 'Evydencia\Antigravity\gameplay-mcp-20261026'
@@ -19,8 +20,10 @@ Assert-CleanRepository $gameplay 'feat/gameplay-status-read-api-20261026'
 
 $prepare = Join-Path $mcp 'scripts\antigravity\prepare-avell.mjs'
 if (-not (Test-Path $prepare)) { throw 'PREPARE_AUSENTE' }
-node $prepare --workspace $workspace --refresh
-if ($LASTEXITCODE -ne 0) { throw 'REFRESH_FALHOU' }
+if (-not $SkipRefresh) {
+    node $prepare --workspace $workspace --refresh
+    if ($LASTEXITCODE -ne 0) { throw 'REFRESH_FALHOU' }
+}
 
 Push-Location $mcp
 try {
