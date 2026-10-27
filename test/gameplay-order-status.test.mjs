@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus} from '../src/gameplay-order-status.mjs';
+import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus,gameplayAuditEligibleStatuses} from '../src/gameplay-order-status.mjs';
 
 const U='11111111-1111-4111-8111-111111111111';
 const order=(status_key,status_id=10)=>({order_uuid:U,status_key,status_id,package_name:'Então é Natal'});
@@ -108,4 +108,11 @@ test('one UUID cannot silently appear in current-status 10 and 12 scans',()=>{
  assert.throws(()=>registerDistinctGameplayOrderStatus(U,seen),
   /gameplay_crm_status_drift/);
  assert.equal(seen.size,1);
+});
+
+test('operator can audit only current status 10 or only status 12 without widening population',()=>{
+ assert.deepEqual(gameplayAuditEligibleStatuses('waiting_product_retrieve'),['waiting_product_retrieve']);
+ assert.deepEqual(gameplayAuditEligibleStatuses('order_completed'),['order_completed']);
+ assert.deepEqual(gameplayAuditEligibleStatuses('todos'),['waiting_product_retrieve','order_completed']);
+ assert.throws(()=>gameplayAuditEligibleStatuses('product_retrieve_confirmed'),/gameplay_audit_status_invalid/);
 });
