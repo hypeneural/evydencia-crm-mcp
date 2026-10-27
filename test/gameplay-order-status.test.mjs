@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {gameplayOrderStatus} from '../src/gameplay-order-status.mjs';
+import {gameplayOrderStatus,gameplayOrderSelectionRequired} from '../src/gameplay-order-status.mjs';
 
 const U='11111111-1111-4111-8111-111111111111';
 const order=(status_key,status_id=10)=>({order_uuid:U,status_key,status_id,package_name:'Então é Natal'});
@@ -63,4 +63,14 @@ test('invalid preparation is an explicit anomaly, never a published photo',()=>{
 test('missing or unrecognized Gameplay state must not be silently considered published',()=>{
  assert.throws(()=>gameplayOrderStatus(order('order_completed',12),null),/gameplay_status_contract_invalid/);
  assert.throws(()=>gameplayOrderStatus(order('order_completed',12),gp('made_up')),/gameplay_status_contract_invalid/);
+});
+
+test('customer-name lookup requires explicit order selection even with exactly one match',()=>{
+ assert.equal(gameplayOrderSelectionRequired({nome_cliente:'Nome Sintetico',orders_count:1}),true);
+ assert.equal(gameplayOrderSelectionRequired({nome_cliente:'Nome Sintetico',orders_count:2}),true);
+ assert.equal(gameplayOrderSelectionRequired({nome_cliente:'Nome Sintetico',orders_count:0}),true);
+ assert.equal(gameplayOrderSelectionRequired({nome_cliente:undefined,orders_count:1}),false);
+ assert.equal(gameplayOrderSelectionRequired({nome_cliente:undefined,orders_count:11}),true);
+ assert.throws(()=>gameplayOrderSelectionRequired({nome_cliente:'A',orders_count:NaN}),
+  /gameplay_selection_contract_invalid/);
 });
