@@ -44,3 +44,9 @@
 - Node 24 sqlite.DatabaseSync: https://nodejs.org/download/release/latest-v24.x/docs/api/sqlite.html
 
 **Handoff da próxima fase:** `docs/PROMPT_ANTIGRAVITY_ETAPA3_MCP_GAMEPLAY_20261027.md`.
+
+## 7. CI real coletado após o patch — diagnóstico específico
+
+- Gameplay HEAD intermediário `90bbd7f5c4bbe4403cae982c3268cc107abaac60`: workflow `CI` run `40594611698`, job `Quality Gates & Build` **FAIL** exclusivamente por `prettier --check .` nos arquivos `tools/deploy/staging-boundaries.test.mjs` e `docs/integrations/GAMEPLAY_STATUS_READ_V1_20261026.md`. O log do próprio CI mostrou **605 testes Vitest e 113 suites PASS** e Depcruise sem violações (522 módulos). Não é falha do comportamento do sidecar.
+- O ChatGPT publicou correções de estilo restritas a esses dois arquivos; o novo HEAD Gameplay deve ter o CI acompanhado até resultado final antes de GO. Nunca reaproveitar o CI `c7526bf` nem o resultado FAIL do intermediário como conclusão do HEAD novo.
+- MCP PR #14 HEAD após as novas alterações: `d5ae4d6a36a5caad028a9d0995e053189dad690d`, com `Validate MCP` e `MCP validation` retornando **SUCCESS** em consulta ao GitHub. Essa aprovação é de código, não de implantação, banco ou cliente.
