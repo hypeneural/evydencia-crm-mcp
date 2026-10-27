@@ -13,7 +13,7 @@ import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {createGameplayReadClient} from './gameplay-read-client.mjs';
-import {gameplayOrderStatus,gameplayOrderSelectionRequired} from './gameplay-order-status.mjs';
+import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus} from './gameplay-order-status.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
@@ -879,8 +879,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
         const id=String(o.order_uuid||o.uuid).toLowerCase();
         // A UUID appearing in both status scans indicates concurrent CRM
         // status drift; never silently deduplicate and report a partial audit.
-        if(seen.has(id))throw Error('gameplay_crm_status_drift');
-        orders.push(o);seen.add(id);
+        registerDistinctGameplayOrderStatus(id,seen);
+        orders.push(o);
        }
      }
      const map=new Map();
