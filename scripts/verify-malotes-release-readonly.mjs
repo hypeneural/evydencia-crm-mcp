@@ -10,8 +10,10 @@ import {dirname} from 'node:path';
 const here=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const opts={crm:resolve(here,'../evydencia-crm'),mcp:here,print:resolve(here,'../printserver')};
 const argv=process.argv.slice(2);
-for(let i=0;i<argv.length;i+=2){
- const key=argv[i],value=argv[i+1];
+const printOnly=argv.includes('--print-only');
+const pairs=argv.filter(x=>x!=='--print-only');
+for(let i=0;i<pairs.length;i+=2){
+ const key=pairs[i],value=pairs[i+1];
  if(!['--crm','--mcp','--print'].includes(key)||!value){process.stderr.write('Usage: node scripts/verify-malotes-release-readonly.mjs [--crm DIR] [--mcp DIR] [--print DIR]\n');process.exit(2)}
  opts[key.slice(2)]=resolve(value);
 }
@@ -22,11 +24,12 @@ const execute=(dir,bin,args)=>{
  return (result.stdout||'').trim();
 };
 const safe=(fn)=>{try{return {ok:true,value:fn()}}catch(e){return {ok:false,reason:String(e.message||'unavailable').slice(0,80)}}};
-const specs=[
+let specs=[
  {key:'crm',repo:'hypeneural/evydencia-crm',pr:432},
  {key:'mcp',repo:'hypeneural/evydencia-crm-mcp',pr:12},
  {key:'print',repo:'hypeneural/printserver',pr:1}
 ];
+if(printOnly)specs=specs.filter(s=>s.key!=='crm');
 const outputs=[];
 for(const spec of specs){
  const dir=opts[spec.key];
@@ -61,9 +64,10 @@ for(const spec of specs){
  item.state=item.failures.length?'BLOCKED':'SOURCE_METADATA_OK_ONLY';
  outputs.push(item);
 }
-const result={tool:'malotes_release_readonly_preflight',changes_applied:false,production_mutations:false,
+const result={tool:'malotes_release_readonly_preflight',mode:printOnly?'print_only':'full',changes_applied:false,production_mutations:false,
  generated_at:new Date().toISOString(),repositories:outputs,
- reminders:['Do not rename PR #432 HEAD without a PR preservation plan.',
+ reminders:['Antigravity must never alter CRM: PR #432 is exclusively owned by Codex.',
+ 'Do not rename PR #432 HEAD without a PR preservation plan.',
  'Never use GitHub CI alone as CRM HIGH evidence.',
  'Source metadata does not certify systemd, Windows, Z-API or physical QR.']};
 process.stdout.write(JSON.stringify(result,null,2)+'\n');
