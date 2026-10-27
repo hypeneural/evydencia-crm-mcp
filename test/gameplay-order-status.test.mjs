@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {gameplayOrderStatus,gameplayOrderSelectionRequired} from '../src/gameplay-order-status.mjs';
+import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus} from '../src/gameplay-order-status.mjs';
 
 const U='11111111-1111-4111-8111-111111111111';
 const order=(status_key,status_id=10)=>({order_uuid:U,status_key,status_id,package_name:'Então é Natal'});
@@ -83,4 +83,13 @@ test('fail closed when current CRM numeric status contradicts its key',()=>{
   /gameplay_crm_status_mismatch/);
  assert.throws(()=>gameplayOrderStatus(order('order_completed',11),snapshot),
   /gameplay_crm_status_mismatch/);
+});
+
+test('one UUID cannot silently appear in current-status 10 and 12 scans',()=>{
+ const seen=new Set();
+ registerDistinctGameplayOrderStatus(U,seen);
+ assert.equal(seen.size,1);
+ assert.throws(()=>registerDistinctGameplayOrderStatus(U,seen),
+  /gameplay_crm_status_drift/);
+ assert.equal(seen.size,1);
 });
