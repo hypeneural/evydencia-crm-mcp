@@ -74,3 +74,13 @@ test('customer-name lookup requires explicit order selection even with exactly o
  assert.throws(()=>gameplayOrderSelectionRequired({nome_cliente:'A',orders_count:NaN}),
   /gameplay_selection_contract_invalid/);
 });
+
+test('fail closed when current CRM numeric status contradicts its key',()=>{
+ const snapshot=gp('not_found');
+ assert.throws(()=>gameplayOrderStatus(order('waiting_product_retrieve',12),snapshot),
+  /gameplay_crm_status_mismatch/);
+ assert.throws(()=>gameplayOrderStatus(order('product_retrieve_confirmed',10),snapshot),
+  /gameplay_crm_status_mismatch/);
+ assert.throws(()=>gameplayOrderStatus(order('order_completed',11),snapshot),
+  /gameplay_crm_status_mismatch/);
+});
