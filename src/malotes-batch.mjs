@@ -36,6 +36,8 @@ export async function processMalotes({modo,pedidos,load,markReady,printLabel}){
     const printed=await printLabel({order_id,order:o});
     entry.impressao=printed?.state??'unknown';
     entry.job_id=printed?.job_id??null;
+    if(!['queued','claimed','spooled'].includes(entry.impressao))
+     throw Error('malotes_print_result_unknown');
    }
    const final=await load(order_id);
    if(final?.order_id===order_id)entry.status_event_id=final.status_event_id??null;
