@@ -13,6 +13,16 @@ const count = v => Number.isSafeInteger(v) && v >= 0 ? v : null;
 export function gameplayOrderStatus(order, gameplay) {
  if (!order || !gameplay || !Object.hasOwn(PHASES,gameplay.state))
   throw Error('gameplay_status_contract_invalid');
+ // The current CRM status must agree in both representations. A stale
+ // key alongside a new numeric status must never create or hide an alert.
+ const statusIds=Object.freeze({waiting_product_retrieve:10,order_completed:12});
+ const actualId=order.status_id;
+ if(Object.hasOwn(statusIds,order.status_key)&&
+    actualId!==undefined&&actualId!==null&&actualId!==statusIds[order.status_key])
+  throw Error('gameplay_crm_status_mismatch');
+ if((actualId===10||actualId===12)&&
+    order.status_key!==(actualId===10?'waiting_product_retrieve':'order_completed'))
+  throw Error('gameplay_crm_status_mismatch');
  const required = DUE_STATUS.has(order.status_key);
  const prep=gameplay.preparation;
  const inPreparation=prep?.state==='staged'||prep?.state==='invalid';
