@@ -596,6 +596,7 @@ test('PrintServer tool scope uses a dedicated operator allowlist and never print
   await c9.close();
   await g.close();
  }
+});
 test('Gameplay discovery requires full CRM operator mode, never just a valid Gameplay bearer',async()=>{
  const options={EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
   EVYD_GAMEPLAY_READ_ENABLED:'1',
