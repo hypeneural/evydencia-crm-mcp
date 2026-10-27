@@ -80,3 +80,21 @@ export function createGameplayReadClient(config,{fetchFn=fetch}={}){
   }
  };
 }
+
+/**
+ * Diagnostic safe for crm_capacidades: performs one metadata-only lookup for
+ * a reserved synthetic UUID, never exports the response, credentials or URLs.
+ * Reachability is NOT proof that the actual customer dataset/media is deployed.
+ */
+export async function probeGameplayPrivateAccess(client){
+ if(!client)return {checked:true,reachable:false,status:'not_configured',dataset_proven:false};
+ try{
+  await client.lookup(['00000000-0000-4000-8000-000000000000']);
+  return {checked:true,reachable:true,status:'private_contract_ok',dataset_proven:false};
+ }catch(error){
+  const code=String(error?.message||'');
+  const status=/^gameplay_http_(401|403|404|408|429|500|502|503|504)$/.test(code)
+   ?code:'gameplay_unavailable';
+  return {checked:true,reachable:false,status,dataset_proven:false};
+ }
+}
