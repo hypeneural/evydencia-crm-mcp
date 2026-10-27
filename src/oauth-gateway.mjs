@@ -123,6 +123,8 @@ export function gatewayConfig(env){
   printserverEnabled:env.EVYD_PRINTSERVER_ENABLED==='1',
   malotesReadyEnabled:env.EVYD_MALOTES_READY_WRITE_ENABLED==='1',
   malotesBatchEnabled:env.EVYD_MALOTES_BATCH_ENABLED==='1',
+  // Distinct opt-in for print-only batches. CRM status write stays disabled.
+  malotesPrintBatchEnabled:env.EVYD_MALOTES_PRINT_BATCH_ENABLED==='1',
   printAllowedOperators,
   uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
