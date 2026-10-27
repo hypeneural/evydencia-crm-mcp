@@ -930,19 +930,27 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     z.object({order_ids:z.array(z.number().int().min(1)).min(1).max(20)}),OUT_GENERIC,
     async({order_ids})=>{
      const unique=[...new Set(order_ids)];
-     const rows=await Promise.all(unique.map(async order_id=>{
-      try{
-       const r=await direct.detail({order_id,detailLevel:'resumo'});
-       const o=r?.order;
-       if(!o||o.order_id!==order_id)return {order_id,state:'not_found'};
-       return {
-        order_id,order_uuid:o.order_uuid??null,customer_name:o.customer_name??null,
-        status_key:o.status_key??null,status_label:o.status_label??null,
-        remaining_cents:o.remaining_cents??null,
-        print_eligible:o.status_key==='waiting_product_retrieve'&&o.remaining_cents===0,
-        crm_order_url:o.crm_order_url??null
-       };
-      }catch{return {order_id,state:'not_found_or_unavailable'}}
+     // Photos frequently arrive in batches of 5–20; prevent 20 concurrent PHP
+     // Laravel bootstraps / database probes while retaining the user's order.
+     const rows=new Array(unique.length);
+     let cursor=0;
+     await Promise.all(Array.from({length:Math.min(4,unique.length)},async()=>{
+      while(cursor<unique.length){
+       const index=cursor++,order_id=unique[index];
+       try{
+        const r=await direct.detail({order_id,detailLevel:'resumo'});
+        const o=r?.order;
+        rows[index]=(!o||o.order_id!==order_id)
+         ? {order_id,state:'not_found',print_eligible:false}
+         : {
+          order_id,state:'found',order_uuid:o.order_uuid??null,customer_name:o.customer_name??null,
+          status_key:o.status_key??null,status_label:o.status_label??null,
+          remaining_cents:o.remaining_cents??null,
+          print_eligible:o.status_key==='waiting_product_retrieve'&&o.remaining_cents===0,
+          crm_order_url:o.crm_order_url??null
+         };
+       }catch{rows[index]={order_id,state:'not_found_or_unavailable',print_eligible:false}}
+      }
      }));
      return {source:'CRM_READ_ONLY',orders:rows,changes_applied:false,automatic_pickup_status_write_available:false};
     });
@@ -952,7 +960,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     OUT_GENERIC,async({order_id,confirmado_pelo_operador,request_id})=>{
      if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canPrint)throw Error('insufficient_operator_write_scope');
      if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
-     const r=await direct.detail({order_id,detailLevel:'resumo'});
+     const r=await direct.detail({order_id,detailLevel:'resumo',fresh:true});
      const o=r?.order;
      if(!o||o.order_id!==order_id)throw Error('printserver_order_not_found');
      if(o.status_key!=='waiting_product_retrieve')throw Error('printserver_status_not_ready');
