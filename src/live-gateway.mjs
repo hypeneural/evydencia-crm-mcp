@@ -12,6 +12,8 @@ import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
+import {createGameplayReadClient} from './gameplay-read-client.mjs';
+import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus,gameplayAuditEligibleStatuses} from './gameplay-order-status.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
@@ -37,6 +39,7 @@ export const BUILD_INFO=Object.freeze(resolveBuildInfo());
 
 export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_campanha_publica','crm_horarios_publicos','crm_conexao_privada','crm_cliente_resumo','crm_cliente_360']);
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
+export const GAMEPLAY_CRM_TOOL_NAMES=Object.freeze(['crm_gameplay_links','crm_gameplay_auditoria']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
 export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
 export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
@@ -49,7 +52,7 @@ const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorl
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
 // A physical print is an externally visible, potentially irreversible action in a private device fleet.
 const PRINT_WRITE={readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false};
-const SAFE_ERR=/^(printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
+const SAFE_ERR=/^(gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
 
 function classifyToolError(code){
  if(code==='crm_public_package_or_campaign_not_found'){
@@ -73,10 +76,13 @@ function classifyToolError(code){
  if(code==='printserver_manual_reconciliation_required'){return {error_category:'CONFLICT',hint:'Impressão com resultado incerto: conferir fila LABEL e o histórico antes de repetir.'}}
  if(code==='printserver_invalid_request'){return {error_category:'INVALID_INPUT'}}
  if(code==='printserver_unauthorized'){return {error_category:'UNAUTHORIZED'}}
+ if(code==='legacy_read_canonical_pagination_unavailable'){
+  return {error_category:'UNAVAILABLE',hint:'A busca completa requer o bridge forense com paginação canônica. Não conclua que não existem pendências: validar EVYD_CRM_APP_PATH e o bridge privado no host MCP.'};
+ }
  if(code.endsWith('_timeout')){
   return {error_category:'TIMEOUT'};
  }
- if(['crm_contract_invalid','crm_invalid_json','crm_extension_envelope_invalid','legacy_read_contract_invalid','legacy_read_invalid_json','natal_bridge_invalid_json','forensic_bridge_invalid_json'].includes(code)){
+ if(['crm_contract_invalid','crm_invalid_json','crm_extension_envelope_invalid','legacy_read_contract_invalid','legacy_read_invalid_json','natal_bridge_invalid_json','forensic_bridge_invalid_json','gameplay_crm_invalid','gameplay_crm_filter_mismatch','gameplay_crm_pagination_invalid','gameplay_contract_invalid','gameplay_url_invalid'].includes(code)){
   return {error_category:'CONTRACT_MISMATCH'};
  }
  return {error_category:'UNAVAILABLE'};
@@ -180,12 +186,20 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_consultar_impressao_etiqueta',capability:'printserver_job_status',access:'read',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,malotesBatchEnabled=false,perfSnapshot=null}={}){
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,malotesBatchEnabled=false,perfSnapshot=null,gameplayEnabled=false}={}){
  const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled),batch:Boolean(malotesBatchEnabled)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
  });
+ if(gameplayEnabled && directEnabled){
+  for(const name of GAMEPLAY_CRM_TOOL_NAMES){
+   tools.push({tool:name,capability:name==='crm_gameplay_links'?'christmas_gallery_links':'christmas_publication_audit',
+    access:'read',required_scope:GATEWAY_SCOPE,source:'crm_gameplay_join',supports_filters:true,
+    supports_pagination:name==='crm_gameplay_auditoria',supports_history:false,
+    registered:true,state:'LIVE_ACTIVE'});
+  }
+ }
  if(zapiContext?.diagEnabled){
   tools.push(
    {
@@ -244,9 +258,10 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
  }
  const activeTools=tools.filter(t=>t.registered);
  const uiSet=new Set(UI_CRM_TOOL_NAMES);
- // Count only original v0.12 tools; UI and PrintServer are additive.
+ // Count only original v0.12 tools; UI, PrintServer and Gameplay are additive.
  const printSet=new Set(PRINTSERVER_TOOL_NAMES);
- const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)).length;
+ const gameplaySet=new Set(GAMEPLAY_CRM_TOOL_NAMES);
+ const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)&&!gameplaySet.has(t.tool)).length;
  const mcpUiActive=Boolean(directEnabled&&operatorFullCrm&&uiAppsEnabled);
  return {
   service:'evydencia-crm-mcp-live',
@@ -256,6 +271,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   mode:(operatorFullCrm||zapiContext?.enabled||zapiContext?.diagEnabled)?'LIVE_OPERATOR_FULL_OAUTH':'LIVE_READ_ONLY_OAUTH',
   mock_mode:false,
   direct_crm_read_enabled:Boolean(directEnabled),
+  gameplay_read_enabled:Boolean(gameplayEnabled&&directEnabled),
   forensic_audit_enabled:Boolean(directEnabled&&operatorFullCrm),
   proposal_dispatch_enabled:Boolean(operatorFullCrm),
   mcp_ui_apps_enabled:mcpUiActive,
@@ -265,6 +281,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   legacy_v012_tools_preserved_count:legacyPreservedCount,
   tools,
   ...(directEnabled?{direct_crm_tools:DIRECT_CRM_TOOL_NAMES}:{}),
+  ...(gameplayEnabled&&directEnabled?{gameplay_crm_tools:GAMEPLAY_CRM_TOOL_NAMES}:{}),
   ...(directEnabled&&operatorFullCrm?{forensic_crm_tools:FORENSIC_CRM_TOOL_NAMES}:{}),
   ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{}),
   ...(mcpUiActive?{ui_crm_tools:UI_CRM_TOOL_NAMES,ui_resource_uri:MCP_UI_CARD_RESOURCE_URI,ui_fallback_resource_uri:MCP_UI_CARD_V1_FALLBACK_URI}:{}),
@@ -304,6 +321,10 @@ function summarizeToolResult(tool,res){
    return `OK [crm_estatisticas_natal]: perfil=${res.response_profile||'default'}, corte=${res.cutoff_mmdd||'atual'}, nivel=${res.detail_level||'resumo'}, pedidos_validos_2026=${res.kpis_2026?.valid_orders??'n/d'}, sessoes_confirmadas_2026=${res.kpis_2026?.confirmed_realized_sessions??res.kpis_2026?.confirmed_realized_sessions_to_date??res.kpis_2026?.realized_sessions_to_date??'n/d'}. Consulte structuredContent.`;
   case 'crm_natal_participantes_estatisticas':
    return `OK [crm_natal_participantes_estatisticas]: escopo=${res.year_scope||'2026'}, pop_primaria=${res.primary_population_year??res.year_scope??'2026'}, total_participantes=${res.population_reconciliation?.total_participants_count??'n/d'}, reconciliado=${Boolean(res.population_reconciliation?.reconciled)}. Consulte structuredContent.`;
+  case 'crm_gameplay_links':
+   return `OK [crm_gameplay_links]: pedidos=${res.total??0}, escolha_id=${Boolean(res.selection_required)}. Consulte structuredContent para status do CRM, fotos publicadas/preparadas e links individuais autorizados.`;
+  case 'crm_gameplay_auditoria':
+   return `OK [crm_gameplay_auditoria]: pedidos_elegiveis=${res.counts?.total??'n/d'}, pendentes=${res.counts?.pending_publication??'n/d'}, fotos_publicadas=${res.counts?.published_photo_count??'n/d'}, fotos_em_preparacao=${res.counts?.preparing_photo_count??'n/d'}. Jogos no navegador NAO verificados. Consulte structuredContent.`;
   case 'crm_pedidos_buscar':
    return `OK [crm_pedidos_buscar]: retornados=${Array.isArray(res.orders)?res.orders.length:0}, total_correspondente=${res.pagination?.total_matching_orders??'n/d'}. Consulte structuredContent.`;
   case 'crm_pedido_detalhe':
@@ -520,6 +541,66 @@ const OUT_PROPOSAL_DISPATCH=z.looseObject({
  error_code:z.string().nullish(),
  message:z.string().nullish()
 });
+const OUT_GAMEPLAY_STATE=z.enum(['not_found','not_published','partial','revoked','published_unverified']);
+const OUT_GAMEPLAY_RECORD=z.looseObject({
+ crm_order_uuid:z.string().uuid(),state:OUT_GAMEPLAY_STATE,
+ photo_count:z.number().int().nonnegative(),expected_blobs:z.number().int().nonnegative(),
+ ready_blobs:z.number().int().nonnegative(),
+ preparation:z.looseObject({
+  state:z.enum(['none','staged','invalid']),revision_id:z.string().uuid().nullable(),
+  photo_count:z.number().int().nonnegative().nullable(),
+  expected_blobs:z.number().int().nonnegative(),ready_blobs:z.number().int().nonnegative()
+ }).optional(),
+ hub_url:z.string().url().nullable(),gallery_url:z.string().url().nullable(),
+ games_runtime_verified:z.literal(false)
+});
+const OUT_GAMEPLAY_OPERATIONAL=z.looseObject({
+ crm_order_uuid:z.string().uuid(),crm_status_key:z.string().nullish(),
+ crm_status_id:z.number().int().nullish(),publication_required_by_crm:z.boolean(),
+ digital_experience_status:z.enum([
+  'no_gameplay_session','access_revoked','publication_incomplete',
+  'album_not_published','album_published_runtime_unverified',
+  'album_in_preparation','preparation_invalid'
+ ]),
+ publication_pending:z.boolean(),
+ link_delivery_status:z.literal('not_verified'),
+ link_sent_confirmed:z.null(),link_opened_confirmed:z.null(),
+ delivery_receipt_verified:z.literal(false),
+ published_photo_count:z.number().int().nonnegative().nullable(),
+ active_revision_manifest_photo_count:z.number().int().nonnegative().nullable(),
+ preparing_photo_count:z.number().int().nonnegative().nullable(),
+ published_variants_ready:z.number().int().nonnegative().nullable(),
+ preparing_variants_ready:z.number().int().nonnegative().nullable(),
+ individual_games_verified:z.literal(false),browser_runtime_verified:z.literal(false)
+});
+const OUT_GAMEPLAY_ORDER=z.looseObject({
+ order_id:z.number().int().nullish(),crm_order_uuid:z.string().uuid().optional(),
+ crm_order_url:z.string().url().nullish(),customer_name:z.string().nullish(),
+ package_name:z.string().nullish(),status_id:z.number().int().nullish(),
+ status_key:z.string().nullish(),expected_now:z.boolean().optional(),
+ operational:OUT_GAMEPLAY_OPERATIONAL.optional(),gameplay:OUT_GAMEPLAY_RECORD.nullish()
+});
+const OUT_GAMEPLAY_LINKS=z.looseObject({
+ source:z.literal('crm_gameplay_join'),total:z.number().int().nonnegative(),
+ selection_required:z.boolean().optional(),orders:z.array(OUT_GAMEPLAY_ORDER)
+});
+const OUT_GAMEPLAY_AUDIT=z.looseObject({
+ source:z.literal('crm_gameplay_join'),year:z.literal(2026),
+ statuses:z.array(z.enum(['waiting_product_retrieve','order_completed'])),
+ counts:z.looseObject({total:z.number().int().nonnegative(),
+  pending_publication:z.number().int().nonnegative(),
+  published_without_browser_proof:z.number().int().nonnegative(),
+  published_photo_count:z.number().int().nonnegative().optional(),
+  preparing_photo_count:z.number().int().nonnegative().optional(),
+  orders_in_preparation:z.number().int().nonnegative().optional(),
+  orders_without_gameplay_session:z.number().int().nonnegative().optional(),
+  orders_with_delivery_unverified:z.number().int().nonnegative().optional(),
+  published_orders_delivery_unverified:z.number().int().nonnegative().optional()}),
+ pagination:z.looseObject({page:z.number().int(),per_page:z.number().int(),
+  total_matching:z.number().int(),has_more:z.boolean()}),
+ orders:z.array(OUT_GAMEPLAY_ORDER)
+});
+
 const OUT_ZAPI_STATUS=z.looseObject({
  service:z.string(),
  upstream_mcp_endpoint:z.string(),
@@ -573,7 +654,7 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 });
 
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
-export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
+export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_GAMEPLAY_LINKS,OUT_GAMEPLAY_AUDIT,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
 async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv}){
  const ex=auth?.extra||{};
@@ -595,6 +676,14 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   }
  }):null;
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
+ // Optional Gameplay configuration is captured by gatewayConfig(env) and
+ // never implicitly loaded from another process-global environment.
+ let gameplay=null;
+ if(direct&&cfg.operatorFullCrm){
+  if(cfg.gameplayReadConfigError)log({evt:'gameplay_config_invalid',op:ex.operatorTag});
+  else if(cfg.gameplayReadSettings)
+   gameplay=createGameplayReadClient(cfg.gameplayReadSettings,{fetchFn});
+ }
  const resolvePhone=async({telefone,nome_cliente},{allowLookupMiss=false}={})=>{
   const handleLookup=r=>{
    if(typeof r==='string')return {status:'matched',phone:r};
@@ -730,7 +819,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean(cfg.malotesBatchEnabled&&ex.canReady&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled),perfSnapshot:perf?.snapshot()??null}),
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean(cfg.malotesBatchEnabled&&ex.canReady&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled),perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay)}),
   // Report EFFECTIVE token scopes, not scopes_supported advertised by OAuth metadata.
   // No access tokens, gateway secrets or upstream abilities in this response.
   oauth_authorization:{
@@ -741,6 +830,141 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
    print_tool_enabled:Boolean(printCfg.enabled&&ex.canPrint&&grantedScopes.has(SCOPE_PRINT_WRITE))
   }
  }));
+ if(gameplay){
+  const eligibleStatus=new Set(['waiting_product_retrieve','order_completed']);
+  const findOrders=async(filter,{canonicalPaginationRequired=true}={})=>{
+   const orders=[],seen=new Set();
+   let expectedTotal=null;
+   for(let page=1;page<=80;page++){
+    const result=await direct.search(filter,{
+     page,limit:25,detailLevel:'resumo',canonicalPaginationRequired
+    });
+    if(!Array.isArray(result?.orders))throw Error('gameplay_crm_invalid');
+    const p=result.pagination;
+    if(canonicalPaginationRequired){
+     if(!Number.isSafeInteger(p?.total_matching_orders)||p.total_matching_orders<0||
+        p.page!==page||p.returned_count!==result.orders.length)
+       throw Error('gameplay_crm_pagination_invalid');
+     if(expectedTotal===null)expectedTotal=p.total_matching_orders;
+     else if(expectedTotal!==p.total_matching_orders)
+       throw Error('gameplay_crm_pagination_invalid');
+    }
+    for(const o of result.orders){
+     const uuid=String(o.order_uuid||o.uuid||'').toLowerCase();
+     if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(uuid))
+       throw Error('gameplay_crm_invalid');
+     if(seen.has(uuid))continue;
+     seen.add(uuid);orders.push(o);
+    }
+    if(typeof result.pagination?.has_more!=='boolean')throw Error('gameplay_crm_pagination_invalid');
+    if(!result.pagination.has_more){
+     if(canonicalPaginationRequired&&seen.size!==expectedTotal)
+      throw Error('gameplay_crm_pagination_invalid');
+     break;
+    }
+    if(page===80)throw Error('gameplay_crm_pagination_limit');
+   }
+   return orders;
+  };
+  const natalFilter={'order.created-start':'2026-01-01','order.created-end':'2026-12-31','product.slug':'natal'};
+  reg('crm_gameplay_links','Galeria e jogos de Natal 2026 por nome ou pedido',
+   'Consulta somente leitura por order_id, UUID ou nome no CRM Natal 2026. Relaciona pedido ao Gameplay por UUID e mostra status atual CRM, fotos publicadas, fotos em preparação e situação do álbum. O estado envio do link permanece not_verified até existir comprovante do CRM/Z-API; publicação não prova envio nem jogos executados. Busca por nome apenas lista candidatos; consulte por ID ou UUID explícito para obter URLs autorizadas. Não envia WhatsApp.',
+   z.object({order_id:z.number().int().positive().optional(),order_uuid:z.string().uuid().optional(),
+    nome_cliente:z.string().min(2).max(100).optional()}),OUT_GAMEPLAY_LINKS,async({order_id,order_uuid,nome_cliente})=>{
+     if([order_id,order_uuid,nome_cliente].filter(x=>x!==undefined).length!==1)throw Error('gameplay_locator_invalid');
+     const f={...natalFilter,...(order_id?{'order.id':order_id}:{}),
+      ...(order_uuid?{'order.uuid':order_uuid}:{}),
+      ...(nome_cliente?{'customer.name':nome_cliente}:{})};
+     // Exact order ID / UUID can still use the legacy HTTP path because the
+     // returned identity is verified below. Broad name searches must use
+     // canonical server-side pagination to prevent incomplete candidate lists.
+     const orders=await findOrders(f,{canonicalPaginationRequired:Boolean(nome_cliente)});
+     // A broken CRM filter must never return links for another order.
+     if(order_id!==undefined&&orders.some(o=>Number(o.order_id)!==order_id))
+      throw Error('gameplay_crm_filter_mismatch');
+     if(order_uuid!==undefined&&orders.some(o=>
+       String(o.order_uuid||o.uuid).toLowerCase()!==order_uuid.toLowerCase()))
+      throw Error('gameplay_crm_filter_mismatch');
+     if(!orders.length)return {source:'crm_gameplay_join',orders:[],total:0};
+     // Never retrieve capability links for a broad name search.
+     if(gameplayOrderSelectionRequired({nome_cliente,orders_count:orders.length}))return {source:'crm_gameplay_join',selection_required:true,
+      total:orders.length,orders:orders.slice(0,20).map(o=>({
+       order_id:o.order_id,crm_order_uuid:o.order_uuid||o.uuid,
+       customer_name:o.customer_name,package_name:o.package_name,
+       status_id:o.status_id,status_key:o.status_key,
+       crm_order_url:o.crm_order_url}))};
+     const snapshots=await Promise.all(orders.map(async o=>{
+       const uuid=String(o.order_uuid||o.uuid).toLowerCase();
+       const res=await gameplay.lookup([uuid],{includeLinks:true});
+       const gameplayResult=res.results[0];
+       const operational=gameplayOrderStatus(o,gameplayResult);
+       return {order_id:o.order_id,crm_order_uuid:uuid,
+        crm_order_url:o.crm_order_url,customer_name:o.customer_name,
+        package_name:o.package_name,status_id:o.status_id,
+        status_key:o.status_key,expected_now:operational.publication_required_by_crm,
+        operational,gameplay:gameplayResult};
+     }));
+     return {source:'crm_gameplay_join',total:orders.length,
+      orders:snapshots};
+   });
+  reg('crm_gameplay_auditoria','Pendências de galeria e jogos Natal 2026',
+   'Cruza Natal 2026 e Gameplay por UUID. Com status_atual=todos (padrão) audita status 10 e 12; use waiting_product_retrieve ou order_completed para um deles. Conta sessões, publicações e fotos publicadas/em preparação. ENVIO: sem recibo CRM por pedido o estado é not_verified, NÃO not_sent. Para incluir publicados use incluir_publicados=true. Não prova runtime Phaser nem devolve URLs capability em lote.',
+   z.object({pagina:z.number().int().min(1).max(100).default(1),
+    limite:z.number().int().min(1).max(50).default(20),
+    incluir_publicados:z.boolean().default(false),
+    status_atual:z.enum(['todos','waiting_product_retrieve','order_completed']).default('todos')
+   }),OUT_GAMEPLAY_AUDIT,async({pagina,limite,incluir_publicados,status_atual})=>{
+     const orders=[],seen=new Set();
+     const auditStatuses=gameplayAuditEligibleStatuses(status_atual);
+     for(const status of auditStatuses){
+       const found=await findOrders({...natalFilter,'order.status':status});
+       for(const o of found){
+        // The filter must not silently turn an ineligible order into a missing-link alert.
+        if(o.status_key!==status)throw Error('gameplay_crm_invalid');
+        const id=String(o.order_uuid||o.uuid).toLowerCase();
+        // A UUID appearing in both status scans indicates concurrent CRM
+        // status drift; never silently deduplicate and report a partial audit.
+        registerDistinctGameplayOrderStatus(id,seen);
+        orders.push(o);
+       }
+     }
+     const map=new Map();
+     for(let i=0;i<orders.length;i+=50){
+       const result=await gameplay.lookup(orders.slice(i,i+50).map(o=>o.order_uuid||o.uuid));
+       for(const row of result.results)map.set(row.crm_order_uuid,row);
+     }
+     const entries=orders.map(o=>{
+      const uuid=String(o.order_uuid||o.uuid).toLowerCase();
+      const snapshot=map.get(uuid);
+      if(!snapshot)throw Error('gameplay_contract_invalid');
+      return {order_id:o.order_id,crm_order_uuid:uuid,
+       crm_order_url:o.crm_order_url,customer_name:o.customer_name,
+       package_name:o.package_name,status_id:o.status_id,
+       status_key:o.status_key,operational:gameplayOrderStatus(o,snapshot),gameplay:snapshot};
+     });
+     const counts={total:entries.length};
+     for(const e of entries){const state=e.gameplay?.state||'not_verified';counts[state]=(counts[state]||0)+1}
+     counts.pending_publication=['not_found','not_published','partial','revoked']
+       .reduce((sum,state)=>sum+(counts[state]||0),0);
+     counts.published_without_browser_proof=counts.published_unverified||0;
+     counts.published_photo_count=entries.reduce((n,e)=>n+(e.operational.published_photo_count||0),0);
+     counts.preparing_photo_count=entries.reduce((n,e)=>n+(e.operational.preparing_photo_count||0),0);
+     counts.orders_in_preparation=entries.filter(e=>e.operational.digital_experience_status==='album_in_preparation').length;
+     counts.orders_without_gameplay_session=counts.not_found||0;
+     // Publication and customer delivery are independent state machines.
+     // Until a canonical CRM provider receipt can be joined to this order,
+     // *all* orders have an unknown delivery state, not a proven unsent state.
+     counts.orders_with_delivery_unverified=entries.length;
+     counts.published_orders_delivery_unverified=counts.published_unverified||0;
+     const selected=incluir_publicados?entries:
+       entries.filter(e=>e.gameplay?.state!=='published_unverified');
+     const start=(pagina-1)*limite;
+     return {source:'crm_gameplay_join',year:2026,statuses:auditStatuses,counts,
+      pagination:{page:pagina,per_page:limite,total_matching:selected.length,
+       has_more:start+limite<selected.length},
+      orders:selected.slice(start,start+limite)};
+   });
+ }
  reg('crm_status','Estado do CRM','Use quando precisar verificar rapidamente o liveness público do servidor CRM (evydencia.com). NÃO use para diagnóstico de WhatsApp/Z-API.',z.object({}),OUT_GENERIC,()=>crm.status());
  reg('crm_campanha_publica','Pacotes públicos','Use quando precisar consultar o catálogo público de pacotes e preços de uma campanha (padrão "natal"). NÃO use para relatórios de vendas ou estatísticas internas.',z.object({campanha:z.string().max(80).default('natal')}),OUT_GENERIC,({campanha})=>crm.campaign(campanha));
  reg('crm_horarios_publicos','Horários públicos','Use quando precisar verificar disponibilidade pública de horários de um pacote em janela de até 14 dias (AAAA-MM-DD). ATENÇÃO DE SLUG: informe o slug público da campanha/pacote retornado por crm_campanha_publica (ex.: "entao-e-natal", "ho-ho-ho", "boas-festas"), NUNCA a referência interna de produto ("enatal"). NÃO cria reservas.',z.object({campanha:z.string().max(80).default('natal'),pacote:z.string().max(80),inicio:z.string().max(10),fim:z.string().max(10)}),OUT_GENERIC,async({campanha,pacote,inicio,fim})=>{

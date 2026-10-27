@@ -9,6 +9,7 @@ import {createCipheriv,createDecipheriv,createHash,createHmac,hkdfSync,randomByt
 import {OAuthError,OAuthErrorCode} from '@modelcontextprotocol/server';
 import {baseURL,crmClient} from './core.mjs';
 import {assertOperatorAbilities} from './live-abilities.mjs';
+import {gameplayReadConfig} from './gameplay-read-client.mjs';
 
 export const GATEWAY_SCOPE='crm.read';
 export const SCOPE_PROPOSAL_WRITE='crm.proposal.write';
@@ -114,6 +115,11 @@ export function gatewayConfig(env){
   if(!Array.isArray(parsed)||parsed.length===0||parsed.length>20)fail('zapi_diag_instances');
   for(const item of parsed)pushDiagInstance(item,'zapi_diag_instances');
  }
+ // Capture the supplied gateway environment once. Tests and worker instances
+ // must not silently read process.env when creating per-operator tools.
+ let gameplayReadSettings=null,gameplayReadConfigError=false;
+ try{gameplayReadSettings=gameplayReadConfig(env)}
+ catch{gameplayReadConfigError=true}
  const rawObsPath=typeof env.EVYD_ZAPI_DIAG_OBS_PATH==='string'?env.EVYD_ZAPI_DIAG_OBS_PATH.trim():'';
  const zapiDiagObsPath=rawObsPath||(zapiStorePath?zapiStorePath.replace(/\.json$/i,'')+'.diag-obs.json':null);
  return Object.freeze({
@@ -124,6 +130,7 @@ export function gatewayConfig(env){
   malotesReadyEnabled:env.EVYD_MALOTES_READY_WRITE_ENABLED==='1',
   malotesBatchEnabled:env.EVYD_MALOTES_BATCH_ENABLED==='1',
   printAllowedOperators,
+  gameplayReadSettings,gameplayReadConfigError,
   uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
   zapiEnabled,zapiMcpUrl,zapiIssuer,zapiStorePath,zapiRestStatus,
