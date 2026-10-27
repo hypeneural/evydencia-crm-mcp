@@ -730,7 +730,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean(cfg.malotesBatchEnabled&&ex.canReady&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled),perfSnapshot:perf?.snapshot()??null}),
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean((cfg.malotesBatchEnabled&&cfg.malotesReadyEnabled&&ex.canReady)||(cfg.malotesPrintBatchEnabled&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled)),perfSnapshot:perf?.snapshot()??null}),
   // Report EFFECTIVE token scopes, not scopes_supported advertised by OAuth metadata.
   // No access tokens, gateway secrets or upstream abilities in this response.
   oauth_authorization:{
@@ -1032,11 +1032,19 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       request_id:request_id||randomUUID(),confirmed_by_operator:true});
     },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_ORDERS_READY_WRITE]});
   }
-  if(cfg.malotesBatchEnabled&&cfg.malotesReadyEnabled&&cfg.operatorFullCrm&&
-      printCfg.enabled&&labelRenderEnabled&&ex.canReady&&ex.canPrint){
+  // Different operators may be authorized to print without authority to change
+  // commercial status. Each mode is independently available and checked.
+  const allowReadyBatch=Boolean(cfg.malotesBatchEnabled&&cfg.malotesReadyEnabled&&ex.canReady);
+  const allowPrintBatch=Boolean(cfg.malotesPrintBatchEnabled&&printCfg.enabled&&labelRenderEnabled&&ex.canPrint);
+  if(cfg.operatorFullCrm&&(allowReadyBatch||allowPrintBatch)){
+   const allowedBatchModes=[
+    ...(allowReadyBatch?['so_baixa']:[]),
+    ...(allowPrintBatch?['so_imprime']:[]),
+    ...(allowReadyBatch&&allowPrintBatch?['baixa_e_imprime']:[])
+   ];
    reg(MALOTES_BATCH_TOOL_NAME,'Processar malotes por fotos: só baixa, só etiqueta ou ambos',
     'AÇÃO EM LOTE (até 20 pedidos): primeiro confira cada pedido com crm_previa_malotes_retirada. Exige confirmação humana de TODOS os IDs e snapshot status_event_id. Para cada pedido, status10 via CRM antes da etiqueta canônica com QR. Falhas são por pedido, SEM retries automáticos. queued/spooled NÃO provam impressão física nem WhatsApp entregue.',
-    z.object({modo:z.enum(['so_baixa','so_imprime','baixa_e_imprime']),
+    z.object({modo:z.enum(allowedBatchModes),
       pedidos:z.array(z.object({order_id:z.number().int().min(1),
        expected_status_event_id:z.number().int().min(1)})).min(1).max(20),
       confirmado_pelo_operador:z.literal(true)}),
@@ -1046,14 +1054,17 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      if((wantsReady&&(!ex.canReady||!grantedScopes.has(SCOPE_ORDERS_READY_WRITE)))||
         (wantsPrint&&(!ex.canPrint||!grantedScopes.has(SCOPE_PRINT_WRITE))))
       throw Error('insufficient_operator_write_scope');
-     const change=readyForPickupClient({baseUrl:cfg.crmBaseUrl,operatorToken:ex.upstream,fetchFn,timeoutMs:cfg.crmTimeoutMs});
-     const printer=printserverClient(printCfg,{fetchFn});
+     if(!allowedBatchModes.includes(modo))throw Error('insufficient_operator_write_scope');
+     const change=wantsReady?readyForPickupClient({baseUrl:cfg.crmBaseUrl,operatorToken:ex.upstream,fetchFn,timeoutMs:cfg.crmTimeoutMs}):null;
+     const printer=wantsPrint?printserverClient(printCfg,{fetchFn}):null;
      return await processMalotes({modo,pedidos,
       load:async(order_id)=>(await direct.detail({order_id,detailLevel:'resumo',fresh:true}))?.order,
-      markReady:({order_id,expected_status_event_id})=>change({
+      markReady:({order_id,expected_status_event_id})=>{if(!change)throw Error('insufficient_operator_write_scope');return change({
        order_id,expected_status_event_id,operator_id:ex.operatorId,
-       request_id:randomUUID(),confirmed_by_operator:true}),
+       request_id:randomUUID(),confirmed_by_operator:true})},
       printLabel:async({order_id,order:o})=>{
+       if(!printer)throw Error('insufficient_operator_write_scope');
+       if(typeof o.customer_name!=='string'||o.customer_name.trim().length<2)throw Error('printserver_invalid_customer');
        const artwork=await labelRenderer({orderUuid:o.order_uuid,orderId:order_id,env:labelRenderEnv});
        const result=await printer.enqueue({
         request_id:randomUUID(),operator_id:ex.operatorId,
