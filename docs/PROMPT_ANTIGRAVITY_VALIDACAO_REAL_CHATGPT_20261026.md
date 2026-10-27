@@ -73,3 +73,70 @@
 - Antes de abrir conexão com UUIDs reais, verificar se a imagem/container **realmente implantado** inclui \`/internal/v1/sessions/lookup-batch\`, o \`CATALOG_INTERNAL_READ_SECRET\`, as demais configurações requeridas e as tabelas/revisões do banco. O staging saudável de outubro não comprova implantação da PR #43; não fazer rollout por substituição cega.
 - O HTTP 403 observado do MCP é coerente com uso da **origem pública bloqueada**, mas não prova por si só que exista backend read-only internamente. Um \`GET /healthz\` público \`staging-demo\` não comprova publicação de clientes.
 - Assim que a origem privada e a API real forem comprovadas, executar **um** probe \`crm_capacidades(verificar_gameplay=true)\` e depois \`crm_gameplay_auditoria\`. Manter recibos de entrega em \`not_verified\`, \`customerDataAllowed=false\` e sem envio WhatsApp.
+
+
+## Atalho P0 (27/10/2026): evitar trial Tailscale expirado e aprovar zero dispositivos
+
+**Evidência visual:** no painel Tailscale do Avell do quarto, máquina \`AnnaHelena\` / \`100.112.219.55\` mostra **Needs approval** e o banner **Enterprise Free trial has ended / Choose a plan**; a conta é gerenciada por \`contato@evydencia.com.br\`. Isso significa que a máquina **já se registrou** mas não pode enviar tráfego no tailnet por ausência de aprovação. Segundo https://tailscale.com/pricing, **após o Enterprise trial expirado sem escolha de plano, aprovações de dispositivos ficam bloqueadas**. NÃO é limite de quantidade de dispositivos. Plan Personal gratuito destina-se a uso **não comercial**, e não deve ser apresentado como plano legítimo para esta operação empresarial. Não criar outro tailnet gratuito para contornar aprovação.
+
+### Decisão operacional: USAR SSH público autenticado por chave, sem Tailscale novo, VNC ou root
+
+Já existe SSH funcional do **Avell do estúdio** (\`DESKTOP-CUU7542\`) à Media VPS, por \`ssh vps-prod\` -> \`vpsops@100.116.8.109\`. Os logs anteriores do quarto contra **169.58.210.14** deram \`Permission denied (publickey,password)\`, o que indica que pelo menos naquela tentativa SSH público respondeu e recusou as credenciais, não necessariamente firewall bloqueado. Usar chave **própria** do quarto autorizada no \`vpsops\` do servidor através da sessão válida do estúdio.
+
+**Passo 1 — no Avell do quarto, PowerShell sem administrador** (não mexer na chave privada do estúdio):
+\`\`\`powershell
+$ErrorActionPreference='Stop'
+$key=Join-Path $env:USERPROFILE '.ssh\id_ed25519_media_quarto'
+New-Item -ItemType Directory -Force (Split-Path $key) | Out-Null
+if(-not(Test-Path $key)){
+ ssh-keygen -t ed25519 -a 64 -f $key -C 'avell-quarto-media'
+ if($LASTEXITCODE -ne 0){throw 'GERACAO_CHAVE_FALHOU'}
+}
+if(-not(Test-Path "$key.pub")){throw 'CHAVE_PUBLICA_NAO_ENCONTRADA'}
+Get-Content "$key.pub" | Set-Clipboard
+ssh-keygen -lf "$key.pub"
+Test-NetConnection 169.58.210.14 -Port 22 -InformationLevel Quiet
+\`\`\`
+A saída True da última linha indica que a porta pública é alcançável agora; False -> sem tentativas repetidas, usar acesso do estúdio ou resolver rede com operador.
+
+**Passo 2 — no Avell do estúdio, PowerShell**:
+\`\`\`powershell
+ssh vps-prod
+\`\`\`
+Na sessão autenticada \`vpsops\`, rodar **uma vez** este trecho. Quando solicitado, colar **somente** a linha pública que veio de \`id_ed25519_media_quarto.pub\`; NÃO colar private key; o script verifica prefixo e evita duplicação:
+\`\`\`bash
+umask 077
+mkdir -p "$HOME/.ssh"
+touch "$HOME/.ssh/authorized_keys"
+chmod 700 "$HOME/.ssh"
+chmod 600 "$HOME/.ssh/authorized_keys"
+printf 'Cole a linha SSH PUBLICA do Avell do quarto: '
+IFS= read -r new_public_key
+case "$new_public_key" in
+  ssh-ed25519\\ *) ;;
+  *) echo 'FORMATO_INVALIDO'; exit 1 ;;
+esac
+grep -Fxq -- "$new_public_key" "$HOME/.ssh/authorized_keys" ||
+  printf '%s\\n' "$new_public_key" >> "$HOME/.ssh/authorized_keys"
+unset new_public_key
+echo 'CHAVE_PUBLICA_ADICIONADA_NA_CONTA_VPSOPS'
+\`\`\`
+**Atenção:** confirmar o formato com \`ssh-ed25519\` e a linha completa. A configuração de \`authorized_keys\` é do Linux \`vpsops\`, não de \`root\`. Se não houver permissão, parar e usar operador legitimamente autorizado; não usar \`sudo stackctl\` como contorno de ACL.
+
+**Passo 3 — no quarto:** o fingerprint público do host SSH deve ser fornecido via sessão já autenticada do estúdio ou console confiável antes de adicionar host novo; não usar \`StrictHostKeyChecking=no\`. Após conferir a identidade do servidor:
+\`\`\`powershell
+$key=Join-Path $env:USERPROFILE '.ssh\id_ed25519_media_quarto'
+ssh -o BatchMode=yes -o PasswordAuthentication=no -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=8 -i $key vpsops@169.58.210.14 'id -un; hostname'
+\`\`\`
+Se der \`Permission denied\`, confirmar ACL de \`authorized_keys\`, chave correta e \`sshd\` apenas com acesso do estúdio. Não tentar senha root. Se a porta pública não estiver acessível, usar o Avell do estúdio (já autorizado) para manutenção; **VNC não é pré-requisito**.
+
+### Depois de SSH: a etapa REAL que falta
+1. Com a sessão legítima \`vpsops\` ou \`sudo stackctl\`, conferir release real do \`christmas-games-catalog\` (o relatório do estúdio aponta \`8ac62b3\`), o volume SQLite real existente, e se a API \`/internal/v1/sessions/lookup-batch\` está **na imagem que está rodando**. A PR #43 ainda está draft e não está automaticamente no container.
+2. O acesso SSH do quarto não estabelece a conectividade **MCP VPS -> Media VPS**. O cliente do MCP exige HTTPS remoto ou HTTP por **loopback**; não tentar \`EVYD_GAMEPLAY_READ_ORIGIN=http://100.116.8.109:4180\`. Se o servidor permitir, estabelecer túnel privado e persistente (sob responsabilidade de infra) ou HTTPS privado com certificado confiável; manter o 403 público.
+3. Só após isso executar um probe \`crm_capacidades(verificar_gameplay=true)\`, um smoke privado sintético e a auditoria real. Não enviar mídias ou WhatsApp.
+4. A conta \`vpsops\` tem \`NOPASSWD: /usr/local/sbin/stackctl\`, **não** \`sudo -i\`. Root genérico não é necessário para adicionar chave ao próprio usuário. Se algo realmente exigir root, o administrador autorizado faz elevação temporária auditada via console/sudo com rollback; NÃO habilitar \`PermitRootLogin yes\` com senha pública. Como uma senha antiga apareceu em relatórios/chat, rotacioná-la por canal seguro.
+
+### Se escolher corrigir Tailscale em vez do SSH público
+O admin do tailnet deverá selecionar um **plano apropriado para uso empresarial** (não Personal non-commercial). Os dispositivos existentes mantêm conexão após expirar a trial, mas as aprovações de novos dispositivos ficam suspensas sem escolha de plano (https://tailscale.com/pricing). \`AnnaHelena\` permanece pendente até aprovação do administrador e o tráfego permanece bloqueado. Não apagar dispositivos da tailnet para "abrir vagas": o bloqueio não é por vagas.
+
+**DONE:** obtenção de SSH no quarto (ou manutenção já possível pelo estúdio), comprovação da imagem/API/SQLite real, conexão privada do MCP e retorno \`private_contract_ok\`. Nunca alegar que \`GAMEPLAY_DB_REAL\` foi verificado apenas porque o arquivo SQLite existe.
