@@ -1,5 +1,8 @@
 # Evydência CRM MCP (`v0.12.0`)
 
+> **MCP × Gameplay — Etapa de integração controlada (27/10/2026)**
+> Comece por [Arquitetura, auditoria e gates do teste real](docs/START_HERE_MCP_GAMEPLAY_20261027.md), depois [Prompt local do Antigravity](docs/PROMPT_ANTIGRAVITY_MCP_GAMEPLAY_ETAPA2_20261027.md). A branch `integration/live-35tools-gameplay-reconciled-20261027` preserva a release PrintServer/Z-API, mas não está implantada nem habilita links/fotos reais. A consulta privada ao Gameplay é somente leitura e continua dependente de validação na VPS.
+
 [![CI](https://github.com/hypeneural/evydencia-crm-mcp/actions/workflows/mcp.yml/badge.svg)](https://github.com/hypeneural/evydencia-crm-mcp/actions)
 [![License: Private](https://img.shields.io/badge/license-Private-red.svg)](#segurança-de-repositório-público)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](package.json)
