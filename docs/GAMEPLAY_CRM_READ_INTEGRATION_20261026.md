@@ -5,7 +5,7 @@
 - Gameplay é fonte única de sessão/revisão/mídia e URLs capability; não duplicar persistência.
 - Apenas os status atuais `waiting_product_retrieve` (10) e `order_completed` (12) entram na cobrança operacional. Outros pedidos podem ser consultados nominalmente, mas sem alerta de atraso.
 - Nunca confundir `product_retrieve_confirmed` (11) com pedido concluído.
-- `product.slug=natal` e recorte 2026 conferidos no CRM Live em 26/10/2026: 12 aguardando e 10 concluídos (snapshot; não constante de código).
+- `product.slug=natal` e recorte 2026: snapshot real de 26/10/2026 consultado via CRM LIVE em conversa posterior mostrou 11 status 10 e 11 status 12 (22 elegíveis). Totais variam e devem ser lidos do CRM LIVE no momento da consulta, não do documento.
 
 ## Configuração do gateway MCP (server-side)
 - `EVYD_GAMEPLAY_READ_ENABLED=1`: opt-in. Inexistente ou 0: nenhuma ferramenta extra.
@@ -72,3 +72,12 @@
 - `counts.published_photo_count` and `counts.preparing_photo_count` are sums of separate reported populations across eligible orders; avoid using them as counts of original camera files.
 - The default audit returns pending rows; request `incluir_publicados=true` to see all states. Batch does not include family capability URLs.
 - The direct LIVE MCP currently has **no Gameplay tools deployed**; this PR is draft. Do not invent real Gameplay status from CRM-only counts.
+
+## Ajuste de liberação administrativa (27/10/2026)
+
+- `crm_gameplay_auditoria` aceita agora `status_atual='todos'|'waiting_product_retrieve'|'order_completed'`; o padrão mantém os dois status elegíveis. `incluir_publicados=true` mostra também álbuns publicados. A resposta não expõe capability URLs em lote.
+- `crm_gameplay_links` só devolve `hub_url` e `gallery_url` numa consulta individual **explicitamente por ID ou UUID**, após controle OAuth por operador e sessão ativa. Busca por nome apenas lista candidatos.
+- **Estado de envio é independente da publicação.** Até existir recibo CRM/Z-API que vincule pedido UUID + revisão/link + canal + provider id + estado de entrega, `operational.link_delivery_status='not_verified'` e `link_sent_confirmed=null`, inclusive quando a galeria está publicada. `counts.orders_with_delivery_unverified` e `counts.published_orders_delivery_unverified` são agregados sem afirmar `not_sent`.
+- Não confundir prova do link enviado, entregue ou aberto. Nunca comunicar que um link **não foi enviado** com base apenas na ausência de sessão ou recibo.
+- A PR #12 do MCP contém funcionalidades PrintServer paralelas; uma publicação da PR #11 não pode apagar as ferramentas já ativas de impressão, Z-API ou OAuth. Ver `docs/PROMPT_ANTIGRAVITY_VALIDACAO_REAL_CHATGPT_20261026.md` para reconciliação, rollback e rollout por etapas.
+- A PR Gameplay #43 depende da base PR #30, e `deploy/readiness.json` bloqueia fotos reais. A API interna read-only pode ser ativada separadamente, desde que se prove ACL privada, banco persistente correto, segredo dedicado e nenhuma publicação de cliente não autorizada.
