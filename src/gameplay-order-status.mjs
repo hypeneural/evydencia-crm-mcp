@@ -59,3 +59,10 @@ export function gameplayOrderSelectionRequired({nome_cliente,orders_count}) {
   throw Error('gameplay_selection_contract_invalid');
  return Boolean(nome_cliente)||orders_count>10;
 }
+
+export function registerDistinctGameplayOrderStatus(uuid,seen){
+ if(typeof uuid!=='string'||!uuid||!(seen instanceof Set))
+  throw Error('gameplay_crm_status_drift');
+ if(seen.has(uuid))throw Error('gameplay_crm_status_drift');
+ seen.add(uuid);
+}
