@@ -67,6 +67,13 @@ export function gameplayOrderSelectionRequired({nome_cliente,orders_count}) {
  return Boolean(nome_cliente)||orders_count>10;
 }
 
+export function gameplayAuditEligibleStatuses(statusAtual='todos'){
+ if(statusAtual==='todos')return ['waiting_product_retrieve','order_completed'];
+ if(statusAtual==='waiting_product_retrieve'||statusAtual==='order_completed')
+  return [statusAtual];
+ throw Error('gameplay_audit_status_invalid');
+}
+
 export function registerDistinctGameplayOrderStatus(uuid,seen){
  if(typeof uuid!=='string'||!uuid||!(seen instanceof Set))
   throw Error('gameplay_crm_status_drift');
