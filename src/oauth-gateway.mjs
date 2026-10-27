@@ -122,6 +122,7 @@ export function gatewayConfig(env){
   operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
   printserverEnabled:env.EVYD_PRINTSERVER_ENABLED==='1',
   malotesReadyEnabled:env.EVYD_MALOTES_READY_WRITE_ENABLED==='1',
+  malotesBatchEnabled:env.EVYD_MALOTES_BATCH_ENABLED==='1',
   printAllowedOperators,
   uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
