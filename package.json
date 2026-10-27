@@ -28,7 +28,8 @@
     "gateway:bench": "node scripts/bench-gateway.mjs",
     "printserver:smoke:read": "node scripts/verify-printserver-smoke.mjs",
     "crm:label:php:lint": "php -l scripts/crm-label-render-bridge.php",
-    "malotes:preflight:read": "node scripts/verify-malotes-release-readonly.mjs"
+    "malotes:preflight:read": "node scripts/verify-malotes-release-readonly.mjs",
+    "malotes:preflight:print": "node scripts/verify-malotes-release-readonly.mjs --print-only"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0",
