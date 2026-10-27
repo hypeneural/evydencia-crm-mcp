@@ -17,6 +17,7 @@ import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PRO
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {readyForPickupClient} from './malotes-ready-client.mjs';
+import {processMalotes} from './malotes-batch.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
 import {createZapiBridge} from './zapi-mcp-client.mjs';
 import {ZAPI_GATEWAY_TOOL_NAMES,ZAPI_STATUS_TOOL_NAME,getZapiRequiredScopes} from './zapi-mcp-tools.mjs';
@@ -39,6 +40,7 @@ export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
 export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
 export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
+export const MALOTES_BATCH_TOOL_NAME='crm_processar_malotes_retirada';
 export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
 export {UI_CRM_TOOL_NAMES};
 export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GATEWAY_TOOL_NAMES]);
@@ -173,12 +175,13 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)},
  {tool:'crm_previa_malotes_retirada',capability:'printserver_order_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_read_only',supports_filters:true,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
  {tool:MALOTES_READY_TOOL_NAME,capability:'crm_order_ready_write',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_ORDERS_READY_WRITE,source:'crm_extension_sanctum',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,ready})=>Boolean(full&&ready)},
+ {tool:MALOTES_BATCH_TOOL_NAME,capability:'malotes_photo_batch_workflow',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_ORDERS_READY_WRITE+'+'+SCOPE_PRINT_WRITE,source:'crm_malotes_saga',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,batch})=>Boolean(full&&batch)},
  {tool:'crm_solicitar_impressao_etiqueta',capability:'printserver_job_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
  {tool:'crm_consultar_impressao_etiqueta',capability:'printserver_job_status',access:'read',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,perfSnapshot=null}={}){
- const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled)};
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,malotesBatchEnabled=false,perfSnapshot=null}={}){
+ const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled),batch:Boolean(malotesBatchEnabled)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
@@ -727,7 +730,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),perfSnapshot:perf?.snapshot()??null}),
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean(cfg.malotesBatchEnabled&&ex.canReady&&ex.canPrint&&printCfg.enabled),perfSnapshot:perf?.snapshot()??null}),
   // Report EFFECTIVE token scopes, not scopes_supported advertised by OAuth metadata.
   // No access tokens, gateway secrets or upstream abilities in this response.
   oauth_authorization:{
@@ -1028,6 +1031,39 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      return await change({order_id,expected_status_event_id,operator_id:ex.operatorId,
       request_id:request_id||randomUUID(),confirmed_by_operator:true});
     },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_ORDERS_READY_WRITE]});
+  }
+  if(cfg.malotesBatchEnabled&&cfg.malotesReadyEnabled&&cfg.operatorFullCrm&&
+      printCfg.enabled&&labelRenderEnabled&&ex.canReady&&ex.canPrint){
+   reg(MALOTES_BATCH_TOOL_NAME,'Processar malotes por fotos: só baixa, só etiqueta ou ambos',
+    'AÇÃO EM LOTE (até 20 pedidos): primeiro confira cada pedido com crm_previa_malotes_retirada. Exige confirmação humana de TODOS os IDs e snapshot status_event_id. Para cada pedido, status10 via CRM antes da etiqueta canônica com QR. Falhas são por pedido, SEM retries automáticos. queued/spooled NÃO provam impressão física nem WhatsApp entregue.',
+    z.object({modo:z.enum(['so_baixa','so_imprime','baixa_e_imprime']),
+      pedidos:z.array(z.object({order_id:z.number().int().min(1),
+       expected_status_event_id:z.number().int().min(1)})).min(1).max(20),
+      confirmado_pelo_operador:z.literal(true)}),
+    OUT_GENERIC,async({modo,pedidos,confirmado_pelo_operador})=>{
+     if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
+     if(!grantedScopes.has(SCOPE_ORDERS_READY_WRITE)||!grantedScopes.has(SCOPE_PRINT_WRITE))
+      throw Error('insufficient_operator_write_scope');
+     const change=readyForPickupClient({baseUrl:cfg.crmBaseUrl,operatorToken:ex.upstream,fetchFn,timeoutMs:cfg.crmTimeoutMs});
+     const printer=printserverClient(printCfg,{fetchFn});
+     return await processMalotes({modo,pedidos,
+      load:async(order_id)=>(await direct.detail({order_id,detailLevel:'resumo',fresh:true}))?.order,
+      markReady:({order_id,expected_status_event_id})=>change({
+       order_id,expected_status_event_id,operator_id:ex.operatorId,
+       request_id:randomUUID(),confirmed_by_operator:true}),
+      printLabel:async({order_id,order:o})=>{
+       const artwork=await labelRenderer({orderUuid:o.order_uuid,orderId:order_id,env:labelRenderEnv});
+       const result=await printer.enqueue({
+        request_id:randomUUID(),operator_id:ex.operatorId,
+        order_id,status_key:'waiting_product_retrieve',
+        confirmed_by_operator:true,purpose:'arrival',
+        customer_name:o.customer_name,package_name:o.package_name||'Pedido de fotos',
+        ...artwork
+       });
+       return {state:result?.job?.state||'unknown',job_id:result?.job?.job_id??null};
+      }
+     });
+    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_ORDERS_READY_WRITE,SCOPE_PRINT_WRITE]});
   }
   if(cfg.operatorFullCrm){
    reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
