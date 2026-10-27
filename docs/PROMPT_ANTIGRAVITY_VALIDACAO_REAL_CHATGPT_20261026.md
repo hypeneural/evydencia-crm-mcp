@@ -113,11 +113,11 @@ chmod 600 "$HOME/.ssh/authorized_keys"
 printf 'Cole a linha SSH PUBLICA do Avell do quarto: '
 IFS= read -r new_public_key
 case "$new_public_key" in
-  ssh-ed25519\\ *) ;;
+  ssh-ed25519\ *) ;;
   *) echo 'FORMATO_INVALIDO'; exit 1 ;;
 esac
 grep -Fxq -- "$new_public_key" "$HOME/.ssh/authorized_keys" ||
-  printf '%s\\n' "$new_public_key" >> "$HOME/.ssh/authorized_keys"
+  printf '%s\n' "$new_public_key" >> "$HOME/.ssh/authorized_keys"
 unset new_public_key
 echo 'CHAVE_PUBLICA_ADICIONADA_NA_CONTA_VPSOPS'
 \`\`\`
