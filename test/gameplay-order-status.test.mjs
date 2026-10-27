@@ -34,6 +34,22 @@ test('published 20 photos is metadata-ready, never proof of all runtime games',(
  assert.equal(result.published_variants_ready,60);
  assert.equal(result.publication_pending,false);
  assert.equal(result.browser_runtime_verified,false);
+ assert.equal(result.link_delivery_status,'not_verified');
+ assert.equal(result.link_sent_confirmed,null);
+ assert.equal(result.link_opened_confirmed,null);
+ assert.equal(result.delivery_receipt_verified,false);
+});
+test('link availability never implies confirmed sending or non-sending',()=>{
+ const published=gameplayOrderStatus(order('waiting_product_retrieve',10),gp('published_unverified'));
+ const missing=gameplayOrderStatus(order('waiting_product_retrieve',10),gp('not_found'));
+ for(const result of [published,missing]){
+  assert.equal(result.link_delivery_status,'not_verified');
+  assert.equal(result.link_sent_confirmed,null);
+  assert.equal(result.link_opened_confirmed,null);
+  assert.equal(result.delivery_receipt_verified,false);
+ }
+ assert.equal(published.publication_pending,false);
+ assert.equal(missing.publication_pending,true);
 });
 test('CRM status 11 must not create operational publication demand',()=>{
  const result=gameplayOrderStatus(order('product_retrieve_confirmed',11),gp('not_found'));
