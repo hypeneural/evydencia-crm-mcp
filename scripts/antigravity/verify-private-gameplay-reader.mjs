@@ -54,7 +54,7 @@ export async function verifyPrivateReader({
         ...(body ? {body: JSON.stringify(body)} : {})
       });
     } catch { fail('SIDE_NETWORK_UNAVAILABLE'); }
-    if (response.status !== expected) fail('SIDE_' + name + '_HTTP_' + response.status);
+    if (response.status !== expected) fail('SIDE_' + name.toUpperCase() + '_HTTP_' + response.status);
     checks.push({name, status:response.status});
     return response;
   }
@@ -79,7 +79,7 @@ export async function verifyPrivateReader({
   if (result?.schema_version !== 1 || result?.source !== 'gameplay_catalog' ||
       !Array.isArray(result.results) || result.results.length !== 1 ||
       result.results[0]?.crm_order_uuid !== SYNTHETIC_UUID ||
-      !STATES.has(result.results[0]?.state) ||
+      !STATES.has(result.results[0]?.state) || result.results[0]?.state !== 'not_found' ||
       result.results[0]?.hub_url !== null || result.results[0]?.gallery_url !== null ||
       result.results[0]?.games_runtime_verified !== false) fail('SIDE_PRIVATE_CONTRACT_INVALID');
   await probe('links_disabled', '/internal/v1/sessions/lookup', 409, {
