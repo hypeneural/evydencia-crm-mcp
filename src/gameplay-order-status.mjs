@@ -41,3 +41,11 @@ export function gameplayOrderStatus(order, gameplay) {
   browser_runtime_verified:false,
  };
 }
+
+// A name is a discovery filter, never authorization to disclose capability links.
+// Require a second, explicit order_id / order_uuid lookup even for one candidate.
+export function gameplayOrderSelectionRequired({nome_cliente,orders_count}) {
+ if(!Number.isSafeInteger(orders_count)||orders_count<0)
+  throw Error('gameplay_selection_contract_invalid');
+ return Boolean(nome_cliente)||orders_count>10;
+}
