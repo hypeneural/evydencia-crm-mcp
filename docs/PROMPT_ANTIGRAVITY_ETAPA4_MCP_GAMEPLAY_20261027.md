@@ -95,3 +95,12 @@ Classificar:
 Pare de modo explícito ao encontrar BLOCKED_WRAPPER ou outros riscos
 sem tentar contorná-los. Não pedir confirmações sobre o que já foi
 respondido nem repetir suites aprovadas no mesmo SHA.
+
+## Pendência desacoplada do backup/restore
+
+Gameplay [issue #44](https://github.com/hypeneural/gameplay/issues/44):
+`restoreCatalog()` pode excluir banco/WAL/SHM de um destino existente antes
+de validar sua integridade SQLite, e pode remover o diretório de mídia.
+**Não execute essa função contra LIVE** como parte do preflight.
+A solução de fail-closed/rollback será tratada em PR separada. Não
+alterar os scripts de restauração durante esta homologação do reader.
