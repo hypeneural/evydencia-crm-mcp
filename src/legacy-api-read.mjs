@@ -879,6 +879,7 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
   customer_phone_masked:maskPhone(c.whatsapp||c.phone),
   status_id:statusId,
   status_key:statusKey,
+  status_event_id:Number.isSafeInteger(x.status_event_id)?x.status_event_id:null,
   status_label:statusLabel,
   created_at:typeof x.created_at==='string'?x.created_at:null,
   created_at_brt:toBrt(x.created_at),
