@@ -12,7 +12,7 @@ import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
-import {createGameplayReadClient} from './gameplay-read-client.mjs';
+import {createGameplayReadClient,probeGameplayPrivateAccess} from './gameplay-read-client.mjs';
 import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus,gameplayAuditEligibleStatuses} from './gameplay-order-status.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
@@ -355,7 +355,16 @@ const OUT_CAPACIDADES=z.looseObject({
   supports_pagination:z.boolean(),
   supports_history:z.boolean()
  })),
- performance_telemetry:z.looseObject({}).nullish()
+ performance_telemetry:z.looseObject({}).nullish(),
+ gameplay_private_probe:z.looseObject({
+  checked:z.literal(true),reachable:z.boolean(),
+  status:z.enum(['not_configured','private_contract_ok',
+   'gameplay_http_401','gameplay_http_403','gameplay_http_404',
+   'gameplay_http_408','gameplay_http_429','gameplay_http_500',
+   'gameplay_http_502','gameplay_http_503','gameplay_http_504',
+   'gameplay_unavailable']),
+  dataset_proven:z.literal(false)
+ }).optional()
 });
 // PHP json_encode emits lists (and empty associative arrays) as JSON arrays: nested analytic blocks accept object OR array.
 const FLEX=z.union([z.looseObject({}),z.array(z.unknown())]).nullish();
@@ -787,13 +796,15 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
   m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,_meta:mergedMeta},safe(name,fn));
  };
 
- reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({}),OUT_CAPACIDADES,()=>manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
+ reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({verificar_gameplay:z.boolean().default(false)}),OUT_CAPACIDADES,async({verificar_gameplay})=>({...manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
   enabled:Boolean(zapi),
   oauthStatus:zapi?zapi.auth.getOperatorState(ex.operatorId).oauth_status:null,
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay)}));
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay)}),
+  ...(verificar_gameplay?{gameplay_private_probe:await probeGameplayPrivateAccess(gameplay)}:{})
+ }));
  if(gameplay){
   const eligibleStatus=new Set(['waiting_product_retrieve','order_completed']);
   const findOrders=async(filter,{canonicalPaginationRequired=true}={})=>{
