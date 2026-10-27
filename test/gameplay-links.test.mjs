@@ -28,7 +28,7 @@ test('private metadata-only 409 returns status with no fabricated links',async()
  assert.equal(x.links.main_url,null);
  assert.equal(x.links.games_url,null);
  assert.equal(x.links.gallery_url,null);
- assert.equal(x.links.customer_links_status,'blocked_by_private_reader');
+ assert.equal(x.links.customer_links_status,'unavailable_http_409');
 });
 test('authorization and upstream downtime fail closed (no metadata retry)',async()=>{
  for(const code of ['gameplay_http_401','gameplay_http_403','gameplay_http_503','gameplay_unavailable']){
