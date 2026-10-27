@@ -33,7 +33,7 @@ export async function lookupGameplayWithCustomerLinks(client,uuid){
   const links=projectGameplayLinks(record);
   return {record,links:{
    ...links,
-   customer_links_status:'blocked_by_private_reader'
+   customer_links_status:'unavailable_http_409'
   }};
  }
 }
