@@ -140,3 +140,28 @@ Se der \`Permission denied\`, confirmar ACL de \`authorized_keys\`, chave corret
 O admin do tailnet deverá selecionar um **plano apropriado para uso empresarial** (não Personal non-commercial). Os dispositivos existentes mantêm conexão após expirar a trial, mas as aprovações de novos dispositivos ficam suspensas sem escolha de plano (https://tailscale.com/pricing). \`AnnaHelena\` permanece pendente até aprovação do administrador e o tráfego permanece bloqueado. Não apagar dispositivos da tailnet para "abrir vagas": o bloqueio não é por vagas.
 
 **DONE:** obtenção de SSH no quarto (ou manutenção já possível pelo estúdio), comprovação da imagem/API/SQLite real, conexão privada do MCP e retorno \`private_contract_ok\`. Nunca alegar que \`GAMEPLAY_DB_REAL\` foi verificado apenas porque o arquivo SQLite existe.
+
+## P0 FINAL — Avell do quarto já conectado via SSH público e catálogo com dados reais (27/10/2026)
+
+**Este bloco substitui instruções anteriores de aprovar Tailscale, registrar chaves SSH e procurar acesso VNC.** O Antigravity comprovou `vpsops@169.58.210.14` por chave exclusiva do Avell do quarto, com host-key verificada; `sudo /usr/local/sbin/stackctl` funciona sem root genérico. O runtime `christmas-games` de 19/10/2026, SHA `8ac62b3`, está ativo, mas **não possui lookup-batch**. O volume SQLite existente contém, no relatório local: 21 sessões, 22 revisões, 2.073 registros de blobs. Esses números **não são total de fotos, não provam estado ACTIVE nem entrega**.
+
+### Código de implantação de leitura já preparado na PR Gameplay #43
+
+- `apps/catalog-server/src/main.ts` aceita `CATALOG_PRIVATE_METADATA_READ_ONLY=1`, abre o **SQLite verdadeiro** com `DatabaseSync({readOnly:true})` e `PRAGMA query_only=ON`, sem migrar, sem construir o publicador, sem liberar capability URLs.
+- `apps/catalog-server/src/publication/GameplayStatusLookup.ts` nega `include_links=true` no sidecar com HTTP 409 (`CUSTOMER_LINKS_NOT_ENABLED`), até homologar a mídia pública e emissão segura de links.
+- `deploy/vps/docker/compose.private-audit.yaml` é overlay **opt-in**, porta **127.0.0.1:4182** na Media VPS, rede Docker interna apenas, volume SQLite e WAL/SHM somente leitura. A composição pública de staging-demo original fica inalterada. Todos os caminhos de arquivos de segredos, UID/GID e RELEASE_DIR são parâmetros obrigatórios: não criar nem adivinhar.
+- `docs/integrations/GAMEPLAY_STATUS_READ_V1_20261026.md` contém detalhamento da instalação e gates. A release precisa incluir a PR #30 mais a PR #43; não substituir a pasta `current` nem reiniciar os containers públicos apenas para a auditoria.
+
+### Única execução necessária — atribuições
+
+**Antigravity, no Avell do quarto:** confirmar `git status`, SHAs e CI no GitHub; autenticar SSH já configurado; ler `sudo stackctl list`, status/readiness; apresentar ao operador de infra as variáveis não secretas necessárias à composição. Não criar scripts, copiar DB ou segredos, nem usar root genérico; não repetir todos os testes sintéticos.
+
+**Operador autorizado da Media VPS:** comprovar esquema e backup WAL/restauração; preparar release imutável da PR #43 com Node24/pnpm11, executar `pnpm release:staging` e `pnpm release:verify`; apontar `RELEASE_DIR` no overlay; provisionar UID/GID e dois arquivos de segredos separados com ACL mínimas; validar `docker compose config --quiet`; instalar somente `catalog-reader` por `stackctl` conforme mecanismo autorizado; manter staging-demo público intacto. Validar via loopback `POST /internal/v1/sessions/lookup-batch` sintético e 401 para token inválido; validar que `lookup?include_links=true` não gera URL e retorna 409.
+
+**Operador da VPS MCP:** prover túnel SSH persistente e monitorado com endpoint HTTP **somente loopback MCP** (ou HTTPS privado) para a porta loopback 4182 da Media VPS. Ajustar apenas `EVYD_GAMEPLAY_READ_ORIGIN` e confirmar que `EVYD_GAMEPLAY_READ_TOKEN` corresponde ao reader. Preservar PrintServer, Z-API, OAuth e rollback; não remover ACL do Caddy. A alternativa `http://100.116.8.109:4180` é rejeitada pelo MCP por não ser HTTPS e não deve ser usada.
+
+**ChatGPT:** após `crm_capacidades(verificar_gameplay=true)` indicar `private_contract_ok`, chamar `crm_gameplay_auditoria` por status 10 e 12. Os valores verdadeiros serão `not_found`/estados/preparações/fotos por pedido na base **que foi auditada**. Nunca inferir quantidade de fotografias por linhas em `revision_blobs`.
+
+**Próxima fase exclusiva para entrega a clientes:** publicador persistente, concessão de mídia Nginx, backups/restore SQLite WAL, URL/Hub/Galeria funcionando de verdade, navegador mobile e recibo CRM/Z-API. Os gates `pilotReady/customerDataAllowed/automaticDeliveryAllowed` continuam falsos. **Este sidecar é somente consulta administrativa, não publicação de cliente.**
+
+Se não houver UID/permissão dos arquivos de segredo ou backup/restauração SQLite verificável, registrar `MEDIA_PRIVATE_SIDECAR=NOT_READY` e encaminhar ao administrador, sem ampliar sudo. O SSH já está resolvido — NÃO voltar a VNC/Tailscale.
