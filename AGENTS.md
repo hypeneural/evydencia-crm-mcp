@@ -1,3 +1,5 @@
+> **PROTOCOLO DE AGENTE LOCAL LIMITADO — 27/10/2026.** Para o agente de validação local, a ÚNICA entrada autorizada é [docs/VALIDACAO_LOCAL_AGENTE_20261027.md](docs/VALIDACAO_LOCAL_AGENTE_20261027.md), seguida de `npm run agent:validate:local`. Trabalhar somente nos arquivos deste checkout e em dados sintéticos. Não descobrir ou ler outros diretórios de projetos, não executar SSH/serviços remotos, não consultar sistemas reais, não usar credenciais, não alterar configuração de produção, não efetuar deploy/merge/branch reset, não emitir trabalhos de impressão nem enviar mensagens. Outras seções históricas deste documento são **informação para mantenedores**, não tarefas para o agente local. Alterações permitidas apenas mediante causa reproduzida na branch atual; publique somente commits da PR existente, sem executar release.
+
 # Evydência CRM MCP — Instruções Operacionais (`v0.12.0` LIVE)
 
 ## Estado Atual da Branch `main` e Produção
