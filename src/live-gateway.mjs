@@ -13,7 +13,7 @@ import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {createGameplayReadClient} from './gameplay-read-client.mjs';
-import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus} from './gameplay-order-status.mjs';
+import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus,gameplayAuditEligibleStatuses} from './gameplay-order-status.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
@@ -872,12 +872,15 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
       orders:snapshots};
    });
   reg('crm_gameplay_auditoria','Pendências de galeria e jogos Natal 2026',
-   'Cruza pedidos Natal 2026 com status ATUAL Aguardando Retirada ou Pedido Concluído com o Gameplay pelo UUID. Conta sessões, publicações, fotos publicadas e em preparação. ENVIO DE LINK: sem recibo canônico vinculado ao pedido, o estado é not_verified, não not_sent; não conclua que a família não recebeu link. Não comprova jogos no navegador. Para ver publicados use incluir_publicados=true; nunca retorna links capability em lote.',
+   'Cruza Natal 2026 e Gameplay por UUID. Com status_atual=todos (padrão) audita status 10 e 12; use waiting_product_retrieve ou order_completed para um deles. Conta sessões, publicações e fotos publicadas/em preparação. ENVIO: sem recibo CRM por pedido o estado é not_verified, NÃO not_sent. Para incluir publicados use incluir_publicados=true. Não prova runtime Phaser nem devolve URLs capability em lote.',
    z.object({pagina:z.number().int().min(1).max(100).default(1),
     limite:z.number().int().min(1).max(50).default(20),
-    incluir_publicados:z.boolean().default(false)}),OUT_GAMEPLAY_AUDIT,async({pagina,limite,incluir_publicados})=>{
+    incluir_publicados:z.boolean().default(false),
+    status_atual:z.enum(['todos','waiting_product_retrieve','order_completed']).default('todos')
+   }),OUT_GAMEPLAY_AUDIT,async({pagina,limite,incluir_publicados,status_atual})=>{
      const orders=[],seen=new Set();
-     for(const status of eligibleStatus){
+     const auditStatuses=gameplayAuditEligibleStatuses(status_atual);
+     for(const status of auditStatuses){
        const found=await findOrders({...natalFilter,'order.status':status});
        for(const o of found){
         // The filter must not silently turn an ineligible order into a missing-link alert.
@@ -920,7 +923,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
      const selected=incluir_publicados?entries:
        entries.filter(e=>e.gameplay?.state!=='published_unverified');
      const start=(pagina-1)*limite;
-     return {source:'crm_gameplay_join',year:2026,statuses:[...eligibleStatus],counts,
+     return {source:'crm_gameplay_join',year:2026,statuses:auditStatuses,counts,
       pagination:{page:pagina,per_page:limite,total_matching:selected.length,
        has_more:start+limite<selected.length},
       orders:selected.slice(start,start+limite)};
