@@ -14,6 +14,7 @@ import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {createGameplayReadClient,probeGameplayPrivateAccess} from './gameplay-read-client.mjs';
 import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus,gameplayAuditEligibleStatuses} from './gameplay-order-status.mjs';
+import {lookupGameplayWithCustomerLinks} from './gameplay-links.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {createZapiInstanceDiagnostics,ZAPI_DIAG_TOOL_NAME,ZAPI_HIST_TOOL_NAME,ZAPI_INSTANCE_TOOL_NAMES} from './zapi-instance-diagnostics.mjs';
@@ -870,14 +871,13 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
        crm_order_url:o.crm_order_url}))};
      const snapshots=await Promise.all(orders.map(async o=>{
        const uuid=String(o.order_uuid||o.uuid).toLowerCase();
-       const res=await gameplay.lookup([uuid],{includeLinks:true});
-       const gameplayResult=res.results[0];
+       const {record:gameplayResult,links}=await lookupGameplayWithCustomerLinks(gameplay,uuid);
        const operational=gameplayOrderStatus(o,gameplayResult);
        return {order_id:o.order_id,crm_order_uuid:uuid,
         crm_order_url:o.crm_order_url,customer_name:o.customer_name,
         package_name:o.package_name,status_id:o.status_id,
         status_key:o.status_key,expected_now:operational.publication_required_by_crm,
-        operational,gameplay:gameplayResult};
+        operational:{...operational,...links},gameplay:gameplayResult};
      }));
      return {source:'crm_gameplay_join',total:orders.length,
       orders:snapshots};
