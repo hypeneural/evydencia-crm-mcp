@@ -175,7 +175,7 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)},
  {tool:'crm_previa_malotes_retirada',capability:'printserver_order_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_read_only',supports_filters:true,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
  {tool:MALOTES_READY_TOOL_NAME,capability:'crm_order_ready_write',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_ORDERS_READY_WRITE,source:'crm_extension_sanctum',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,ready})=>Boolean(full&&ready)},
- {tool:MALOTES_BATCH_TOOL_NAME,capability:'malotes_photo_batch_workflow',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_ORDERS_READY_WRITE+'+'+SCOPE_PRINT_WRITE,source:'crm_malotes_saga',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,batch})=>Boolean(full&&batch)},
+ {tool:MALOTES_BATCH_TOOL_NAME,capability:'malotes_photo_batch_workflow',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+(crm.orders.write or print.jobs.write; varies by modo)',source:'crm_malotes_saga',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,batch})=>Boolean(full&&batch)},
  {tool:'crm_solicitar_impressao_etiqueta',capability:'printserver_job_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
  {tool:'crm_consultar_impressao_etiqueta',capability:'printserver_job_status',access:'read',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)}
 ]);
@@ -1042,7 +1042,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       confirmado_pelo_operador:z.literal(true)}),
     OUT_GENERIC,async({modo,pedidos,confirmado_pelo_operador})=>{
      if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
-     if(!grantedScopes.has(SCOPE_ORDERS_READY_WRITE)||!grantedScopes.has(SCOPE_PRINT_WRITE))
+     const wantsReady=modo!=='so_imprime',wantsPrint=modo!=='so_baixa';
+     if((wantsReady&&(!ex.canReady||!grantedScopes.has(SCOPE_ORDERS_READY_WRITE)))||
+        (wantsPrint&&(!ex.canPrint||!grantedScopes.has(SCOPE_PRINT_WRITE))))
       throw Error('insufficient_operator_write_scope');
      const change=readyForPickupClient({baseUrl:cfg.crmBaseUrl,operatorToken:ex.upstream,fetchFn,timeoutMs:cfg.crmTimeoutMs});
      const printer=printserverClient(printCfg,{fetchFn});
@@ -1063,7 +1065,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
        return {state:result?.job?.state||'unknown',job_id:result?.job?.job_id??null};
       }
      });
-    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_ORDERS_READY_WRITE,SCOPE_PRINT_WRITE]});
+    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE]});
   }
   if(cfg.operatorFullCrm){
    reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
