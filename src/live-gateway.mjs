@@ -547,6 +547,9 @@ const OUT_GAMEPLAY_OPERATIONAL=z.looseObject({
   'album_in_preparation','preparation_invalid'
  ]),
  publication_pending:z.boolean(),
+ customer_links_status:z.enum(['available','not_available','unavailable_http_409']),
+ main_url:z.string().url().nullable(),games_url:z.string().url().nullable(),
+ gallery_url:z.string().url().nullable(),links_browser_verified:z.literal(false).optional(),
  link_delivery_status:z.literal('not_verified'),
  link_sent_confirmed:z.null(),link_opened_confirmed:z.null(),
  delivery_receipt_verified:z.literal(false),
