@@ -16,7 +16,8 @@ const OPS={
  'fake-op7-wild-000007':{id:7,ab:['*']},
  'fake-op99-read-00004':{id:99,ab:R},
  'fake-op7-expd-000005':{id:7,ab:R,exp:'2020-01-01T00:00:00Z'},
- 'fake-op7-read-000006':{id:7,ab:R}
+ 'fake-op7-read-000006':{id:7,ab:R},
+ 'fake-op7-ready-000008':{id:7,ab:[...R,'extension:proposal-read','extension:orders-ready-write']}
 };
 const INTERNAL_TOK='fake-internal-crm-read-token-000001';
 const revoked=new Set(),crmLog=[],logs=[],secrets=[...Object.keys(OPS),INTERNAL_TOK];
@@ -49,12 +50,30 @@ before(async()=>{
    });
    return;
   }
+  if(req.method==='POST'&&u.pathname==='/api/v1/extension/orders/6002/ready-for-pickup'){
+   if(!OPS[tok]?.ab?.includes('extension:orders-ready-write'))return send(403,'{}');
+   let text='';req.on('data',b=>{text+=b});
+   req.on('end',()=>{
+    const data=JSON.parse(text||'{}');
+    if(data.operator_id!==7||data.expected_status_event_id!==120||data.confirmed_by_operator!==true)
+     return send(409,JSON.stringify({error:{code:'STATUS_CONFLICT'}}));
+    send(200,JSON.stringify({success:true,state:'ready',order_id:6002,status_key:'waiting_product_retrieve',
+     status_event_id:121,changes_applied:true,replay:false,notification_delivery_verified:false}));
+   });
+   return;
+  }
   if(req.method!=='GET')return send(405,'{}');
   if(u.pathname==='/health/live')return send(200,JSON.stringify({status:'ok'}));
   if(u.pathname.startsWith('/api/orders/')||u.pathname.startsWith('/api/reports/')){
    if(auth!==INTERNAL_TOK)return send(401,JSON.stringify({message:'Unauthorized'}));
    const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01T17:33:09.000000Z',schedule_1:'2026-11-10 10:00:00',items:[{id:1,quantity:'1.000',total:'450.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'200.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'Crianca Ficticia',birthday:'2024-04-30',age:'2 anos e 5 meses',relationship:'Filho (a)'}],summary:{total:450,received:200,remaining:250}};
    const newerOrder={id:5127,uuid:'22222222-bbbb-4222-8222-000000000202',status:{id:6,name:'Sessão Agendada'},customer:{name:'Larissa Exemplo',whatsapp:'48988881775'},created_at:'2026-10-23T17:33:09.000000Z',schedule_1:'2026-11-02 09:00:00',items:[{id:2,quantity:'1.000',total:'480.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'120.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'João Miguel Exemplo',birth:'2024-04-30',birth_for_extense:'há 2 anos e 5 meses',relation:{id:1,name:'Filho (a)'}}],summary:{total:480,received:120,remaining:360}};
+   if(u.pathname==='/api/orders/search'&&u.searchParams.toString().includes('6002')){
+    return send(200,JSON.stringify({data:[{...newerOrder,id:6002,
+     uuid:'44444444-dddd-4444-8444-000000000404',status_event_id:120,
+     status:{id:6,name:'Sessão Agendada'},summary:{total:480,received:480,remaining:0},
+     customer:{name:'Cliente Sintetica',whatsapp:'48999990001'}}]}));
+   }
    if(u.pathname==='/api/orders/search'&&u.searchParams.toString().includes('6001')){
     return send(200,JSON.stringify({data:[{...sampleOrder,id:6001,
      uuid:'33333333-cccc-4333-8333-000000000303',status_key:'waiting_product_retrieve',summary:{total:480,received:480,remaining:0},
@@ -480,6 +499,23 @@ test('failed canonical render cannot enqueue a plain fallback label',async()=>{
  }finally{await client.close();await g.close()}
 });
 
+
+test('new operator-scoped status10 tool calls only the canonical CRM extension route',async()=>{
+ const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_MALOTES_READY_WRITE_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7'});
+ const op=await connect(g,'fake-op7-ready-000008');
+ const client=await mcp(g,op.tokens.access_token);
+ try{
+  const before=crmLog.filter(x=>x.method==='POST'&&x.path.endsWith('/ready-for-pickup')).length;
+  const res=await client.callTool({name:'crm_marcar_disponivel_retirada',
+   arguments:{order_id:6002,expected_status_event_id:120,confirmado_pelo_operador:true}});
+  assert.equal(res.isError,undefined,JSON.stringify(res.content));
+  assert.equal(res.structuredContent.state,'ready');
+  assert.equal(res.structuredContent.status_key,'waiting_product_retrieve');
+  assert.equal(res.structuredContent.notification_delivery_verified,false);
+  assert.equal(crmLog.filter(x=>x.method==='POST'&&x.path.endsWith('/ready-for-pickup')).length,before+1);
+ }finally{await client.close();await g.close()}
+});
 test('PrintServer synthetic job status is readable with print scope, never needs a fake CRM order',async()=>{
  const TEST_JOB='95bab7dc-62e9-498f-afbd-68775f05e549';
  const statusCalls=[];
