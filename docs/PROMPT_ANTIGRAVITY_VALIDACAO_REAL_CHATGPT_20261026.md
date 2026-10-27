@@ -1,53 +1,46 @@
-# ANTIGRAVITY — HANDOFF EXECUTIVO PARA VPS + CHATGPT (27/10/2026)
+# Antigravity — fechar a última lacuna de Gameplay no MCP LIVE (27/10/2026)
 
-**Objetivo único:** disponibilizar no ChatGPT as consultas administrativas reais de Natal 2026 (status CRM, publicação, fotos e links individualizados) sem afetar MCP LIVE, PrintServer, Laravel ou Z-API. NÃO criar scripts novos. Usar e, se necessário, corrigir apenas os artefatos existentes. Execute as etapas de uma vez, sem loops de validação. Faça deploy somente quando os respectivos gates estiverem comprovados.
+**Estado comprovado diretamente pelo ChatGPT hoje:** `crm_capacidades` autentica o operador no MCP LIVE `0.12.0`, build **`91fe6fb`**, branch `release/live-35tools-gameplay-printserver`, **37 ferramentas no catálogo e 35 ativas**. Ambas `crm_gameplay_auditoria` e `crm_gameplay_links` estão **REGISTRADAS**, assim como as três ferramentas de PrintServer. Isto **NÃO prova** acesso à Media VPS. O plugin nesta conversa ainda não havia redescoberto as duas novas operações (catálogo da sessão ≠ inventário LIVE). O relatório do Antigravity registrou HTTP 403 ao tentar alcançar Gameplay pela borda pública, mas não comprovou SQLite ou endpoint privado operacionais na Media VPS.
 
-## FATOS FORENSES DE PARTIDA
-- MCP Gameplay `hypeneural/evydencia-crm-mcp` PR #11 (`feat/gameplay-read-client-20261026`), base `main`. PrintServer MCP PR #12 (`610027b8...`), também base `main`, **em paralelo**. Não publicar somente a PR #11 sobre uma instalação que contenha as melhorias de PrintServer, nem aplicar PR #12 de modo que remova Gameplay. Preservar todas as ferramentas ativas e os contratos de impressão.
-- Gameplay `hypeneural/gameplay` PR #43 (`feat/gameplay-status-read-api-20261026`) **baseada na branch PR #30**, não no default. Não assumir que basta fazer merge isolado da #43; conferir dependências, base, build e `deploy/readiness.json`.
-- MCP LIVE previamente confirmado em `0.12.0`, build `f6f93b5`, 33 ferramentas, sem `crm_gameplay_auditoria` nem `crm_gameplay_links`. Fonte CRM de Natal 2026 retornou antes 11 pedidos status 10 e 11 status 12 (22 no snapshot): **não usar total fixo**.
-- `deploy/readiness.json` Gameplay: `pilotReady=false`, `customerDataAllowed=false`, `automaticDeliveryAllowed=false`. **Não liberar mídias reais ou envio automático** nesta implantação. A implantação do componente administrativo de leitura pode ser considerada separadamente se segura, sem mudar essas flags.
+**NÃO refazer** testes do Avell, scripts, PRs, branches ou o merge de Gameplay com PrintServer. Não repetir tentativas com senhas/users SSH diferentes; as tentativas para a Media VPS falharam no relatório de 27/10. Solicitar o acesso autorizado correto se ausente, sem credenciais no chat/commits.
 
-## DISTINÇÃO OBRIGATÓRIA: "LINK EXISTE" NÃO É "LINK FOI ENVIADO"
-- O contrato Gameplay comprova sessão/álbum e gera `hub_url` e `gallery_url` apenas em pedido individual autorizado. `published_unverified` NÃO comprova execução Phaser no telefone.
-- Não foi identificada nesta PR uma fonte canônica de recibo outbound que vincule **UUID do pedido + versão/link ativo + canal + provider message id + status de envio**. No MCP, `link_delivery_status='not_verified'`, `link_sent_confirmed=null`, `link_opened_confirmed=null` e `delivery_receipt_verified=false`. Não chamar ninguém de `not_sent` sem um comprovante real de ausência, nem inventar `sent=true` por existência de URL.
-- A auditoria em lote mostra `orders_with_delivery_unverified` e `published_orders_delivery_unverified`. Uma implementação futura do recibo canônico pode mudar isso, mas **não criar mecanismo de envio** nem disparar mensagens no rollout deste PR. Para "quem ainda não recebeu", deixar explícito que a informação ainda não é verificável até o CRM/Z-API expor prova por pedido.
+## Melhoria já preparada no GitHub
+Na PR MCP #11 **e** na mesma branch de release já implantada (mas commits novos ainda NÃO instalados na VPS), o ChatGPT atualizou:
+- `src/gameplay-read-client.mjs`: `probeGameplayPrivateAccess` usa um UUID **sintético reservado** e `lookup-batch`, sem pedir capability links; apenas divulga a classificação de transporte/contrato.
+- `src/live-gateway.mjs`: parâmetro **opcional** `crm_capacidades(verificar_gameplay=true)`; quando omitido, comportamento anterior e latência mantidos. Retorna `gameplay_private_probe: {checked,reachable,status,dataset_proven:false}`.
+- `test/gameplay-read-client.test.mjs`: rejeição 403 e contrato sintético válido, com proibição de segredos/UUIDs em output.
+- Nenhuma ferramenta extra, emissão WhatsApp, migração, mudança de escopo OAuth ou alteração do PrintServer.
 
-## ETAPA 1 — UMA ÚNICA CONFERÊNCIA REMOTA, SEM TOCAR NO AVELL
-1. No GitHub, coletar os SHAs/CI atuais de `evydencia-crm-mcp` PRs **#11 e #12**, `gameplay` PRs **#30 e #43** e conferir base/merge-base e interseções. Não promover commits com CI em vermelho ou pendente.
-2. Na VPS (acesso administrativo já autorizado), ler **somente** o `systemctl cat evydencia-crm-mcp-live.service`, `systemctl show ... -p ExecStart -p User -p WorkingDirectory`, `/healthz`, commit implantado, instâncias Caddy e nginx, configuração do Gameplay e inventário real de portas/paths. **Não imprimir** EnvironmentFiles, tokens, payloads ou UUIDs.
-3. Backup das configurações e binário/código **atualmente em uso** e plano de rollback verificado. Preservar `print.jobs.write`, as 33 tools LIVE, Z-API, OAuth e o PrintServer Avell. O diretório e serviço verdadeiros valem mais do que exemplos em `deploy/gateway/compose.yaml` ou `deploy/vps`.
-4. Se não houver instância Gameplay com **SQLite persistente identificado**, não instalar serviço novo no escuro. Classificar `GAMEPLAY_DB_REAL=not_verified` e reportar o bloco exato para aprovação técnica.
+**Estados esperados do diagnóstico:** `gameplay_http_403` indica que a origem configurada termina na borda pública bloqueada; `not_configured` indica ausência do cliente privado no gateway; `private_contract_ok` prova apenas que um serviço devolveu o contrato privado **para o UUID sintético**, e NÃO que o banco real, imagens ou jogos de cliente estejam prontos.
 
-## ETAPA 2 — GAMEPLAY, PRIMEIRO A LEITURA PRIVADA
-1. Confirmar build Node24/pnpm11 e dependências PR #30/#43 no serviço Gameplay verdadeiro. A configuração de staging-demo não autoriza fotos de cliente.
-2. Confirmar que `CATALOG_DATABASE_PATH` pertence ao mesmo processo da API e que SQLite WAL/media grants são consistentes. No host Linux correto, com usuário read-only, variáveis já autorizadas, executar script **já existente**: `node scripts/forensic/audit-real-catalog-readonly.mjs`. Guardar **somente totais agregados** de sessões, fotos ativas, staged e `consistent_sqlite_read_transaction`; não afirmar que esse banco é o de produção sem prova do processo.
-3. Verificar qual edge realmente encaminha o host Gameplay (**Nginx exemplo existente no Gameplay; Caddy pode estar à frente**). Bloquear `/internal/*` e o próprio `/internal` no ingress público **antes de ligar a rota**, inclusive variantes normalizadas, e confirmar que POST público não alcança o upstream. Preferir rota exclusiva loopback/interface privada sem encaminhamento na borda; bloqueio 404/403 público e autenticação Bearer adicional no privado. Não confiar em `X-Forwarded-For` enviado pelo cliente.
-4. Configurar somente no servidor os segredos de leitura separados (`CATALOG_INTERNAL_READ_SECRET` Gameplay e `EVYD_GAMEPLAY_READ_TOKEN` MCP: **mesmo segredo compartilhado entre estes dois componentes**, diferente dos segredos Publisher/Server). Não incluir valores em logs/terminal/chat/commit. Revisar nomes exigidos pelo código ativo; não reutilizar tokens de publicação. Testar `lookup-batch` privado com **UUID sintético/piloto autorizado**, resposta sem links, estados e contagem, e verificar que HTTP 503 não vira `not_found`.
-5. **Gate:** se a base só tiver sessões sintéticas, o estado de produção dos pedidos CRM continua sem publicação comprovada. Não popular a base com imagens reais nem mudar readiness para fabricar uma prova.
+## 1. Check único na produção MCP (não no Avell)
+1. Usar as credenciais administrativas **já autorizadas** para confirmar `systemctl cat evydencia-crm-mcp-live.service`, `systemctl show ... -p User -p WorkingDirectory -p ExecStart`, `/healthz` e release `git rev-parse HEAD`, sem imprimir `EnvironmentFile`/secrets.
+2. Validar CI dos HEADs PR #11 e PR #43; verificar que a branch `release/live-35tools-gameplay-printserver` contempla PR #12/PrintServer. Se houver divergência/conflito: corrigir na mesma branch e registrar, sem `reset --hard` no diretório ativo.
+3. No checkout isolado da **branch release**, rodar apenas `node --test test/gameplay-read-client.test.mjs test/live-gateway.test.mjs test/crm-label-render.test.mjs`; manter a suíte abrangente para CI já executada. **Backups** do build e env atual antes do restart; usar o mecanismo de troca e rollback já em operação.
+4. Se e somente se os testes e a recuperação estiverem aprovados, publicar o HEAD da release com o probe e reiniciar **somente** `evydencia-crm-mcp-live.service`. Preservar todos os escopos, PrintServer, Z-API e os 35 registros ativos. Se número ou semântica retroceder, rollback imediato.
 
-## ETAPA 3 — MCP LIVE, ROLLOUT ADITIVO COM ROLLBACK
-1. Reconciliar a PR #11 com a PR #12 do PrintServer e com a revisão realmente instalada; escolher mecanismo seguro existente de release/fast-forward ou integração revisada. Nunca `git reset --hard` na instância ativa, nunca substituir build inteiro pelo checkout exclusivo de uma PR.
-2. Usar `npm ci --ignore-scripts` e testes/CI em release isolado e mecanismo já aprovado para ativação atômica do service `evydencia-crm-mcp-live.service`, preservando UID Node22, OAuth e PrintServer. Sem SSH ou permissão já existente: **não fingir deploy**, registrar impedimento.
-3. Ativar `EVYD_ENABLE_OPERATOR_FULL_CRM=1`, `EVYD_GAMEPLAY_READ_ENABLED=1`, `EVYD_GAMEPLAY_READ_ORIGIN` (somente privada), `EVYD_GAMEPLAY_PUBLIC_ORIGIN=https://jogos.fotosdenatal.com`, e o token de leitura dedicado, respeitando permissões OAuth **do operador atual**. Não ativar antes de `lookup-batch` privado e ACL aprovados. Fazer uma ativação/restart controlado **somente** do serviço MCP, após constatar impacto e janela adequada, sem tocar na impressora e serviços Laravel/Z-API.
-4. Conferir `/healthz`, `crm_capacidades` (ambas Gameplay anunciadas) e todas as ferramentas PrintServer já existentes. Se tool sumir, latência explodir, erro OAuth ou 5xx: rollback de build/env de MCP imediatamente.
+## 2. Testar daqui no ChatGPT SEM invocar Gameplay de cliente
+No conector Evydência CRM LIVE atualizado:
+`crm_capacidades(verificar_gameplay=true)`.
+Registrar **somente** `build_commit`, `tools_active_count`, `gameplay_private_probe.status`, `reachable` e `dataset_proven`. Nunca copiar `gateway.env`, bearer, URLs capability ou dados de clientes. Não chamar `crm_gameplay_auditoria` com UUIDs reais enquanto o upstream estiver sem conexão. Se as ferramentas ainda não surgirem no ChatGPT, **atualizar/reconectar a descoberta do Plugin MCP**; as notificações de `tools/list_changed` não garantem retroativamente o cache de uma sessão existente. Iniciar nova conversa se necessário, depois que o servidor realmente atender às chamadas.
 
-## ETAPA 4 — TESTE DE PRODUÇÃO VIA CHATGPT
-1. Com a conexão MCP atualizada no ChatGPT e OAuth legítimo: `crm_capacidades` deve listar `crm_gameplay_auditoria` e `crm_gameplay_links`. Se continuar no build antigo, verificar implantação/exposição; não presumir cache por conta própria.
-2. Executar `crm_gameplay_auditoria(pagina=1,limite=20,incluir_publicados=true)`, com população CRM Natal 2026 status **10 ou 12**; validar `counts.total`, `pending_publication`, `published_photo_count`, `preparing_photo_count` e `orders_with_delivery_unverified`; **sem capability URLs** na auditoria em lote.
-3. Escolher **um pedido individual autorizado** por `order_id` ou `order_uuid` e chamar `crm_gameplay_links`. Confirmar separação `hub_url` e `gallery_url`; busca por nome exige escolha explícita e nunca entrega o link diretamente. Nunca colar tokens completos do link em logs públicos.
-4. Uma URL não abre o jogo automaticamente: `browser_runtime_verified=false` até navegador piloto com autorização, HTTP/mídia real e Phaser validados.
-5. **Não enviar WhatsApp automaticamente.** Sem recibo de envio, relatório deve dizer `link_delivery_status=not_verified`; nenhuma conclusão de "link não enviado" é permitida.
+## 3. Primeiro gate real que falta: infraestrutura **Media VPS**, não CRM
+A Media VPS do relatório é `169.58.210.14`; domínio público `jogos.fotosdenatal.com`. O teste HTTP 403 público apenas confirma bloqueio no Caddy, não a execução de `GameplayStatusLookup`. No host de mídia, SOMENTE com acesso SSH/autorização legítima:
+1. Localizar o serviço real, `systemctl`/container/edge Caddy, e o checkout/commit que está ativo; confirmar Node24 e o arquivo SQLite real associado ao processo. O repositório `gameplay` PR #43 depende da PR #30 e das dependências anteriores; verificar cadeia antes de deploy.
+2. Para a API privada read-only funcionar, `apps/catalog-server/src/main.ts` atualmente exige `runtime.databasePath`, `runtime.publisherApiSecret` e `runtime.serverSecret` além de `CATALOG_INTERNAL_READ_SECRET`. **Não inventar essas configurações nem copiar secrets do CRM.** Se faltar base persistente ou secrets de servidor/publicação, a API privada não será criada. Manter operações de publicação desabilitadas pela política de piloto.
+3. Identificar o banco correto e executar **somente se já autorizado** `node scripts/forensic/audit-real-catalog-readonly.mjs` com credenciais/proteções próprias e retorno agregado. Caso contrário `GAMEPLAY_DB_REAL=not_verified`; não assumir zero fotos.
+4. Estabelecer conectividade **verdadeiramente privada** da VPS MCP à Media VPS (por exemplo Tailscale/WireGuard previamente aprovado ou túnel dedicado, escutando somente interface privada). Não simplesmente abrir `/internal/*` na borda pública; manter 403 público. Validar a origem privada efetiva, token de leitura igual nos dois serviços mas distinto de Publisher/Server, `lookup-batch` sintético com 200 e envelope `schema_version=1`, nunca links no batch.
+5. Atualizar `EVYD_GAMEPLAY_READ_ORIGIN` **somente** para a origem privada comprovada; o domínio público continua apenas em `EVYD_GAMEPLAY_PUBLIC_ORIGIN`. Reavaliar `crm_capacidades(verificar_gameplay=true)` -> `private_contract_ok`. Sem acesso autorizado à Media VPS, documentar impedimento e NÃO improvisar alterações de firewall.
 
-## ETAPA 5 — ENTREGA E ENCERRAMENTO
-Reportar numa única resposta concisa:
-- SHAs exatos #11/#12/#30/#43, integridade CI e release/rollback usado;
-- processo/DB Gameplay confirmado? total de sessões/fotos ativos/staged; público `/internal` bloqueado?;
-- MCP build e ferramentas totais **antes/depois**, garantias PrintServer intactas, OAuth ativo;
-- resultados de `crm_gameplay_auditoria` e 1 consulta autorizada (nunca URLs completas);
-- `DELIVERY_RECEIPT`: `not_verified` até integração com prova CRM/Z-API por UUID/revisão;
-- GO/NO-GO **separados** para API privada de leitura, ferramentas ChatGPT e publicação de mídia para famílias.
+## 4. Só após os gates: cruzamento real e links no ChatGPT
+- CRM atual: duas buscas canônicas no Natal 2026 com status correntes 10 (`waiting_product_retrieve`) ou 12 (`order_completed`). O último snapshot real foi 11+11=22, não constante de código.
+- Na VPS MCP autorizada, já com roteamento privado funcional, executar o script **existente** `node scripts/antigravity/audit-real-crm-gameplay.mjs --cross-check` (sem URL de família e sem PII nos logs).
+- Após a descoberta do plugin ser atualizada, `crm_gameplay_auditoria({status_atual:'todos',incluir_publicados:true,pagina:1,limite:20})` compara sessões/fotos; `crm_gameplay_links({order_id:<ID aprovado>})` só com seleção explícita por operador. Se o Gameplay retornar `not_found`, isto significa sem sessão **na base consultada**, não ausência de fotos no Drive.
+- `link_delivery_status='not_verified'`: não existe recibo canônico cruzado CRM/Z-API por UUID/revisão. Nunca relatar "link não enviado" nem emitir mensagens como parte do teste.
 
-**PROIBIDO:** novo script, novo repositório, upload de fotos reais à staging-demo, mudança arbitrária de readiness, envio de WhatsApp, copiar DB/segredos ao Avell, reiniciar PrintServer/Spooler, limpar filas ou mexer no Laravel. Se todos os gates privados estiverem comprovados, fazer rollout administrativo de leitura **agora**. Se um gate P0 não estiver comprovado, não liberar esse pedaço; reporte a evidência concreta faltante, sem retomar ciclo de testes sintéticos.
+## 5. Encerramento P0, sem loops
+Relatar exatamente:
+`MCP_DEPLOY_SHA`, `MCP_TOOLS_ACTIVE`, `GAMEPLAY_PRIVATE_PROBE`, `MEDIA_DEPLOY_SHA`, `MEDIA_DB_READONLY`, `CRM_GAMEPLAY_JOIN`, `CHATGPT_TOOLS_DISCOVERED`, `PRINTSERVER_PRESERVED`.
+Somente resultados **observados**, sem prometer implantação no chat, sem acessar banco do CRM para escrita e sem alterar `deploy/readiness.json` (`pilotReady=false`, `customerDataAllowed=false`, `automaticDeliveryAllowed=false`). Se o acesso à Media VPS for impossível, essa é a **única pendência de infraestrutura** a escalar; não repetir 232 testes que já passaram.
 
-**Fontes:** `docs/REAL_AUDIT_RUNBOOK_CRM_GAMEPLAY_20261026.md`; `docs/GAMEPLAY_CRM_READ_INTEGRATION_20261026.md`; `deploy/readiness.json`; `deploy/vps/nginx/christmas-games.conf.example`; `AGENTS.md`.
+**Documentação oficial:** https://modelcontextprotocol.io/specification/2025-11-25/server/tools ; https://caddyserver.com/docs/caddyfile/matchers ; https://nodejs.org/api/sqlite.html ; https://www.sqlite.org/backup.html .
