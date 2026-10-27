@@ -877,7 +877,10 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf}){
         // The filter must not silently turn an ineligible order into a missing-link alert.
         if(o.status_key!==status)throw Error('gameplay_crm_invalid');
         const id=String(o.order_uuid||o.uuid).toLowerCase();
-        if(!seen.has(id)){orders.push(o);seen.add(id)}
+        // A UUID appearing in both status scans indicates concurrent CRM
+        // status drift; never silently deduplicate and report a partial audit.
+        if(seen.has(id))throw Error('gameplay_crm_status_drift');
+        orders.push(o);seen.add(id);
        }
      }
      const map=new Map();
