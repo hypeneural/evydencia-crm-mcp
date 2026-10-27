@@ -47,3 +47,29 @@
 - Tailscale SSH/ACL: https://tailscale.com/docs/reference/ssh-over-tailscale
 - MCP `tools/list` e `listChanged`: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 - SQLite backup e WAL: https://www.sqlite.org/backup.html
+
+
+## Atualização confirmada: dois Avells, SSH existente e porta privada de Gameplay (27/10/2026)
+
+**Nova evidência fornecida pelo operador do Avell do estúdio (DESKTOP-CUU7542):**
+- Conexão real: \`ssh vps-prod\` -> \`vpsops@100.116.8.109\` via \`~/.ssh/id_ed25519_vps\`. Tailnet do estúdio: \`100.97.3.43\`. Conta remota \`vpsops\` (UID 1001) tem apenas \`NOPASSWD: /usr/local/sbin/stackctl\`, **não** tem root/sudo genérico.
+- \`christmas-games-catalog\` e \`christmas-games-gateway\` estão saudáveis no relatório local; catálogo vinculado a **100.116.8.109:4180**; SQLite informado em \`/srv/runtime/christmas-games/data/sqlite/catalog.db\`, com WAL e SHM; runtime release \`20261019-8ac62b3\` em \`staging-demo\`. Evidência de presença de SQLite, não comprovação do schema/API \`lookup-batch\` ou de fotos reais publicadas. O SHA informado pertence à release instalada e ainda deve ser reconciliado com a PR Gameplay #43.
+- Há um **Avell do quarto diferente** daquele que possui a chave do estúdio. A origem funcional é o Avell do estúdio; não copiar \`id_ed25519_vps\` privada para o quarto.
+
+### Caminho mais simples: autorizar chave exclusiva do Avell do quarto via SSH que já funciona
+
+1. No Avell do quarto, instalar/entrar no **mesmo tailnet Tailscale**, se ainda não conectado. Verificar \`tailscale ping 100.116.8.109\`.
+2. Na conta Windows do quarto, executar \`ssh-keygen -t ed25519 -a 64 -f "$env:USERPROFILE\\.ssh\\id_ed25519_media_quarto" -C "avell-quarto-media"\` **uma vez** se a chave não existir. Preservar privada no quarto. Encaminhar ao estúdio **somente** o conteúdo \`id_ed25519_media_quarto.pub\` e verificar seu fingerprint.
+3. Do Avell do estúdio, autenticado normalmente via \`ssh vps-prod\`, acrescentar a linha pública à **conta própria de vpsops** em \`~/.ssh/authorized_keys\`, se a conta tiver permissão de escrita. Garantir modos \`0700\` no diretório e \`0600\` no arquivo. Não editar \`/root/.ssh/authorized_keys\`; não desligar \`StrictHostKeyChecking\` e não habilitar senha de root SSH.
+4. Do quarto, confirmar **fingerprint do host** por canal confiável e autenticar \`ssh -i "$env:USERPROFILE\\.ssh\\id_ed25519_media_quarto" vpsops@100.116.8.109\`. Este SSH **não concede root**; mantém \`sudo /usr/local/sbin/stackctl\` quando necessário para stacks.
+5. Se o estúdio não puder alterar as chaves da própria conta por permissão/ACL, **não usar \`sudo stackctl\` para burlar autorização**. Um operador já autorizado no console da VPS decide o ajuste.
+
+**Para manutenção que de fato exigir root:** usar sessão administrativa preexistente ou console autorizado uma vez, concedendo \`sudo\` auditável temporário ao operador com autenticação apropriada. \`vpsops\` NÃO possui \`sudo -i\` hoje. Não atribuir \`NOPASSWD:ALL\` permanentemente e não ativar \`PermitRootLogin yes\`/senha pela internet. Revogar qualquer elevação excepcional ao fim da manutenção. Se a tarefa couber em \`sudo stackctl\`, não há motivo para root genérico.
+
+### Gate P0 da integração: origem e versão da API são separadas do SSH
+
+- \`gameplayReadConfig()\` em \`src/gameplay-read-client.mjs\` exige URL **HTTPS** para host remoto, autorizando HTTP **somente em \`127.0.0.1\`/localhost/\`::1\`**. Por isso \`EVYD_GAMEPLAY_READ_ORIGIN=http://100.116.8.109:4180\` é **inválida**. Não alterar env para esse endereço HTTP.
+- Opções permitidas ao responsável pela infraestrutura: HTTPS privado com certificado confiável no tailnet **OU** túnel seguro aprovado terminando em loopback no host MCP, apontando \`EVYD_GAMEPLAY_READ_ORIGIN=http://127.0.0.1:<PORTA_LOCAL_DO_TUNEL>\`. Esse túnel precisa ter lifecycle/restart/monitoramento e não abrir a porta 4180 publicamente.
+- Antes de abrir conexão com UUIDs reais, verificar se a imagem/container **realmente implantado** inclui \`/internal/v1/sessions/lookup-batch\`, o \`CATALOG_INTERNAL_READ_SECRET\`, as demais configurações requeridas e as tabelas/revisões do banco. O staging saudável de outubro não comprova implantação da PR #43; não fazer rollout por substituição cega.
+- O HTTP 403 observado do MCP é coerente com uso da **origem pública bloqueada**, mas não prova por si só que exista backend read-only internamente. Um \`GET /healthz\` público \`staging-demo\` não comprova publicação de clientes.
+- Assim que a origem privada e a API real forem comprovadas, executar **um** probe \`crm_capacidades(verificar_gameplay=true)\` e depois \`crm_gameplay_auditoria\`. Manter recibos de entrega em \`not_verified\`, \`customerDataAllowed=false\` e sem envio WhatsApp.
