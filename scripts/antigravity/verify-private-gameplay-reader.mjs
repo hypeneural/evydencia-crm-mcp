@@ -82,10 +82,16 @@ export async function verifyPrivateReader({
       !STATES.has(result.results[0]?.state) || result.results[0]?.state !== 'not_found' ||
       result.results[0]?.hub_url !== null || result.results[0]?.gallery_url !== null ||
       result.results[0]?.games_runtime_verified !== false) fail('SIDE_PRIVATE_CONTRACT_INVALID');
-  await probe('links_disabled', '/internal/v1/sessions/lookup', 409, {
-    method:'POST',authenticated:true,
-    body:{crm_order_uuid:SYNTHETIC_UUID,include_links:true}
-  });
+  const disabled = await boundedJson(await probe(
+    'links_disabled', '/internal/v1/sessions/lookup', 409, {
+      method:'POST',authenticated:true,
+      body:{crm_order_uuid:SYNTHETIC_UUID,include_links:true}
+    }
+  ));
+  // A generic HTTP 409 is not sufficient: require the canonical Gameplay
+  // fail-closed response, not an unrelated proxy/ingress conflict.
+  if (disabled?.error !== 'CUSTOMER_LINKS_NOT_ENABLED')
+    fail('SIDE_LINKS_DISABLED_CONTRACT_INVALID');
   return {status:'PASS_PRIVATE_METADATA_CONTRACT',pass:true,checks,
     dataset_proven:false,customer_links_verified:false};
 }
