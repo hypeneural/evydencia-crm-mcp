@@ -12,17 +12,17 @@ export function inspectWrapper(source) {
   const text = String(source || '');
   // Whole-line comments can mention proposed flags without implementing them.
   // Detecting any literal is NOT proof of a safe branch or permitted command.
-  const code = text.replace(/^\\s*#.*$/gm, '');
+  const code = text.replace(/^\s*#.*$/gm, '');
   const results = {
-    has_independent_reader_variable: /\\bCATALOG_READER_RELEASE_DIR\\b/.test(code),
-    has_public_release_variable: /\\bRELEASE_DIR\\b/.test(code),
-    mentions_private_service: /\\bcatalog-reader\\b/.test(code),
-    mentions_no_deps_option: /--no-deps\\b/.test(code),
-    mentions_compose: /docker\\s+compose|compose\\.yaml|compose\\.private-audit/.test(code),
+    has_independent_reader_variable: /\bCATALOG_READER_RELEASE_DIR\b/.test(code),
+    has_public_release_variable: /\bRELEASE_DIR\b/.test(code),
+    mentions_private_service: /\bcatalog-reader\b/.test(code),
+    mentions_no_deps_option: /--no-deps\b/.test(code),
+    mentions_compose: /docker\s+compose|compose\.yaml|compose\.private-audit/.test(code),
     // Existing stack-wide deploys are dangerous when reused for the reader.
     // This is a risk indicator, not a parser for shell flow or an authorization.
-    has_stackwide_remove_orphans: /--remove-orphans\\b/.test(code),
-    has_restart_only_rollback: /compose[^\\n;]{0,100}\\brestart\\b/.test(code),
+    has_stackwide_remove_orphans: /--remove-orphans\b/.test(code),
+    has_restart_only_rollback: /compose[^\n;]{0,100}\brestart\b/.test(code),
   };
   const allMinimumHints = [
     'has_independent_reader_variable', 'has_public_release_variable',
