@@ -98,3 +98,23 @@ comprovante.
   https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html
 - MCP Tool annotations: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
   (`readOnlyHint` é indicação, não mecanismo de autorização).
+
+### Gate anti-falso-PASS do PHP
+
+O relatório inicial do Antigravity informou 16/16 cenários PASS, mas a versão
+original do teste dependia de `assert()`, desabilitável por
+`zend.assertions=-1`. O teste foi alterado para `evyAssert()`, que sempre
+lança `RuntimeException` em falha. **Os 16 cenários precisam ser executados
+novamente após esta mudança**, com a versão atual do reader, em máquina que
+tenha o vendor do Laravel. Um lint bem-sucedido não substitui essa execução.
+Rodar também um controle negativo proposital para comprovar que uma
+afirmação falsa retorna código de saída diferente de zero.
+
+### Recibo de validação da release
+
+O relatório final do Antigravity deve discriminar: SHA de release, SHA LIVE
+pré-corte e pós-corte, contagem/nomes das ferramentas, callbacks e destinatários
+verificados por IDs (sem PII), tempo SQL, cobertura por número, primeiro e
+último evento, histórico de campanhas sem dispatch, compra canônica,
+`readOnlyHint`, autorização `crm.read`, negativo 403, rollback e ausência
+de chamadas reais de envio. Sem gate verde, manter PR Draft e não implantar.
