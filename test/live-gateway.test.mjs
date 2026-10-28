@@ -634,3 +634,29 @@ test('Gameplay bulk audit fails closed when CRM canonical pagination bridge is a
  assert.equal(result.isError,true);
  assert.match(result.content[0]?.text||'',/legacy_read_canonical_pagination_unavailable/);
 });
+
+test('print-only batch tool is visible with CRM order write disabled; schema excludes all status writes',async()=>{
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1',
+  EVYD_MALOTES_PRINT_BATCH_ENABLED:'1',
+  EVYD_MALOTES_READY_WRITE_ENABLED:'0',
+  EVYD_MALOTES_BATCH_ENABLED:'0'
+ }),{labelRenderer:async()=>{throw Error('no_render_in_read_only_test')},log:e=>logs.push(e),now});
+ const op=await connect(g,'fake-op7-read-000001'),client=await mcp(g,op.tokens.access_token);
+ try{
+  const tools=(await client.listTools()).tools;
+  const names=tools.map(t=>t.name);
+  assert.ok(names.includes('crm_processar_malotes_retirada'));
+  assert.ok(!names.includes('crm_marcar_disponivel_retirada'));
+  const batch=tools.find(t=>t.name==='crm_processar_malotes_retirada');
+  assert.deepEqual(batch.inputSchema.properties.modo.enum,['so_imprime']);
+  const caps=(await client.callTool({name:'crm_capacidades',arguments:{}})).structuredContent;
+  assert.equal(caps.oauth_authorization.orders_write_scope_granted,false);
+  assert.equal(caps.oauth_authorization.print_scope_granted,true);
+  assert.equal(caps.tools.find(t=>t.tool==='crm_processar_malotes_retirada').state,'LIVE_ACTIVE');
+  assert.equal(caps.tools.find(t=>t.tool==='crm_marcar_disponivel_retirada').state,'NOT_AVAILABLE');
+ }finally{await client.close();await g.close()}
+});
