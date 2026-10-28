@@ -31,6 +31,12 @@ const gw=x=>createGateway(env(x),{log:e=>logs.push(e),now});
 const call=(g,path,init={},host='localhost')=>g.handle(new Request(new URL(path,'http://localhost'),init),{ip:'10.0.0.1',host});
 const form=o=>({method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o).toString()});
 const env1=data=>JSON.stringify({schema_version:'1.0',generated_at:new Date(clock).toISOString(),data});
+const brokerReadFixture=url=>{
+ if(String(url)==='https://print.example.test/healthz')return Response.json({capabilities:{independent_order_labels:true,order_label_receipts:true}});
+ const match=/^https:\/\/print\.example\.test\/v1\/orders\/(\d+)\/label-job$/.exec(String(url));
+ if(match)return Response.json({order_id:Number(match[1]),state:'not_requested',job:null,needs_reconciliation:false});
+ return null;
+};
 
 before(async()=>{
  crm=createServer((req,res)=>{
@@ -445,6 +451,7 @@ test('Regression P0 — write scope enforcement, securitySchemes metadata, opera
 test('authorized canonical label uses CRM PNG exactly and never exposes PNG in MCP result',async()=>{
  const printed=[],renders=[];
  const bridgeFetch=async(url,opt)=>{
+  const read=brokerReadFixture(url);if(read)return read;
   if(String(url)==='https://print.example.test/v1/jobs'){
    printed.push(JSON.parse(opt.body));
    return new Response(JSON.stringify({replay:false,job:{job_id:'d83ed2db-f4f1-4a55-b632-61e246a22b38',order_id:6001,
@@ -476,11 +483,13 @@ test('authorized canonical label uses CRM PNG exactly and never exposes PNG in M
   assert.equal(printed[0].label_source,'crm_canonical');
   assert.equal(printed[0].label_png_base64,'fake-test-only-png');
   assert.equal(printed[0].status_key,'waiting_product_retrieve');
+  assert.equal(printed[0].purpose,'order_label');
  }finally{await client.close();await g.close()}
 });
 test('failed canonical render cannot enqueue a plain fallback label',async()=>{
  let submitted=0;
  const bridgeFetch=async(url,opt)=>{
+  const read=brokerReadFixture(url);if(read)return read;
   if(String(url)==='https://print.example.test/v1/jobs'){submitted++;throw Error('test_unexpected_print')}
   return fetch(url,opt);
  };
@@ -652,13 +661,142 @@ test('print-only batch tool is visible with CRM order write disabled; schema exc
   assert.ok(names.includes('crm_processar_malotes_retirada'));
   assert.ok(!names.includes('crm_marcar_disponivel_retirada'));
   const batch=tools.find(t=>t.name==='crm_processar_malotes_retirada');
-  assert.deepEqual(batch.inputSchema.properties.modo.enum,['so_imprime']);
+  assert.deepEqual(batch.inputSchema.properties.modo.enum,['so_imprime','misto']);
+  assert.deepEqual(batch.inputSchema.properties.pedidos.items.properties.modo.enum,['so_imprime']);
+  assert.ok(!batch.inputSchema.properties.pedidos.items.required.includes('expected_status_event_id'));
   const caps=(await client.callTool({name:'crm_capacidades',arguments:{}})).structuredContent;
   assert.equal(caps.oauth_authorization.orders_write_scope_granted,false);
   assert.equal(caps.oauth_authorization.print_scope_granted,true);
   assert.equal(caps.tools.find(t=>t.tool==='crm_processar_malotes_retirada').state,'LIVE_ACTIVE');
   assert.equal(caps.tools.find(t=>t.tool==='crm_marcar_disponivel_retirada').state,'NOT_AVAILABLE');
  }finally{await client.close();await g.close()}
+});
+
+// Synthetic protocol fixture: the CRM and broker persist independently and every
+// effect passes through the actual OAuth/MCP schemas and authorization handlers.
+function independentMalotesFixture({brokerAuthorized=true,brokerCompatible=true,timeoutAfterAccept=false,mismatch=false}={}){
+ const orders=new Map([
+  [6002,{id:6002,status_key:'session_schedule',status_event_id:120,status:{id:6},remaining:0}],
+  [6003,{id:6003,status_key:'order_aborted',status_event_id:130,status:{id:13},remaining:250}]
+ ]),receipts=new Map(),effects=[],reads=[];
+ let renders=0;
+ const json=body=>Response.json(body);
+ const fixtureFetch=async(input,opt={})=>{
+  const u=new URL(String(input));
+  if(u.origin==='https://print.example.test'){
+   if(!brokerAuthorized)return json({error:'unauthorized'},{status:401});
+   if(u.pathname==='/healthz')return json({capabilities:brokerCompatible?{independent_order_labels:true,order_label_receipts:true}:{}});
+   const match=/^\/v1\/orders\/(\d+)\/label-job$/.exec(u.pathname);
+   if(match){const id=Number(match[1]);reads.push('receipt:'+id);return json(receipts.get(id)||{order_id:id,state:'not_requested',job:null,needs_reconciliation:false})}
+   if(u.pathname==='/v1/jobs'&&opt.method==='POST'){
+    const body=JSON.parse(opt.body);effects.push({type:'print',body});
+    const job={order_id:body.order_id,job_id:'d83ed2db-f4f1-4a55-b632-61e246a22b38',request_id:body.request_id,state:'queued',render_source:'crm_canonical'};
+    receipts.set(body.order_id,{order_id:body.order_id,state:'queued',job,needs_reconciliation:false});
+    if(timeoutAfterAccept)throw new TypeError('synthetic_transport_lost_after_accept');
+    return json({replay:false,job});
+   }
+   throw Error('unexpected_broker_path');
+  }
+  if(u.pathname==='/api/orders/search'){
+   const id=Number(u.searchParams.get('order[id]')||u.searchParams.get('order.id'));
+   const o=orders.get(id);reads.push('order:'+id);
+   return json({data:o?[{...o,id:mismatch?7000:o.id,
+    uuid:'44444444-dddd-4444-8444-000000000404',customer:{name:'Cliente Sintetica',whatsapp:'48999990001'},
+    summary:{total:480,received:480-o.remaining,remaining:o.remaining},
+    installments:[{total:480,payment_total:480-o.remaining,payment_at:'2026-10-01T10:00:00Z'}],items:[]}]:[]});
+  }
+  const mark=/^\/api\/v1\/extension\/orders\/(\d+)\/ready-for-pickup$/.exec(u.pathname);
+  if(mark&&opt.method==='POST'){
+   const body=JSON.parse(opt.body),o=orders.get(Number(mark[1]));
+   effects.push({type:'ready',body});assert.equal(body.expected_status_event_id,o.status_event_id);
+   o.status_key='waiting_product_retrieve';o.status={id:10};o.status_event_id++;
+   return json({success:true,order_id:o.id,state:'ready',status_key:o.status_key,status_event_id:o.status_event_id,changes_applied:true,replay:false});
+  }
+  return fetch(input,opt);
+ };
+ const g=createGateway(env({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1',EVYD_MALOTES_READY_WRITE_ENABLED:'1',
+  EVYD_MALOTES_BATCH_ENABLED:'1',EVYD_MALOTES_PRINT_BATCH_ENABLED:'1'}),
+ {fetchFn:fixtureFetch,labelRenderer:async()=>{renders++;return {label_source:'crm_canonical',label_png_base64:'synthetic-png',label_png_sha256:'a'.repeat(64)}},log:e=>logs.push(e),now});
+ return {g,orders,receipts,effects,reads,renders:()=>renders};
+}
+
+test('unit print works on an unpaid terminal order; repeated call reuses its durable receipt',async()=>{
+ const f=independentMalotesFixture(),op=await connect(f.g,'fake-op7-ready-000008'),c=await mcp(f.g,op.tokens.access_token);
+ try{
+  const args={order_id:6003,confirmado_pelo_operador:true};
+  const one=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:args});
+  assert.equal(one.isError,undefined,JSON.stringify(one));assert.equal(one.structuredContent.crm_status_updated,false);
+  assert.equal(f.effects.length,1);assert.equal(f.effects[0].type,'print');
+  assert.equal(f.effects[0].body.purpose,'order_label');assert.equal(f.effects[0].body.status_key,'order_aborted');
+  assert.equal(f.orders.get(6003).remaining,250);assert.equal(f.orders.get(6003).status_event_id,130);
+  const two=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:args});
+  assert.equal(two.structuredContent.replay,true);assert.equal(f.effects.length,1);assert.equal(f.renders(),1);
+ }finally{await c.close();await f.g.close()}
+});
+
+test('mixed batch keeps ready/print independent and completion repeats no completed effects',async()=>{
+ const f=independentMalotesFixture(),op=await connect(f.g,'fake-op7-ready-000008'),c=await mcp(f.g,op.tokens.access_token);
+ try{
+  const args={modo:'misto',pedidos:[{order_id:6002,modo:'so_baixa',expected_status_event_id:120},
+   {order_id:6003,modo:'baixa_e_imprime',expected_status_event_id:130}],confirmado_pelo_operador:true};
+  const r=await c.callTool({name:'crm_processar_malotes_retirada',arguments:args});
+  assert.equal(r.isError,undefined,JSON.stringify(r));const report=r.structuredContent;
+  assert.equal(report.results[0].baixa,'ready');assert.equal(report.results[0].impressao,'not_requested');
+  assert.equal(report.results[0].status_event_id,121);assert.match(report.results[0].baixa_request_id,/^[a-f0-9-]{36}$/);
+  assert.equal(report.results[1].baixa,'blocked');assert.equal(report.results[1].impressao,'queued');
+  assert.deepEqual(f.effects.map(e=>e.type),['ready','print']);
+  const preview=await c.callTool({name:'crm_previa_malotes_retirada',arguments:{order_ids:[6002,6002,6003],acoes:args.pedidos.map(({order_id,modo})=>({order_id,modo}))}});
+  assert.equal(preview.structuredContent.orders.length,2);assert.equal(preview.structuredContent.orders[0].status_event_id,121);
+  assert.equal(preview.structuredContent.orders[1].modo,'baixa_e_imprime');assert.equal(preview.structuredContent.orders[1].impressao.job_id,report.results[1].job_id);
+  assert.equal(preview.structuredContent.automatic_pickup_status_write_available,true);
+  const retry=await c.callTool({name:'crm_processar_malotes_retirada',arguments:args});
+  assert.equal(retry.structuredContent.results[0].baixa,'already_ready');assert.equal(retry.structuredContent.results[1].impressao_replay,true);
+  assert.equal(f.effects.length,2);
+ }finally{await c.close();await f.g.close()}
+});
+
+test('action scopes, duplicate IDs and missing confirmation reject the entire batch before effects',async()=>{
+ const f=independentMalotesFixture();
+ // A real sealed, explicitly narrowed synthetic grant; the operator itself has both abilities.
+ const seal=createSealer(Buffer.from(KEY,'base64')),token=seal.seal('eva',{cid:'synthetic-client',op:'7',up:'fake-op7-ready-000008',
+  sc:'crm.read print.jobs.write',sc_narrow:true,aud:'http://localhost/mcp',exp:Math.floor(clock/1000)+600});
+ secrets.push(token);const c=await mcp(f.g,token);
+ try{
+  const denied=await c.callTool({name:'crm_processar_malotes_retirada',arguments:{modo:'misto',
+   pedidos:[{order_id:6003,modo:'so_imprime'},{order_id:6002,modo:'so_baixa',expected_status_event_id:120}],confirmado_pelo_operador:true}});
+  assert.equal(denied.isError,true);assert.equal(err(denied),'insufficient_operator_write_scope');
+  const duplicate=await c.callTool({name:'crm_processar_malotes_retirada',arguments:{modo:'so_imprime',
+   pedidos:[{order_id:6003},{order_id:6003}],confirmado_pelo_operador:true}});
+  assert.equal(err(duplicate),'malotes_duplicate_or_invalid_order');
+  const unconfirmed=await c.callTool({name:'crm_processar_malotes_retirada',arguments:{modo:'so_imprime',pedidos:[{order_id:6003}]}});
+  assert.equal(unconfirmed.isError,true);assert.equal(f.effects.length,0);assert.equal(f.reads.length,0);
+  const p=await c.callTool({name:'crm_previa_malotes_retirada',arguments:{order_ids:[6002]}});
+  assert.equal(p.structuredContent.automatic_pickup_status_write_available,false);
+ }finally{await c.close();await f.g.close()}
+});
+
+test('print accepted before timeout is reconciled by receipt, without second dispatch',async()=>{
+ const f=independentMalotesFixture({timeoutAfterAccept:true}),op=await connect(f.g,'fake-op7-ready-000008'),c=await mcp(f.g,op.tokens.access_token);
+ try{
+  const args={order_id:6003,confirmado_pelo_operador:true};
+  const one=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:args});
+  assert.equal(err(one),'printserver_result_unknown');
+  const two=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:args});
+  assert.equal(two.isError,undefined);assert.equal(two.structuredContent.replay,true);assert.equal(f.effects.length,1);
+ }finally{await c.close();await f.g.close()}
+});
+
+test('old broker and divergent CRM identity fail closed before render or dispatch',async()=>{
+ for(const options of [{brokerCompatible:false},{mismatch:true}]){
+  const f=independentMalotesFixture(options),op=await connect(f.g,'fake-op7-ready-000008'),c=await mcp(f.g,op.tokens.access_token);
+  try{
+   const result=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:{order_id:6003,confirmado_pelo_operador:true}});
+   assert.equal(result.isError,true);assert.equal(f.effects.length,0);assert.equal(f.renders(),0);
+  }finally{await c.close();await f.g.close()}
+ }
 });
 
 test('crm_propostas_natal_consultar_lote is registered with readOnlyHint, rejects invalid batches (>50 or empty) and requires operator scope',async()=>{
