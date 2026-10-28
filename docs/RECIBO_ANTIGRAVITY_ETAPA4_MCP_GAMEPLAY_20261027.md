@@ -84,6 +84,32 @@ Conferir exclusivamente `help`, `show`, `status` ou `dry-run` se forem explicita
 - Executar o probe seguro `npm run gameplay:sidecar:verify` apenas por loopback/SSH aprovado, secret previamente existente no host e sem registrá-lo em argv/log. Sem secret: resultado `INCOMPLETE`, **não PASS**.
 - Pós-prova: consulta `crm_capacidades` e `crm_gameplay_auditoria` somente leitura no ChatGPT. Nenhuma publicação, foto, URL individual ou WhatsApp ao cliente sem autorização específica.
 
+## 5A. Consulta LIVE somente leitura feita nesta auditoria
+
+Além da inspeção do GitHub, foram chamadas **somente ferramentas de leitura**
+do MCP LIVE, sem tocar em operações de impressão, WhatsApp ou publicação:
+
+- `crm_capacidades(verificar_gameplay=true)`: release atualmente exposta pelo
+  conector `build_commit=e872fac`,
+  `repository_branch=release/live-35tools-gameplay-printserver`,
+  `tools_active_count=35`, `tools_total_catalog=37`, duas
+  ferramentas `NOT_AVAILABLE`. O sidecar respondeu
+  `gameplay_private_probe.status=private_contract_ok`,
+  `reachable=true`, mas **`dataset_proven=false`**. Isso confirma
+  integração privada de status no MCP, **não** o hardening HTTP 404 do
+  novo reader, prova de browser, leitura SQLite de produção ou entrega.
+- `crm_gameplay_auditoria` (agregado, Natal 2026, consulta de 1 item,
+  resposta redigida): **22** pedidos no conjunto auditado,
+  **16** publicações sem comprovação de browser, **6** pendências,
+  **525** fotos contadas por manifest, **4** sem sessão,
+  **2** revogados e **22** pedidos sem entrega de links verificada.
+  São indicadores de metadados, NÃO fotos validadas fisicamente,
+  acesso à galeria ou execução Phaser.
+
+Os detalhes por pedido, UUIDs, nomes, telefones, URLs de mídia e tokens
+não foram incorporados ao recibo. A igualdade 35/37 com o inventário
+histórico não torna a PR #14 implantada.
+
 ## 6. Status e decisão P0
 
 | Gate | Resultado nesta auditoria | Justificativa |
