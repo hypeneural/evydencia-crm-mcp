@@ -72,6 +72,6 @@ As exceções não expõem texto, SQL, nomes de clientes ou paths. Se depender d
 
 ## Fontes oficiais
 - Microsoft Learn Get-Printer, Get-PrintJob, Get-ScheduledTaskInfo: https://learn.microsoft.com/en-us/powershell/module/printmanagement/get-printer ; https://learn.microsoft.com/en-us/powershell/module/printmanagement/get-printjob ; https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/get-scheduledtaskinfo
-- Laravel 11: https://laravel.com/docs/11.x/database ; https://laravel.com/docs/11.x/deployment ; https://api.laravel.com/docs/11.x/Illuminate/Database/Connection.html
+- Laravel 10 (composer.json declara laravel/framework ^10.10): https://laravel.com/docs/10.x/database ; https://laravel.com/docs/10.x/deployment ; https://api.laravel.com/docs/10.x/Illuminate/Database/Connection.html
 - MySQL: https://dev.mysql.com/doc/refman/8.0/en/set-transaction.html
 - PHP CLI/proc_open: https://www.php.net/manual/en/function.proc-open.php
