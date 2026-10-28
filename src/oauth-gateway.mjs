@@ -129,6 +129,8 @@ export function gatewayConfig(env){
   printserverEnabled:env.EVYD_PRINTSERVER_ENABLED==='1',
   malotesReadyEnabled:env.EVYD_MALOTES_READY_WRITE_ENABLED==='1',
   malotesBatchEnabled:env.EVYD_MALOTES_BATCH_ENABLED==='1',
+  // Print-only batches do not authorize commercial CRM status writes.
+  malotesPrintBatchEnabled:env.EVYD_MALOTES_PRINT_BATCH_ENABLED==='1',
   printAllowedOperators,
   gameplayReadSettings,gameplayReadConfigError,
   uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
