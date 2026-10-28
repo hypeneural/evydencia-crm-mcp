@@ -5,6 +5,54 @@ Leia antes o recibo canônico da Etapa 3 em
 runbook na Gameplay PR #43 em
 `docs/integrations/READER_ONLY_CUT_PREFLIGHT_20261027.md`.
 
+## Adendo de auditoria — falhas bloqueantes eliminadas no repositório
+
+**Errata obrigatória:** o recibo HISTÓRICO da Etapa 3 (§6, passo 2) sugere
+`RELEASE_DIR=<novo-reader>` no `stackctl`. Essa instrução era anterior ao
+isolamento da Etapa 4 e **não pode ser executada**: mudaria o bundle público
+do catálogo/gateway. A variável nova é **somente**
+`CATALOG_READER_RELEASE_DIR=<bundle-privado-imutavel>`, enquanto
+`RELEASE_DIR` deve conservar o caminho PÚBLICO atual.
+
+Foram publicados scripts de auditoria em PR #14, sem escrita, rede ou
+alteração de configuração:
+- `npm run gameplay:compose:audit -- --gameplay-root "<WORKTREE_GAMEPLAY>"`.
+  Lê os modelos normalizados de `docker compose config --format json`
+  com variáveis **SINTÉTICAS**, verifica mounts, flags, redes, UID/GID,
+  porta loopback e igualdade estrutural de `catalog` e `gateway`
+  ANTES/DEPOIS do overlay. Só `COMPOSE_BOUNDARY_PASS` comprova
+  o contrato offline; não comprova release VPS.
+- `node scripts/antigravity/check-stackctl-reader-readonly.mjs --stdin`.
+  Aceita a origem do wrapper por pipe SSH protegido, analisa somente
+  indicadores sem executar comandos do wrapper e imprime flags
+  booleanas; `BLOCKED_WRAPPER` exige parar. Mesmo
+  `REVIEW_WRAPPER_MANUAL_PROOF_REQUIRED` **não autoriza o corte**:
+  precisa de dry-run documentado do `stackctl` real com alvo
+  `catalog-reader`, env separadas e zero dependências recreadas.
+- Testes sintéticos `node --test test/audit-gameplay-reader-compose.test.mjs
+  test/check-stackctl-reader-readonly.test.mjs`; falhas devem interromper
+  a execução, sem fallback para `docker compose up` manual.
+
+Inspeção remota read-only **se o operador SSH autenticado ainda tiver
+permissão** (na worktree MCP local, sem gravar wrapper em disco):
+```bash
+ssh vpsops@169.58.210.14 'sudo -n cat /usr/local/sbin/stackctl' |
+  node scripts/antigravity/check-stackctl-reader-readonly.mjs --stdin
+```
+Não imprimir texto do wrapper nem segredo. Se `sudo` falhar ou não
+mostrar suporte, `BLOCKED_WRAPPER`. Somente suporte estático NÃO prova
+que `stackctl` atualiza um único serviço; executar apenas os modos
+help/config/dry-run COMPROVADAMENTE não mutáveis, conforme documentação
+real do wrapper. Se não existirem, classificar `BLOCKED_WRAPPER`.
+
+**P0 SQLite WAL:** conforme SQLite oficial, montagens somente leitura
+de banco em modo WAL exigem `-wal` e `-shm` legíveis/existentes ou
+outra abertura suportada. Verificar no UID do container; a presença
+dos três arquivos no host não comprova abertura pelo reader.
+NÃO copiar `catalog.db` isoladamente e não usar `restoreCatalog()`
+contra destinos LIVE (Gameplay issue #44). Preparar prova de backup
+online + `integrity_check` + restauração em scratch SEM mutar produção.
+
 ## Por que existe esta etapa?
 
 O ChatGPT confirmou diretamente no GitHub que os HEADs da Etapa 3
