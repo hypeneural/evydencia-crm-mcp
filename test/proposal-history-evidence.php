@@ -27,3 +27,21 @@ foreach ($cases as [$label,$fields,$state,$accepted]) {
  }
 }
 echo 'PASS '.count($cases)." PHP evidence fixtures\n";
+
+require_once __DIR__ . '/../scripts/crm-proposal-history-phones.php';
+$group = evyProposalPhoneVariants('48996425287');
+foreach ([
+    ['5548996425287', 'whatsapp', 'exact'],
+    ['4896425287', 'sms', 'legacy_variant'],
+    ['5547996425287', 'whatsapp', 'mismatch'],
+    ['5548996425287@c.us', 'whatsapp', 'exact'],
+    ['5548996425287@s.whatsapp.net', 'whatsapp', 'exact'],
+    ['invalid', 'whatsapp', 'unverifiable'],
+    ['', 'whatsapp', 'not_recorded'],
+    ['contato@example.test', 'email', 'not_phone_channel'],
+] as [$recipient, $channel, $expected]) {
+    if (evyProposalRecipientMatch($recipient, $channel, $group) !== $expected) {
+        throw new RuntimeException('Recipient mismatch classification test failed: ' . $expected);
+    }
+}
+echo "PASS 8 PHP concrete-recipient provenance fixtures\n";
