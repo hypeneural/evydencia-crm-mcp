@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {projectGameplayLinks,lookupGameplayWithCustomerLinks} from '../src/gameplay-links.mjs';
+import {createGameplayReadClient} from '../src/gameplay-read-client.mjs';
 
 const uuid='11111111-1111-4111-8111-111111111111';
 const hub='https://jogos.fotosdenatal.com/s/opaque-capability';
@@ -52,4 +53,42 @@ test('a metadata retry failing remains an error rather than becoming not_found',
   if(includeLinks)throw Error('gameplay_http_409');
   throw Error('gameplay_http_503');
  }},uuid),/gameplay_http_503/);
+});
+
+
+// End-to-end regression for production e872fac: the metadata-only reader
+// returns 409 on include_links but its authorized batch remains readable.
+test('live reader 409 still returns individual operator metadata without any customer URL',async()=>{
+ const requested=[];
+ const client=createGameplayReadClient({
+  origin:'http://127.0.0.1:4182',
+  publicOrigin:'https://jogos.fotosdenatal.com',
+  secret:'synthetic-read-secret-1234567890-abcdef',
+  timeoutMs:2000
+ },{fetchFn:async(url,opts)=>{
+  requested.push({path:new URL(url).pathname,body:JSON.parse(opts.body)});
+  if(url.endsWith('/lookup')){
+   return new Response(JSON.stringify({error:'CUSTOMER_LINKS_NOT_ENABLED'}),{
+    status:409,headers:{'content-type':'application/json'}
+   });
+  }
+  return new Response(JSON.stringify({schema_version:1,source:'gameplay_catalog',
+   verified_at:'2026-10-28T04:00:00Z',
+   results:[{crm_order_uuid:uuid,state:'published_unverified',
+    photo_count:12,expected_blobs:36,ready_blobs:36,
+    hub_url:null,gallery_url:null,games_runtime_verified:false}]
+  }),{status:200,headers:{'content-type':'application/json'}});
+ }});
+ const result=await lookupGameplayWithCustomerLinks(client,uuid);
+ assert.equal(requested.length,2);
+ assert.equal(requested[0].path,'/internal/v1/sessions/lookup');
+ assert.equal(requested[0].body.include_links,true);
+ assert.equal(requested[1].path,'/internal/v1/sessions/lookup-batch');
+ assert.deepEqual(requested[1].body.crm_order_uuids,[uuid]);
+ assert.equal(result.record.state,'published_unverified');
+ assert.equal(result.record.photo_count,12);
+ assert.equal(result.links.customer_links_status,'unavailable_http_409');
+ assert.equal(result.links.main_url,null);
+ assert.equal(result.links.games_url,null);
+ assert.equal(result.links.gallery_url,null);
 });
