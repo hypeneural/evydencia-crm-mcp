@@ -606,7 +606,7 @@ test('1. Pre-OAuth state (authorization_required), paginated discovery of 9 offi
    const postList=await c7.listTools(undefined,{cacheMode:'refresh'});
    const names=postList.tools.map(t=>t.name).sort();
    assert.deepEqual(names,[...expectedPre,...ZAPI_GATEWAY_TOOL_NAMES].sort());
-   assert.equal(names.length,30);
+   assert.equal(names.length,31);
    assert.ok(!names.some(n=>n.includes('webhook')||n.includes('dangerous')),'10th unapproved upstream tool was NOT silently exposed');
 
    // Verify exact upstream inputSchema preservation on zapi_send_text and zapi_send_image.
@@ -622,8 +622,8 @@ test('1. Pre-OAuth state (authorization_required), paginated discovery of 9 offi
    assert.equal(crmCap.structuredContent.zapi_mcp_enabled,true);
    assert.equal(crmCap.structuredContent.zapi_oauth_status,'authorized');
    assert.equal(crmCap.structuredContent.zapi_discovered_tools_count,9);
-   assert.equal(crmCap.structuredContent.legacy_v012_tools_preserved_count,29);
-   assert.equal(crmCap.structuredContent.tools_active_count,30);
+   assert.equal(crmCap.structuredContent.legacy_v012_tools_preserved_count,30);
+   assert.equal(crmCap.structuredContent.tools_active_count,31);
 
    const crmOrders=await c7.callTool({name:'crm_pedidos_buscar',arguments:{}});
    assert.equal(crmOrders.structuredContent.orders[0].order_id,7001);

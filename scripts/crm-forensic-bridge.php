@@ -1777,5 +1777,9 @@ if ($action === 'zapi_connection_history') {
     ], $forensicStartedMs);
 }
 
+if ($action === 'proposals.history.batch') {
+    require __DIR__ . '/crm-proposal-history-read.php';
+}
+
 fwrite(STDERR, json_encode(['error' => 'unknown_forensic_action']) . "\n");
 exit(4);

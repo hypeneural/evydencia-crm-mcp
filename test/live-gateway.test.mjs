@@ -363,7 +363,7 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
   assert.equal(cap.structuredContent.version,'0.12.0');
   assert.equal(cap.structuredContent.forensic_audit_enabled,true);
   assert.equal(cap.structuredContent.mcp_ui_apps_enabled,true);
-  assert.equal(cap.structuredContent.legacy_v012_tools_preserved_count,17);
+  assert.equal(cap.structuredContent.legacy_v012_tools_preserved_count,18);
   assert.equal(cap.structuredContent.write_requires_explicit_confirmation,true);
   assert.ok(!cap.structuredContent.tools.some(t=>t.state==='MOCK_ONLY'),'live capability inventory excludes legacy MOCK_ONLY tools');
   assert.equal(typeof cap.structuredContent.build_commit,'string');
@@ -633,4 +633,37 @@ test('Gameplay bulk audit fails closed when CRM canonical pagination bridge is a
  const result=await client.callTool({name:'crm_gameplay_auditoria',arguments:{}});
  assert.equal(result.isError,true);
  assert.match(result.content[0]?.text||'',/legacy_read_canonical_pagination_unavailable/);
+});
+
+
+test('crm_propostas_natal_consultar_lote is registered with readOnlyHint, rejects invalid batches (>50 or empty) and requires operator scope',async()=>{
+ const g=gw({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_ENABLE_OPERATOR_FULL_CRM:'1'
+ });
+ const auth=await connect(g,'fake-op7-write-00003');
+ const client=await mcp(g,auth.tokens.access_token);
+ try{
+  const {tools}=await client.listTools();
+  const tool=tools.find(t=>t.name==='crm_propostas_natal_consultar_lote');
+  assert.ok(tool,'crm_propostas_natal_consultar_lote tool must be registered');
+  assert.equal(tool.annotations?.readOnlyHint,true,'must declare readOnlyHint: true');
+  assert.equal(tool.inputSchema.type,'object');
+  assert.deepEqual(tool.inputSchema.required,['telefones']);
+  assert.equal(tool.inputSchema.properties.telefones.type,'array');
+  assert.equal(tool.inputSchema.properties.telefones.maxItems,50);
+  assert.equal(tool.inputSchema.properties.telefones.minItems,1);
+  assert.equal(tool.inputSchema.properties.historico_limite.type,'integer');
+
+  // Input validation: rejects >50 phones
+  const errOver=await client.callTool({name:'crm_propostas_natal_consultar_lote',arguments:{telefones:Array(51).fill('48996425287')}});
+  assert.equal(errOver.isError,true);
+
+  // Input validation: rejects empty phones
+  const errEmpty=await client.callTool({name:'crm_propostas_natal_consultar_lote',arguments:{telefones:[]}});
+  assert.equal(errEmpty.isError,true);
+ }finally{
+  await client.close();
+  await g.close();
+ }
 });
