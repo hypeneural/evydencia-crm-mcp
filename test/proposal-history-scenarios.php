@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// Unlike PHP assert(), these checks MUST execute even under zend.assertions=-1.
+function evyAssert(bool $condition, string $message = 'synthetic assertion failed'): void
+{
+    if (!$condition) throw new RuntimeException($message);
+}
+
+
 /**
  * 16 Mandatory Synthetic Integration Scenarios for crm_propostas_natal_consultar_lote.
  * Runs against an isolated in-memory SQLite database — 100% synthetic, zero real PII, zero writes to CRM.
@@ -408,9 +415,9 @@ try {
     if ($e->getMessage() !== 'BATCH_DONE') throw $e;
 }
 $res = $GLOBALS['__lastCapturedResult'];
-assert($res['source'] === 'CRM_NATAL_PROPOSAL_READ_ONLY', 'Source must be CRM_NATAL_PROPOSAL_READ_ONLY');
-assert($res['year'] === 2026, 'Year must be 2026');
-assert($res['timezone'] === 'America/Sao_Paulo', '[Scenario o] Timezone must be America/Sao_Paulo');
+evyAssert($res['source'] === 'CRM_NATAL_PROPOSAL_READ_ONLY', 'Source must be CRM_NATAL_PROPOSAL_READ_ONLY');
+evyAssert($res['year'] === 2026, 'Year must be 2026');
+evyAssert($res['timezone'] === 'America/Sao_Paulo', '[Scenario o] Timezone must be America/Sao_Paulo');
 
 // Check Scenario a: 48996425287 and 4896425287 group into same canonical +5548996425287
 $modernResult = null;
@@ -430,40 +437,40 @@ foreach ($res['results'] as $r) {
 }
 
 // [Scenario a] 10 vs 11 digits group correctly
-assert($modernResult !== null, '[Scenario a] Modern phone result found');
-assert(in_array(0, $modernResult['input_indices']) && in_array(1, $modernResult['input_indices']), '[Scenario a] Indices 0 and 1 deduplicated to same canonical');
-assert($modernResult['variants_e164'] === ['+5548996425287', '+554896425287'], '[Scenario a] Variants contain both 10 and 11 digit formats');
+evyAssert($modernResult !== null, '[Scenario a] Modern phone result found');
+evyAssert(in_array(0, $modernResult['input_indices']) && in_array(1, $modernResult['input_indices']), '[Scenario a] Indices 0 and 1 deduplicated to same canonical');
+evyAssert($modernResult['variants_e164'] === ['+5548996425287', '+554896425287'], '[Scenario a] Variants contain both 10 and 11 digit formats');
 echo "PASS Scenario a: telefones 10/11 digitos agrupados canonicamente\n";
 
 // [Scenario b] mesmo last-8 em DDD diferente
-assert($ddd47Result !== null, '[Scenario b] DDD 47 phone result found');
-assert($ddd47Result['canonical_e164'] === '+5547996425287', '[Scenario b] DDD 47 has its own canonical group');
-assert($ddd47Result['canonical_e164'] !== $modernResult['canonical_e164'], '[Scenario b] DDD 47 does NOT collapse with DDD 48 by last 8 digits');
+evyAssert($ddd47Result !== null, '[Scenario b] DDD 47 phone result found');
+evyAssert($ddd47Result['canonical_e164'] === '+5547996425287', '[Scenario b] DDD 47 has its own canonical group');
+evyAssert($ddd47Result['canonical_e164'] !== $modernResult['canonical_e164'], '[Scenario b] DDD 47 does NOT collapse with DDD 48 by last 8 digits');
 echo "PASS Scenario b: mesmo last-8 em DDD diferente nao colapsa\n";
 
 // [Scenario c] dois cadastros para o mesmo telefone
-assert($modernResult['customer_match_status'] === 'ambiguous_exact', '[Scenario c] Customer status is ambiguous_exact');
-assert(count($modernResult['customer_candidates']) === 2, '[Scenario c] 2 candidates returned');
+evyAssert($modernResult['customer_match_status'] === 'ambiguous_exact', '[Scenario c] Customer status is ambiguous_exact');
+evyAssert(count($modernResult['customer_candidates']) === 2, '[Scenario c] 2 candidates returned');
 echo "PASS Scenario c: dois cadastros identificados como ambíguos sem forcar identidade\n";
 
 // [Scenario d] 1 dispatch scheduled sem item
-assert($scheduledOnlyResult !== null, '[Scenario d] Scheduled only result found');
-assert($scheduledOnlyResult['proposal']['record_status'] === 'found', '[Scenario d] Record status found');
-assert($scheduledOnlyResult['proposal']['any_campaign_message_accepted'] === false, '[Scenario d] Scheduled without delivery is NOT accepted');
-assert($scheduledOnlyResult['proposal']['initial_whatsapp_accepted'] === false, '[Scenario d] Initial whatsapp not accepted');
+evyAssert($scheduledOnlyResult !== null, '[Scenario d] Scheduled only result found');
+evyAssert($scheduledOnlyResult['proposal']['record_status'] === 'found', '[Scenario d] Record status found');
+evyAssert($scheduledOnlyResult['proposal']['any_campaign_message_accepted'] === false, '[Scenario d] Scheduled without delivery is NOT accepted');
+evyAssert($scheduledOnlyResult['proposal']['initial_whatsapp_accepted'] === false, '[Scenario d] Initial whatsapp not accepted');
 echo "PASS Scenario d: 1 dispatch scheduled sem item nao e considerado enviado\n";
 
 // [Scenario e] item aceito com ID
-assert($modernResult['proposal']['any_campaign_message_accepted'] === true, '[Scenario e] any_campaign_message_accepted is true');
-assert($modernResult['proposal']['first_accepted_at_brt'] !== null, '[Scenario e] first_accepted_at_brt recorded');
+evyAssert($modernResult['proposal']['any_campaign_message_accepted'] === true, '[Scenario e] any_campaign_message_accepted is true');
+evyAssert($modernResult['proposal']['first_accepted_at_brt'] !== null, '[Scenario e] first_accepted_at_brt recorded');
 echo "PASS Scenario e: item aceito com provider_message_id confirmado\n";
 
 // [Scenario f] callback delivered/read
 $exec = $modernResult['executions'][0];
 $firstItem = $exec['delivery_items'][0];
-assert($firstItem['state'] === 'read_confirmed', '[Scenario f] State is read_confirmed');
-assert($firstItem['read_at_brt'] !== null, '[Scenario f] read_at_brt is recorded');
-assert($firstItem['delivered_at_brt'] !== null, '[Scenario f] delivered_at_brt is recorded');
+evyAssert($firstItem['state'] === 'read_confirmed', '[Scenario f] State is read_confirmed');
+evyAssert($firstItem['read_at_brt'] !== null, '[Scenario f] read_at_brt is recorded');
+evyAssert($firstItem['delivered_at_brt'] !== null, '[Scenario f] delivered_at_brt is recorded');
 echo "PASS Scenario f: callback delivered/read confirmado e registrado em BRT\n";
 
 // [Scenario g] submitting/unknown
@@ -473,32 +480,32 @@ $unknownItem = (object)['delivery_id' => 99, 'item_id' => 999, 'stage_id' => 1, 
     'sent_at' => null, 'accepted_at' => null, 'delivered_at' => null, 'read_at' => null, 'failed_at' => null];
 require_once __DIR__ . '/../scripts/crm-proposal-history-evidence.php';
 $evG = evyProposalItemEvidence($unknownItem);
-assert($evG['state'] === 'outcome_unknown', '[Scenario g] Status unknown/submitting preserves outcome_unknown');
-assert($evG['provider_accepted'] === false, '[Scenario g] Outcome unknown is not accepted');
+evyAssert($evG['state'] === 'outcome_unknown', '[Scenario g] Status unknown/submitting preserves outcome_unknown');
+evyAssert($evG['provider_accepted'] === false, '[Scenario g] Outcome unknown is not accepted');
 echo "PASS Scenario g: status submitting/unknown tratado como resultado incerto\n";
 
 // [Scenario h] reenvio múltiplo
-assert(count($exec['delivery_items']) === 2, '[Scenario h] Multiple delivery items preserved in chronological order');
-assert(count($modernResult['recent_events']) === 2, '[Scenario h] Recent communication events preserved');
+evyAssert(count($exec['delivery_items']) === 2, '[Scenario h] Multiple delivery items preserved in chronological order');
+evyAssert(count($modernResult['recent_events']) === 2, '[Scenario h] Recent communication events preserved');
 echo "PASS Scenario h: reenvios múltiplos preservados sem duplicar identidade\n";
 
 // [Scenario i] cliente já comprador
-assert($buyerResult['natal_2026']['purchased'] === true, '[Scenario i] purchased is true for buyer');
-assert(count($buyerResult['natal_2026']['orders']) === 1, '[Scenario i] order details attached');
-assert($buyerResult['natal_2026']['orders'][0]['order_id'] === 8881, '[Scenario i] exact order ID matches');
+evyAssert($buyerResult['natal_2026']['purchased'] === true, '[Scenario i] purchased is true for buyer');
+evyAssert(count($buyerResult['natal_2026']['orders']) === 1, '[Scenario i] order details attached');
+evyAssert($buyerResult['natal_2026']['orders'][0]['order_id'] === 8881, '[Scenario i] exact order ID matches');
 echo "PASS Scenario i: cliente com compra valida Natal 2026 reconciliado\n";
 
 // [Scenario j] execução legada sem dispatch
-assert($legacyResult !== null, '[Scenario j] Legacy execution result found');
-assert($legacyResult['executions'][0]['source'] === 'legacy_scheduled_contact', '[Scenario j] Source is legacy_scheduled_contact');
-assert($legacyResult['executions'][0]['campaign_id'] === 415, '[Scenario j] Legacy campaign ID matches');
+evyAssert($legacyResult !== null, '[Scenario j] Legacy execution result found');
+evyAssert($legacyResult['executions'][0]['source'] === 'legacy_scheduled_contact', '[Scenario j] Source is legacy_scheduled_contact');
+evyAssert($legacyResult['executions'][0]['campaign_id'] === 415, '[Scenario j] Legacy campaign ID matches');
 echo "PASS Scenario j: campanha legada sem proposal_dispatch recuperada\n";
 
 // [Scenario k] grupo proposal_group_intents.uuid ligado a dispatch.request_id
-assert($exec['source_intent'] !== null, '[Scenario k] Source intent found');
-assert($exec['source_intent']['source'] === 'zapi_group_intent', '[Scenario k] Source is zapi_group_intent');
-assert($exec['source_intent']['action'] === 'inbound_greeting', '[Scenario k] Action is inbound_greeting');
-assert($exec['source_intent']['state'] === 'matched', '[Scenario k] State is matched');
+evyAssert($exec['source_intent'] !== null, '[Scenario k] Source intent found');
+evyAssert($exec['source_intent']['source'] === 'zapi_group_intent', '[Scenario k] Source is zapi_group_intent');
+evyAssert($exec['source_intent']['action'] === 'inbound_greeting', '[Scenario k] Action is inbound_greeting');
+evyAssert($exec['source_intent']['state'] === 'matched', '[Scenario k] State is matched');
 echo "PASS Scenario k: proposal_group_intents.uuid correlacionado com request_id\n";
 
 // [Scenario l] 50 números sem N+1
@@ -506,7 +513,7 @@ $batch50 = [];
 for ($i = 10; $i < 60; $i++) {
     $batch50[] = '48991' . str_pad((string)$i, 6, '0', STR_PAD_LEFT);
 }
-assert(count($batch50) === 50, 'Batch size is 50');
+evyAssert(count($batch50) === 50, 'Batch size is 50');
 
 Capsule::connection()->enableQueryLog();
 try {
@@ -517,12 +524,12 @@ try {
     if ($e->getMessage() !== 'BATCH_DONE') throw $e;
 }
 $log50 = Capsule::connection()->getQueryLog();
-assert(count($log50) <= 12, '[Scenario l] Query count for 50 numbers is <= 12 (no N+1): found ' . count($log50));
+evyAssert(count($log50) <= 12, '[Scenario l] Query count for 50 numbers is <= 12 (no N+1): found ' . count($log50));
 echo "PASS Scenario l: lote de 50 numeros executado com " . count($log50) . " queries (sem N+1)\n";
 
 // [Scenario m] cliente sem registros
-assert($notFoundResult['proposal']['record_status'] === 'not_found_in_queried_sources', '[Scenario m] Record status is not_found_in_queried_sources');
-assert($notFoundResult['proposal']['any_campaign_message_accepted'] === false, '[Scenario m] any_campaign_message_accepted is false');
+evyAssert($notFoundResult['proposal']['record_status'] === 'not_found_in_queried_sources', '[Scenario m] Record status is not_found_in_queried_sources');
+evyAssert($notFoundResult['proposal']['any_campaign_message_accepted'] === false, '[Scenario m] any_campaign_message_accepted is false');
 echo "PASS Scenario m: cliente sem registros sinalizado como not_found_in_queried_sources (nunca 'nunca enviado')\n";
 
 // [Scenario n] permissões crm.read, sem write
@@ -540,16 +547,16 @@ try {
         $writeBlocked = true;
     }
 }
-assert($writeBlocked === true, '[Scenario n] Write statement strictly blocked by read-only guard');
+evyAssert($writeBlocked === true, '[Scenario n] Write statement strictly blocked by read-only guard');
 echo "PASS Scenario n: tentativas de escrita rigorosamente bloqueadas pela guarda READ ONLY\n";
 
 // [Scenario o] datas em BRT
-assert(str_ends_with($res['timezone'], 'America/Sao_Paulo'), '[Scenario o] Timezone matches America/Sao_Paulo');
+evyAssert(str_ends_with($res['timezone'], 'America/Sao_Paulo'), '[Scenario o] Timezone matches America/Sao_Paulo');
 echo "PASS Scenario o: datas e fuso rigorosamente em BRT (America/Sao_Paulo)\n";
 
 // [Scenario p] corte/resultado parcial
 // If batch is invalid or truncated, coverage is partial
-assert(in_array($res['coverage'], ['complete', 'partial']), '[Scenario p] Coverage flag is complete or partial');
+evyAssert(in_array($res['coverage'], ['complete', 'partial']), '[Scenario p] Coverage flag is complete or partial');
 echo "PASS Scenario p: indicador de cobertura ('complete' ou 'partial') respeitado\n";
 
 echo "\n============================================\n";
