@@ -17,6 +17,17 @@ test('conflict requires requery and cannot retry status POST',async()=>{
  const call=readyForPickupClient({baseUrl:'https://test.example',operatorToken:'synthetic-example-token-123456789',fetchFn:async()=>{count++;return new Response('{}',{status:409})}});
  await assert.rejects(call(request),/crm_malotes_conflict_refresh_required/);assert.equal(count,1);
 });
+
+test('canonical financial and state refusals retain their domain reason without another POST',async()=>{
+ for(const [code,reason]of [['FINANCIAL_NOT_VERIFIED','financial_not_verified'],['FINANCE_UNKNOWN','finance_unknown'],
+  ['STATUS_NOT_ELIGIBLE','status_not_eligible'],['HISTORY_MISSING','history_missing'],['STATUS_CONFLICT','conflict_refresh_required']]){
+  let calls=0;
+  const call=readyForPickupClient({baseUrl:'https://test.example',operatorToken:'synthetic-example-token-123456789',fetchFn:async()=>{
+   calls++;return Response.json({success:false,order_id:6002,code,changes_applied:false},{status:409});
+  }});
+  await assert.rejects(call(request),new RegExp('crm_malotes_'+reason+'$'));assert.equal(calls,1);
+ }
+});
 test('unconfirmed request does not touch the CRM',async()=>{
  let count=0;
  const call=readyForPickupClient({baseUrl:'https://test.example',operatorToken:'synthetic-example-token-123456789',fetchFn:async()=>{count++;return new Response('{}',{status:200})}});

@@ -1309,7 +1309,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
           status_key:o.status_key??null,status_label:o.status_label??null,
           status_event_id:o.status_event_id??null,
           remaining_cents:o.remaining_cents??null,
-          baixa:{eligible:blockers.length===0,already_ready:o.status_key==='waiting_product_retrieve',blockers},
+          baixa:{eligible:blockers.length===0,eligibility_provisional:true,canonical_financial_guard_required:true,
+           already_ready:o.status_key==='waiting_product_retrieve',blockers},
           impressao:{...receipt,printed_physically:false},
           print_eligible:Boolean(printer&&labelRenderEnabled&&grantedScopes.has(SCOPE_PRINT_WRITE)&&!receipt.needs_reconciliation),
           crm_order_url:o.crm_order_url??null

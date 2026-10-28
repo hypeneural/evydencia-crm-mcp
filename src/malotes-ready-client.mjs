@@ -23,7 +23,14 @@ export function readyForPickupClient({baseUrl,operatorToken,fetchFn=fetch,timeou
    if(response.redirected)fail('result_unknown');
    if([401,403].includes(response.status))fail('upstream_permission_denied');
    if(response.status===503)fail('upstream_disabled');
-   if(response.status===409)fail('conflict_refresh_required');
+   if(response.status===409){
+    // The canonical route uses 409 for domain refusals as well as a stale
+    // snapshot. Preserve its allowlisted reason without changing the guard.
+    const rejection=await response.json().catch(()=>null);
+    const reasons={FINANCIAL_NOT_VERIFIED:'financial_not_verified',FINANCE_UNKNOWN:'finance_unknown',
+     STATUS_NOT_ELIGIBLE:'status_not_eligible',HISTORY_MISSING:'history_missing',STATUS_CONFLICT:'conflict_refresh_required'};
+    fail(Object.hasOwn(reasons,rejection?.code)?reasons[rejection.code]:'conflict_refresh_required');
+   }
    if(response.status===422)fail('invalid_input');
    if(response.status>=500)fail('result_unknown');
    if(!response.ok)fail('upstream_unavailable');

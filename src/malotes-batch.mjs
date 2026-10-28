@@ -79,7 +79,7 @@ export async function processMalotes({modo,pedidos,load,markReady,printLabel,loo
      }else{
       entry.baixa='blocked';entry.baixa_reason=reason(e);
      }
-     if(entry.baixa==='blocked'&&/unknown|timeout/.test(entry.baixa_reason)){
+     if(entry.baixa==='blocked'&&/(?:result_unknown|(?:^|_)timeout)$/.test(entry.baixa_reason)){
       entry.baixa='unknown';
       // Reconcile an ambiguous commit by reading, never by a second POST.
       try{

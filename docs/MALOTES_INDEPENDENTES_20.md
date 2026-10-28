@@ -18,6 +18,11 @@ opcionais com `{order_id, modo}` para um lote misto. Retorna cliente, estado,
 evento, saldo em centavos, bloqueios exclusivos da baixa e recibo de impressão.
 As consultas são novas, inclusive depois de uma escrita. A indicação de escrita
 automática reflete a configuração e os escopos efetivos desta conexão OAuth.
+`baixa.eligible` é um pré-check provisório. O saldo resumido não substitui a
+reconciliação individual das parcelas feita pela rota canônica, que pode recusar
+financeiro inconsistente mesmo com saldo resumido zero. A recusa preserva seu
+motivo canônico (`financial_not_verified`, `finance_unknown`, estado ou conflito),
+sem modificar parcelas para contorná-la.
 
 Confirmar explicitamente todos os IDs e ações antes da execução. As ferramentas
 unitárias mantêm a mesma política das ações em lote. Para somente imprimir,

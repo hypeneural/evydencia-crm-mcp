@@ -7,6 +7,14 @@ const row=(id=7001)=>({order_id:id,status_event_id:id+100,status_key:'session_sc
 const emptyReceipt=async()=>({state:'not_requested',job:null,needs_reconciliation:false});
 const pending=[{order_id:7001,expected_status_event_id:7101}];
 
+test('a known canonical finance_unknown refusal stays blocked, rather than an ambiguous commit',async()=>{
+ let reads=0;
+ const r=await processMalotes({modo:'so_baixa',pedidos:pending,
+  load:async()=>{reads++;return {...row(),remaining_cents:0}},markReady:async()=>{throw Error('crm_malotes_finance_unknown')}});
+ assert.equal(r.results[0].baixa,'blocked');assert.equal(r.results[0].baixa_reason,'crm_malotes_finance_unknown');
+ assert.equal(reads,1);assert.equal(r.changes_applied,false);
+});
+
 test('capability negotiation uses the authenticated broker prefix on a shared MCP origin',async()=>{
  const calls=[];
  const broker=printserverClient({enabled:true,origin:'https://shared.example.test',token:'x'.repeat(48)},
