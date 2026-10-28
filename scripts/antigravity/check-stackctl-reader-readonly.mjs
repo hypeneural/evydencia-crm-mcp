@@ -28,9 +28,22 @@ export function inspectWrapper(source) {
 }
 
 function cli(argv) {
+  if (argv.length === 1 && argv[0] === '--stdin') {
+    try {
+      // SSH pipe is consumed in memory; never echo wrapper source or secrets.
+      const source = readFileSync(0, 'utf8');
+      if (!source || source.length > 128 * 1024) throw new Error('WRAPPER_INPUT_INVALID');
+      const result = inspectWrapper(source);
+      console.log(JSON.stringify(result));
+      return result.status === 'BLOCKED_WRAPPER' ? 2 : 0;
+    } catch {
+      console.error('BLOCKED_WRAPPER: no safe input; no deploy.');
+      return 2;
+    }
+  }
   if (argv.length !== 2 || argv[0] !== '--path' ||
       !argv[1].startsWith('/') || argv[1].includes('\n')) {
-    console.error('USAGE: node scripts/antigravity/check-stackctl-reader-readonly.mjs --path /usr/local/sbin/stackctl');
+    console.error('USAGE: node scripts/antigravity/check-stackctl-reader-readonly.mjs --stdin OR --path /usr/local/sbin/stackctl');
     return 2;
   }
   try {
