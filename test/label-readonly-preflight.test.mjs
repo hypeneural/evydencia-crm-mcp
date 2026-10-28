@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
+import {validateCanonicalLabel} from '../src/crm-label-render.mjs';
 
 const example='{"order_uuid":"11111111-aaaa-4111-8111-000000000101","order_id":5001}';
 const cwd=fileURLToPath(new URL('../',import.meta.url));
@@ -56,4 +57,8 @@ test('diagnostics never import broker, queue or irreversible print actions',()=>
  assert.doesNotMatch(p,/printserverClient|printer\.enqueue|crm_solicitar_impressao_etiqueta/);
  assert.match(p,/SET SESSION TRANSACTION READ ONLY/);
  assert.match(n,/renderCanonicalCrmLabel/);
+});
+
+test('validateCanonicalLabel throws code from payload error',()=>{
+ assert.throws(()=>validateCanonicalLabel({error:'crm_label_template_fallback_product_label_image_missing'},{orderUuid:'11111111-aaaa-4111-8111-000000000101',orderId:5001}),/template_fallback_product_label_image_missing/);
 });

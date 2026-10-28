@@ -58,6 +58,9 @@ try {
     $payload = app(\App\Services\OrderLabelDataResolver::class)->resolveByUuid($uuid);
     $stage = 'template_lookup';
     $template = app(\App\Services\OrderLabelTemplateResolver::class)->resolve($payload);
+    if ($template->fallbackReason !== null) {
+        throw new RuntimeException('template_fallback_' . $template->fallbackReason);
+    }
     $stage = 'dimension_guard';
     app(\App\Services\OrderLabelDimensionGuard::class)->assertWithinLimits(
         $template->widthMm, $template->heightMm, $template->dpi
@@ -68,6 +71,9 @@ try {
 
     $stage = 'service_generate';
     $result = app(\App\Services\OrderLabelService::class)->generate($uuid);
+    if ($result->context->fallbackReason !== null) {
+        throw new RuntimeException('service_fallback_' . $result->context->fallbackReason);
+    }
     $stage = 'contract';
     if ($result->mimeType !== 'image/png' ||
         $result->context->widthMm !== 100 || $result->context->heightMm !== 40 ||
@@ -79,6 +85,7 @@ try {
         'source'=>'CRM_LABEL_READONLY_PREFLIGHT','ok'=>true,'stage'=>'complete',
         'width_mm'=>$result->context->widthMm,'height_mm'=>$result->context->heightMm,
         'width_px'=>$result->widthPx,'height_px'=>$result->heightPx,
+        'render_source'=>$result->context->source,
         'png_bytes'=>$result->bytes,'sha256'=>hash('sha256',$result->content),
         'changes_applied'=>false,'print_job_created'=>false,'physical_print_verified'=>false
     ],0);

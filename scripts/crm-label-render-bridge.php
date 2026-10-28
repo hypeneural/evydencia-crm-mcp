@@ -44,6 +44,9 @@ try {
     }
     config(['cache.default' => 'array', 'logging.default' => 'null']);
     $result = app(\App\Services\OrderLabelService::class)->generate($uuid);
+    if ($result->context->fallbackReason !== null) {
+        $fail('crm_label_template_fallback_' . $result->context->fallbackReason);
+    }
     if ($result->mimeType !== 'image/png' ||
         $result->context->widthMm !== 100 ||
         $result->context->heightMm !== 40 ||
