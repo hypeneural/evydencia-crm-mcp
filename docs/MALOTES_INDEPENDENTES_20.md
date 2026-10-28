@@ -52,9 +52,12 @@ nunca um segundo POST cego. Nenhum resultado comprova entrega de WhatsApp.
 ## Retomada durável
 
 Os eventos CRM e os recibos do broker são as fontes, sem ledger/migration novo
-no CRM. Antes de cada impressão, conferir capacidades do broker e consultar
+no CRM. Antes de cada impressão, conferir capacidades do broker em
+`GET /v1/capabilities` autenticado e consultar
 `GET /v1/orders/{order_id}/label-job` autenticado. Falhar fechado com broker
 antigo, recibo divergente, estado incerto ou tombstone sem recibo.
+O prefixo `/v1` é necessário quando MCP e broker compartilham o domínio:
+o `/healthz` público pode pertencer ao MCP e não comprova capacidades do broker.
 
 Um pedido já em status10 não recebe outra transição/aviso, mesmo com a prévia
 antiga. `queued`, `claimed` ou `spooled` conhecidos reutilizam o mesmo trabalho.

@@ -41,8 +41,9 @@ export function printserverClient(cfg,{fetchFn=fetch,timeoutMs=12000}={}){
  return Object.freeze({
   enqueue:data=>send('/v1/jobs','POST',data),
   capabilities:async()=>{
-   const r=await send('/healthz','GET');
-   if(r?.capabilities?.independent_order_labels!==true||r?.capabilities?.order_label_receipts!==true)
+   // The public origin may also host MCP. Only /v1 is routed to the broker.
+   const r=await send('/v1/capabilities','GET');
+   if(r?.service!=='evydencia-printserver'||r?.capabilities?.independent_order_labels!==true||r?.capabilities?.order_label_receipts!==true)
     throw Error('printserver_independent_labels_unavailable');
    return r.capabilities;
   },

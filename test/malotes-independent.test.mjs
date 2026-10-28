@@ -7,6 +7,21 @@ const row=(id=7001)=>({order_id:id,status_event_id:id+100,status_key:'session_sc
 const emptyReceipt=async()=>({state:'not_requested',job:null,needs_reconciliation:false});
 const pending=[{order_id:7001,expected_status_event_id:7101}];
 
+test('capability negotiation uses the authenticated broker prefix on a shared MCP origin',async()=>{
+ const calls=[];
+ const broker=printserverClient({enabled:true,origin:'https://shared.example.test',token:'x'.repeat(48)},
+  {fetchFn:async(url,opt)=>{
+   calls.push({url,method:opt.method,authorization:opt.headers.Authorization});
+   if(url==='https://shared.example.test/healthz')return Response.json({ok:true,service:'evydencia-crm-mcp-live'});
+   if(url==='https://shared.example.test/v1/capabilities')return Response.json({service:'evydencia-printserver',capabilities:{independent_order_labels:true,order_label_receipts:true}});
+   throw Error('unexpected_path');
+  }});
+ assert.deepEqual(await broker.capabilities(),{independent_order_labels:true,order_label_receipts:true});
+ assert.equal(calls.length,1);assert.equal(calls[0].method,'GET');
+ assert.equal(calls[0].url,'https://shared.example.test/v1/capabilities');
+ assert.equal(calls[0].authorization,'Bearer '+'x'.repeat(48));
+});
+
 test('a canonical committed status/event remains proven when its subsequent refresh times out',async()=>{
  let reads=0;
  const r=await processMalotes({modo:'so_baixa',pedidos:pending,

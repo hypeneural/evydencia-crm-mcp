@@ -32,7 +32,7 @@ const call=(g,path,init={},host='localhost')=>g.handle(new Request(new URL(path,
 const form=o=>({method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o).toString()});
 const env1=data=>JSON.stringify({schema_version:'1.0',generated_at:new Date(clock).toISOString(),data});
 const brokerReadFixture=url=>{
- if(String(url)==='https://print.example.test/healthz')return Response.json({capabilities:{independent_order_labels:true,order_label_receipts:true}});
+ if(String(url)==='https://print.example.test/v1/capabilities')return Response.json({service:'evydencia-printserver',capabilities:{independent_order_labels:true,order_label_receipts:true}});
  const match=/^https:\/\/print\.example\.test\/v1\/orders\/(\d+)\/label-job$/.exec(String(url));
  if(match)return Response.json({order_id:Number(match[1]),state:'not_requested',job:null,needs_reconciliation:false});
  return null;
@@ -685,7 +685,8 @@ function independentMalotesFixture({brokerAuthorized=true,brokerCompatible=true,
   const u=new URL(String(input));
   if(u.origin==='https://print.example.test'){
    if(!brokerAuthorized)return json({error:'unauthorized'},{status:401});
-   if(u.pathname==='/healthz')return json({capabilities:brokerCompatible?{independent_order_labels:true,order_label_receipts:true}:{}});
+   if(u.pathname==='/healthz')return json({service:'evydencia-crm-mcp-live',ok:true});
+   if(u.pathname==='/v1/capabilities')return json({service:'evydencia-printserver',capabilities:brokerCompatible?{independent_order_labels:true,order_label_receipts:true}:{}});
    const match=/^\/v1\/orders\/(\d+)\/label-job$/.exec(u.pathname);
    if(match){const id=Number(match[1]);reads.push('receipt:'+id);return json(receipts.get(id)||{order_id:id,state:'not_requested',job:null,needs_reconciliation:false})}
    if(u.pathname==='/v1/jobs'&&opt.method==='POST'){
