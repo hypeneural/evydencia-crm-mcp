@@ -23,7 +23,13 @@ declare(strict_types=1);
  * p) corte/resultado parcial
  */
 
-require 'C:/Projetos/hypeneural/evydencia-crm/vendor/autoload.php';
+$crmAppPath = getenv('EVYD_CRM_APP_PATH') ?: dirname(__DIR__, 2) . '/evydencia-crm';
+$crmAutoload = rtrim($crmAppPath, '/\\') . '/vendor/autoload.php';
+if (!is_file($crmAutoload)) {
+    fwrite(STDERR, "CRM Laravel vendor/autoload.php indisponivel; configure EVYD_CRM_APP_PATH.\n");
+    exit(2);
+}
+require $crmAutoload;
 
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Container\Container;
