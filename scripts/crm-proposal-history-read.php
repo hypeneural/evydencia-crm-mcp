@@ -75,6 +75,8 @@ $truncated = [];
 
 $dispatchRows = $DB::table('proposal_dispatches as pd')
     ->where('pd.proposal_flow_id', (int) $flow->id)
+    ->where('pd.created_at', '>=', '2026-01-01 00:00:00')
+    ->where('pd.created_at', '<', '2027-01-01 00:00:00')
     ->whereIn('pd.phone_lookup_hash', $hashes)
     ->orderByDesc('pd.created_at')->orderByDesc('pd.id')
     ->limit($maxRecords + 1)
@@ -99,6 +101,16 @@ $legacyRows = $DB::table('campaign_scheduled_contacts as cc')
             ->orWhere(function ($season) {
                 $season->where('cs.suppression_snapshot->natal_proposal', true)
                     ->where('cs.suppression_scope_key', 'natal:2026');
+            });
+    })
+    // A historical contact must belong to the 2026 season; never let a
+    // reused campaign ID or an unrelated year prove a Natal 2026 dispatch.
+    ->where(function ($season) {
+        $season->where('cs.suppression_scope_key', 'natal:2026')
+            ->orWhere(function ($undated) {
+                $undated->whereNull('cs.suppression_scope_key')
+                    ->where('cs.created_at', '>=', '2026-01-01 00:00:00')
+                    ->where('cs.created_at', '<', '2027-01-01 00:00:00');
             });
     })
     ->where(function ($q) {
@@ -354,6 +366,10 @@ foreach ($groups as $canonical => $group) {
             'activity_url' => route('manager.campaign.scheduled.detail', $legacy->campaign_scheduled_id)];
     }
     $anyAccepted = false;
+    $phoneAcceptedExact = false;
+    $phoneAcceptedLegacy = false;
+    $phoneRecipientUnverified = false;
+    $phoneRecipientMismatch = false;
     $initialAccepted = false;
     $initialKnown = false;
     $firstAcceptedAt = null;
@@ -374,6 +390,15 @@ foreach ($groups as $canonical => $group) {
         $deliveryItems = [];
         foreach ($deliveriesByContact->get($cid, collect()) as $raw) {
             $item = evyProposalItemEvidence($raw);
+            // A campaign contact is not proof of the actual provider recipient.
+            // Validate the channel and concrete provider_recipient independently.
+            $itemChannel = strtolower((string) ($item['channel'] ?? ''));
+            $isPhoneChannel = in_array($itemChannel, ['whatsapp', 'sms', 'voip', 'voice'], true);
+            $providerRecipient = trim((string) ($raw->provider_recipient ?? ''));
+            $recipientMatch = evyProposalRecipientMatch($providerRecipient, $itemChannel, $group);
+            $item['recipient_match'] = $recipientMatch;
+            $item['recipient_phone_confirmed_exact'] = $isPhoneChannel && $recipientMatch === 'exact' && $item['provider_accepted'];
+            $item['recipient_phone_legacy_candidate'] = $isPhoneChannel && $recipientMatch === 'legacy_variant' && $item['provider_accepted'];
             $item['provider_attempts'] = $raw->item_id
                 ? $attemptsByItem->get((int) $raw->item_id, collect())->take(5)->map(static fn ($attempt) => [
                     'attempt_number' => (int) $attempt->attempt_number,
@@ -382,7 +407,13 @@ foreach ($groups as $canonical => $group) {
                     'attempted_at_brt' => formatBrt($attempt->created_at),
                 ])->values()->all() : [];
             $deliveryItems[] = $item;
-            if ($item['provider_accepted']) {
+            if ($isPhoneChannel && $item['provider_accepted']) {
+                $phoneAcceptedExact = $phoneAcceptedExact || $recipientMatch === 'exact';
+                $phoneAcceptedLegacy = $phoneAcceptedLegacy || $recipientMatch === 'legacy_variant';
+                $phoneRecipientUnverified = $phoneRecipientUnverified || in_array($recipientMatch, ['not_recorded', 'unverifiable'], true);
+                $phoneRecipientMismatch = $phoneRecipientMismatch || $recipientMatch === 'mismatch';
+            }
+            if ($item['provider_accepted'] && !in_array($recipientMatch, ['mismatch', 'unverifiable'], true)) {
                 $anyAccepted = true;
                 if ($initialStage !== null && $item['stage_id'] === (int) $initialStage && $item['channel'] === 'whatsapp') {
                     $initialAccepted = true;
@@ -394,6 +425,7 @@ foreach ($groups as $canonical => $group) {
         $execution['delivery_items_count'] = count($deliveryItems);
         $execution['delivery_items'] = array_slice($deliveryItems, 0, $perContactLimit);
         $execution['delivery_items_truncated'] = count($deliveryItems) > $perContactLimit;
+        if ($execution['delivery_items_truncated']) $truncated[] = 'per_contact_delivery_history';
         foreach ($eventsByContact->get($cid, collect())->take($perContactLimit) as $event) {
             $eventsOut[] = ['id' => (int) $event->id, 'contact_id' => $cid,
                 'stage_id' => $event->campaign_stage_id ? (int) $event->campaign_stage_id : null,
@@ -417,6 +449,10 @@ foreach ($groups as $canonical => $group) {
             'source' => $purchaseAvailable ? 'NatalValidOrdersQuery' : 'unavailable'],
         'proposal' => ['record_status' => count($executions) ? 'found' : ($truncated ? 'not_verified_partial_coverage' : 'not_found_in_queried_sources'),
             'any_campaign_message_accepted' => $anyAccepted ? true : ($truncated ? null : false),
+            'phone_recipient_exact_accepted' => $phoneAcceptedExact,
+            'phone_recipient_legacy_candidate_accepted' => $phoneAcceptedLegacy,
+            'phone_recipient_unverified' => $phoneRecipientUnverified,
+            'phone_recipient_mismatch_detected' => $phoneRecipientMismatch,
             'initial_whatsapp_accepted' => $initialAccepted ? true : ($initialKnown && !$truncated ? false : null),
             'first_accepted_at_brt' => $firstAcceptedAt,
             'execution_count' => count($executions),
@@ -425,6 +461,7 @@ foreach ($groups as $canonical => $group) {
         'recent_events' => array_slice($eventsOut, 0, $perContactLimit),
         'recent_events_has_more' => count($eventsOut) > $perContactLimit,
     ];
+    if (count($eventsOut) > $perContactLimit) $truncated[] = 'per_contact_event_history';
 }
 
 emitForensicJson([
