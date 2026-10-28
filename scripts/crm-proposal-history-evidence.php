@@ -25,3 +25,22 @@ function evyProposalItemEvidence(object $item): array
         'failed_at_brt' => formatBrt($item->failed_at)];
 }
 
+/**
+ * Validate the concrete provider recipient independently from the campaign contact.
+ * Without a recorded recipient the provider receipt remains attached to the
+ * campaign execution, but DOES NOT confirm this phone number.
+ */
+function evyProposalRecipientMatch(mixed $providerRecipient, string $channel, array $group): string
+{
+    if (!in_array(strtolower($channel), ['whatsapp', 'sms', 'voip', 'voice'], true)) {
+        return 'not_phone_channel';
+    }
+    $recipient = trim((string) $providerRecipient);
+    if ($recipient === '') return 'not_recorded';
+    $recipient = preg_replace('/@(?:c\\.us|s\\.whatsapp\\.net)$/i', '', $recipient);
+    $parsed = evyProposalPhoneVariants($recipient);
+    $e164 = $parsed['input_e164'] ?? null;
+    if ($e164 === null) return 'unverifiable';
+    if ($e164 === ($group['input_e164'] ?? null)) return 'exact';
+    return in_array($e164, $group['variants_e164'] ?? [], true) ? 'legacy_variant' : 'mismatch';
+}
