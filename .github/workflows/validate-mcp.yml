@@ -17,6 +17,8 @@ jobs:
           cache: npm
       - name: Install immutable dependencies
         run: npm ci --ignore-scripts
+      - name: PHP read-only bridge syntax
+        run: php -l scripts/crm-natal-bridge.php
       - name: Offline MCP and VPS validation
         run: npm run validate:local
       - name: Check Docker build inputs

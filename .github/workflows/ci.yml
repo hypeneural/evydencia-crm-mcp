@@ -32,6 +32,7 @@ jobs:
           command -v php
           php -l tools/export-natal-digest.php
           php -l scripts/crm-label-render-bridge.php
+          php -l scripts/crm-natal-bridge.php
           php -l scripts/crm-label-synthetic-fixture.php
           php tools/export-natal-digest.php --help
           # Guard must reject a missing CRM root and never create a JSON output.
