@@ -44,6 +44,12 @@ export function gameplayOrderStatus(order, gameplay) {
   // A published capability URL is not evidence of sending it via WhatsApp/SMS.
   // No canonical, order-bound CRM/Z-API delivery receipt is available in this
   // read-only contract. Never report `not_sent` without such evidence.
+  // The main address is the game hub; individual game URLs require a game ID.
+  // Customer-facing links are capability URLs, never a static public slug.
+  customer_links_status:gameplay.hub_url&&gameplay.gallery_url?'available':'not_available',
+  main_url:gameplay.hub_url??null,
+  games_url:gameplay.hub_url??null,
+  gallery_url:gameplay.gallery_url??null,
   link_delivery_status:'not_verified',
   link_sent_confirmed:null,
   link_opened_confirmed:null,
