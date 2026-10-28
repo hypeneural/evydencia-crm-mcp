@@ -44,7 +44,7 @@ try {
             throw new RuntimeException('readonly_guard_rejected_query');
         }
     });
-    config(['cache.default'=>'array']);
+    config(['cache.default'=>'array', 'logging.default'=>'null']);
 
     $stage = 'extensions';
     if (!extension_loaded('gd') || !extension_loaded('pdo_mysql')) {

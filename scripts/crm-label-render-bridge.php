@@ -42,7 +42,7 @@ try {
             }
         });
     }
-    config(['cache.default' => 'array']);
+    config(['cache.default' => 'array', 'logging.default' => 'null']);
     $result = app(\App\Services\OrderLabelService::class)->generate($uuid);
     if ($result->mimeType !== 'image/png' ||
         $result->context->widthMm !== 100 ||
