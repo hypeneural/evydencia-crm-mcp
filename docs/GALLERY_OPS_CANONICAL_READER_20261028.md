@@ -27,6 +27,9 @@ Contrato de saída:
     "order_id": 1001,
     "order_uuid": "11111111-1111-4111-8111-111111111111",
     "customer_name": "Família SINTÉTICA",
+    "customer_whatsapp": "5548999000000",
+    "customer_phone": null,
+    "customer_email": "familia.sintetica@example.invalid",
     "package_name": "Pacote exemplo",
     "status_key": "session_schedule",
     "created_at": "2026-10-20T12:00:00-03:00",
@@ -37,7 +40,7 @@ Contrato de saída:
 }
 ```
 
-Nenhum telefone, e-mail, participantes, documento, dados financeiros, URI capability ou mídia entra na projeção. Os nomes são PII administrativa, portanto não usar cache compartilhado, CDN ou respostas públicas.
+Na projeção administrativa entram **nome, WhatsApp, telefone alternativo e e-mail do titular cadastrado**, sujeitos a autenticação e autorização do gestor. Não entram CPF, crianças/participantes, endereço, dados bancários, URL capability ou mídia. Não registrar dados nominais em logs. Os nomes são PII administrativa, portanto não usar cache compartilhado, CDN ou respostas públicas.
 
 ## Serviço interno dedicado
 
