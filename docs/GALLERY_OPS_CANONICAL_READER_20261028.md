@@ -63,3 +63,9 @@ npm test
 Canário real: autenticação no BFF do Gameplay, consulta de todas as páginas e paridade pelo **mesmo asOf**, 401 sem Bearer no endpoint local, nenhuma rota pública do reader, 404 de ordem não elegível, logs sem PII, rollback = parar APENAS o processo `gallery-ops-reader`. Sem fazer deploy do gateway MCP principal.
 
 **Estado:** implementação de código para PR Draft. Não prova acesso real, servidor ativo ou paridade LIVE até execução explícita.
+
+## Ampliação autorizada de identificação dos clientes
+
+O modo privado de Gallery Ops inclui também `customer_whatsapp` (preferencialmente normalizado em `whatsapp_e164`), `customer_phone` e `customer_email`, derivados da mesma linha do titular em `customers`. O cliente e o pedido devem continuar vinculados por `o.customer_id=c.id`. Esses campos são PII **somente para gestor autenticado**, nunca disponíveis em MCP público, logs de subprocesso ou leitor de catálogo. Sem CPF, endereço, datas de nascimento ou participantes. A UI usa contatos para localizar pedidos, não para disparar WhatsApp.
+
+A data de criação do pedido é interpretada com o timezone efetivo `config('app.timezone')` do Laravel antes da apresentação em America/Sao_Paulo, sem impor UTC a timestamps do banco.
