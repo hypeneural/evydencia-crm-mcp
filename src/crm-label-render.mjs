@@ -46,7 +46,17 @@ export async function renderCanonicalCrmLabel({orderUuid,orderId,env=process.env
   });
   child.on('close',code=>{
    if(closed)return;
-   if(code!==0){finish(err('render_unavailable'));return}
+   if(code!==0){
+    try{
+     const parsed=JSON.parse(stdout);
+     if(parsed?.error && typeof parsed.error==='string'){
+      finish(err(parsed.error.replace(/^crm_label_/,'')));
+      return;
+     }
+    }catch{}
+    finish(err('render_unavailable'));
+    return;
+   }
    try{finish(null,validateCanonicalLabel(JSON.parse(stdout),{orderUuid,orderId}))}
    catch{finish(err('invalid_render_contract'))}
   });
