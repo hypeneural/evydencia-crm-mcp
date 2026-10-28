@@ -1,6 +1,13 @@
 // Serial per-order saga. CRM status commits before print enqueue.
 // Never claims cross-system atomicity; errors/ambiguous outcomes stay per-order.
 const ALLOWED_MODES=new Set(['so_baixa','so_imprime','baixa_e_imprime']);
+/** Authorization is action-specific; checking both scopes for a one-action
+ * request needlessly grants privilege. Neither tool metadata nor UI is an
+ * authorization boundary. The gateway checks these requirements server-side. */
+export function requiredMalotesModeScopes(modo){
+ if(!ALLOWED_MODES.has(modo))throw Error('malotes_invalid_batch_mode');
+ return Object.freeze({requiresReady:modo!=='so_imprime',requiresPrint:modo!=='so_baixa'});
+}
 export async function processMalotes({modo,pedidos,load,markReady,printLabel}){
  if(!ALLOWED_MODES.has(modo)||!Array.isArray(pedidos)||pedidos.length<1||pedidos.length>20)
   throw Error('malotes_invalid_batch');
