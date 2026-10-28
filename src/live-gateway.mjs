@@ -15,6 +15,7 @@ import {legacyReadClient} from './legacy-api-read.mjs';
 import {createGameplayReadClient,probeGameplayPrivateAccess} from './gameplay-read-client.mjs';
 import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus,gameplayAuditEligibleStatuses} from './gameplay-order-status.mjs';
 import {lookupGameplayWithCustomerLinks} from './gameplay-links.mjs';
+import {paginatePublishedFamilies} from './gameplay-family-inventory.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
@@ -950,13 +951,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       map.set(row.crm_order_uuid,row);
      }
     }
-    const published=orders.filter(o=>{
-     const uuid=String(o.order_uuid||o.uuid).toLowerCase();
-     const row=map.get(uuid);
-     if(!row)throw Error('gameplay_contract_invalid');
-     return row.state==='published_unverified';
-    }).sort((a,b)=>Number(b.order_id)-Number(a.order_id));
-    const start=(pagina-1)*por_pagina,chosen=published.slice(start,start+por_pagina);
+    const {orders:chosen,total:availableCount,pagination}=paginatePublishedFamilies(
+     orders,map,{pagina,por_pagina});
     const entries=[];
     // Bound concurrent capability requests, never issue tokens in a batch
     // metadata endpoint. OAuth operator access is checked by the gateway.
@@ -982,9 +978,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     }
     return {source:'crm_gameplay_join',year:2026,
      population:'all_2026_natal_crm_orders_including_cancelled',
-     total_crm_orders:orders.length,total_disponiveis:published.length,
-     pagination:{page:pagina,per_page:por_pagina,total_matching:published.length,
-      has_more:start+por_pagina<published.length},orders:entries};
+     total_crm_orders:orders.length,total_disponiveis:availableCount,
+     pagination,orders:entries};
    });
   reg('crm_gameplay_auditoria','Pendências de galeria e jogos Natal 2026',
    'Cruza Natal 2026 e Gameplay por UUID. Com status_atual=todos (padrão) audita status 10 e 12; use waiting_product_retrieve ou order_completed para um deles. Conta sessões, publicações e fotos publicadas/em preparação. ENVIO: sem recibo CRM por pedido o estado é not_verified, NÃO not_sent. Para incluir publicados use incluir_publicados=true. Não prova runtime Phaser nem devolve URLs capability em lote.',
