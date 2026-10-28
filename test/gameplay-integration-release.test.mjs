@@ -69,7 +69,7 @@ test('bad private bearer response cannot be mistaken for ready',async()=>{
  await assert.rejects(verifyPrivateReader({secret:SECRET,fetchFn:fake.fetchFn}),/SIDE_AUTHORIZED_BATCH_HTTP_403/);
 });
 test('the integration branch preserves PrintServer and malotes exports next to Gameplay',()=>{
- assert.deepEqual([...GAMEPLAY_CRM_TOOL_NAMES],['crm_gameplay_links','crm_gameplay_auditoria']);
+ assert.deepEqual([...GAMEPLAY_CRM_TOOL_NAMES],['crm_gameplay_links','crm_gameplay_auditoria','crm_gameplay_galerias_disponiveis']);
  assert.deepEqual([...PRINTSERVER_TOOL_NAMES],[
   'crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta'
  ]);
