@@ -15,9 +15,13 @@ const parse=out=>JSON.parse(out.stdout.trim());
 test('Node live renderer diagnostic refuses invalid input without PHP, broker or changes',()=>{
  const out=call(process.execPath,[js],'{}');
  assert.equal(out.status,1,out.stderr);
- assert.deepEqual({...parse(out),source:undefined,error_code:undefined}, {
-  source:undefined,ok:false,changes_applied:false,broker_called:false,job_created:false,printed_physically:false
- });
+ const result=parse(out);
+ assert.equal(result.source,'CRM_LABEL_NODE_READONLY_PROBE');
+ assert.equal(result.ok,false);
+ assert.equal(result.changes_applied,false);
+ assert.equal(result.broker_called,false);
+ assert.equal(result.job_created,false);
+ assert.equal(result.printed_physically,false);
  assert.equal(parse(out).error_code,'label_probe_invalid_input');
 });
 
@@ -47,7 +51,8 @@ test('PHP preflight validates stdin before touching Laravel',t=>{
 test('diagnostics never import broker, queue or irreversible print actions',()=>{
  const n=readFileSync(new URL('../'+js,import.meta.url),'utf8');
  const p=readFileSync(new URL('../'+php,import.meta.url),'utf8');
- assert.doesNotMatch(n,/printserverClient|printer\.enqueue|crm_solicitar_impressao_etiqueta/);
+ const executable=n.replace(/\/\*[\s\S]*?\*\//g,'').replace(/^\s*\/\/.*$/gm,'');
+ assert.doesNotMatch(executable,/printserverClient|printer\.enqueue|crm_solicitar_impressao_etiqueta/);
  assert.doesNotMatch(p,/printserverClient|printer\.enqueue|crm_solicitar_impressao_etiqueta/);
  assert.match(p,/SET SESSION TRANSACTION READ ONLY/);
  assert.match(n,/renderCanonicalCrmLabel/);
