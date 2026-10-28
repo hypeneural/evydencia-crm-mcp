@@ -426,7 +426,9 @@ foreach ($groups as $canonical => $group) {
         $execution['delivery_items'] = array_slice($deliveryItems, 0, $perContactLimit);
         $execution['delivery_items_truncated'] = count($deliveryItems) > $perContactLimit;
         if ($execution['delivery_items_truncated']) $truncated[] = 'per_contact_delivery_history';
-        foreach ($eventsByContact->get($cid, collect())->take($perContactLimit) as $event) {
+        $contactEvents = $eventsByContact->get($cid, collect());
+        if ($contactEvents->count() > $perContactLimit) $truncated[] = 'per_contact_event_history';
+        foreach ($contactEvents->take($perContactLimit) as $event) {
             $eventsOut[] = ['id' => (int) $event->id, 'contact_id' => $cid,
                 'stage_id' => $event->campaign_stage_id ? (int) $event->campaign_stage_id : null,
                 'delivery_item_id' => $event->delivery_item_id ? (int) $event->delivery_item_id : null,
