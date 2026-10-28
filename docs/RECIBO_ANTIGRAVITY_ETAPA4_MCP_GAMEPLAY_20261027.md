@@ -18,7 +18,7 @@
 - MCP: `ee93ea8407aa7e4435870b1d7a71a7329c903ce4` (auditoria Compose), `5c532c0750df99b04de107a8e089deab695b1699` (testes), `1984ddd554a442fcd4e6ea9e19f3b55a3e20dbdc` (inspeção stackctl), `d0b8dad334ce8bf3b4384ddb05c71d0b0fa94b77` (SSH por stdin), `9179eb16989236bb169d69cc305dc39e2a74e415` (adendo do runbook). O SHA definitivo deve ser lido no remoto ANTES de execução e registrado pelo Antigravity.
 - Gameplay: `dd9788e196a549c955378ea6a3e45c88ae8f818a` (regressão de quantidade de mounts), após corrigir falha de Prettier no primeiro candidato.
 
-**CI observado via GitHub:** MCP `9179eb1` teve `Validate MCP` = **SUCCESS** e `MCP validation` = **SUCCESS**. Gameplay HEAD `dd9788e` foi submetido ao CI; registrar o resultado FINAL atual antes do preflight. Os runs mais antigos, mesmo verdes, **não substituem** CI do HEAD final. Testes locais no Avell: **NÃO_EXECUTADOS NESTA AUDITORIA**. Nenhuma alegação de `pnpm release:verify` no novo commit sem recibo.
+**CI observado via GitHub:** MCP `9179eb1` teve `Validate MCP` = **SUCCESS** e `MCP validation` = **SUCCESS**. Gameplay HEAD `dd9788e` teve **CI SUCCESS** no [run #40609037075](https://github.com/hypeneural/gameplay/actions/runs/40609037075): jobs `Quality Gates & Build` e `Gallery mobile E2E` concluídos com sucesso. O bundle gerado no Avell para esse SHA ainda precisa de recibo local. Os runs mais antigos, mesmo verdes, **não substituem** CI do HEAD final. Testes locais no Avell: **NÃO_EXECUTADOS NESTA AUDITORIA**. Nenhuma alegação de `pnpm release:verify` no novo commit sem recibo.
 
 ## 2. Revisão de código e principais achados
 
@@ -116,7 +116,7 @@ histórico não torna a PR #14 implantada.
 |---|---|---|
 | Branch MCP, 35 tools e CI no SHA `9179eb1` | **CÓDIGO / CI PASS** | fonte/PR auditadas; dois workflows verdes; ferramentas PrintServer/Z-API/OAuth não modificadas |
 | Gameplay separação YAML de releases | **FONTE PROVADA** | `CATALOG_READER_RELEASE_DIR` em 3 montagens privadas; `RELEASE_DIR` preservada no público |
-| Gameplay CI HEAD final e release manifesto | **REVALIDAR** | consultar workflow do SHA novo e `release:verify` local do Antigravity |
+| Gameplay CI HEAD `dd9788e` | **PASS** | CI #40609037075: Quality Gates & Build e Gallery mobile E2E verdes; release manifesto local ainda pendente |
 | Docker Compose renderizado com ambiente sintético | **NÃO_PROVADO** | script criado, falta executar onde Docker Compose existe |
 | `stackctl` real e isolamento de um único serviço | **BLOCKED_WRAPPER** | fonte real/dry-run não inspecionados nesta rodada |
 | SQLite restore/integridade/blobs/rollback | **NÃO_PROVADO** | issue #44 aberta; não restaurar LIVE |
