@@ -365,7 +365,9 @@ if ($mode === 'gallery.ops.valid_orders') {
         ->orderBy('o.id')
         ->limit($galleryLimit + 1)
         ->select('o.id as order_id', 'o.uuid as order_uuid', 'c.name as customer_name',
-            'current_status.status as status_key', 'o.created_at', 'o.schedule_1')
+            'current_status.status as status_key', 'o.created_at', 'o.schedule_1',
+            'c.whatsapp as customer_whatsapp', 'c.whatsapp_e164 as customer_whatsapp_e164',
+            'c.phone as customer_phone', 'c.email as customer_email')
         ->get();
     $hasMore = $pageRecords->count() > $galleryLimit;
     $pageRecords = $pageRecords->take($galleryLimit);
@@ -389,14 +391,20 @@ if ($mode === 'gallery.ops.valid_orders') {
     $out = [];
     foreach ($pageRecords as $record) {
         $orderId = (int) $record->order_id;
+        $wa = trim((string) ($record->customer_whatsapp_e164 ?: $record->customer_whatsapp ?: ''));
+        $phone = trim((string) ($record->customer_phone ?? ''));
+        $email = trim((string) ($record->customer_email ?? ''));
         $out[] = [
             'order_id' => $orderId,
             'order_uuid' => (string) $record->order_uuid,
             'customer_name' => trim((string) $record->customer_name),
+            'customer_whatsapp' => $wa !== '' ? $wa : null,
+            'customer_phone' => $phone !== '' ? $phone : null,
+            'customer_email' => $email !== '' ? $email : null,
             'package_name' => $packages[$orderId] ?? null,
             'status_key' => (string) $record->status_key,
             'created_at' => $record->created_at
-                ? CarbonImmutable::parse((string) $record->created_at, 'UTC')->setTimezone('America/Sao_Paulo')->toIso8601String()
+                ? CarbonImmutable::parse((string) $record->created_at, config('app.timezone', 'America/Sao_Paulo'))->setTimezone('America/Sao_Paulo')->toIso8601String()
                 : null,
             'session_at' => $record->schedule_1
                 ? CarbonImmutable::parse((string) $record->schedule_1, 'America/Sao_Paulo')->toIso8601String()
