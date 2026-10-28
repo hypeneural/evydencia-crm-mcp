@@ -327,6 +327,97 @@ $includeFullPii = !empty($opts['include_full_pii']);
 $page = min(50, max(1, (int) ($opts['page'] ?? 1)));
 $limit = min(50, max(1, (int) ($opts['limit'] ?? 15)));
 
+// Gallery Ops has its own narrow, read-only mode. It reuses the canonical Laravel
+// query rather than inferring validity from product slug or numeric status.
+if ($mode === 'gallery.ops.valid_orders') {
+    $asOfRaw = (string) ($opts['as_of'] ?? '');
+    if ($asOfRaw !== '' && !preg_match('/^2026-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/', $asOfRaw)) {
+        echo json_encode(['error' => 'gallery_ops_invalid_as_of']);
+        exit(3);
+    }
+    try {
+        $asOf = $asOfRaw !== '' ? CarbonImmutable::parse($asOfRaw)->setTimezone('America/Sao_Paulo') : $now;
+    } catch (Throwable) {
+        echo json_encode(['error' => 'gallery_ops_invalid_as_of']);
+        exit(3);
+    }
+    if ($asOf->year !== 2026 || $asOf->greaterThan($now)) {
+        echo json_encode(['error' => 'gallery_ops_invalid_as_of']);
+        exit(3);
+    }
+    $afterId = filter_var($opts['after_id'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+    if ($afterId === false || !is_int($afterId)) {
+        echo json_encode(['error' => 'gallery_ops_invalid_cursor']);
+        exit(3);
+    }
+    $galleryLimit = filter_var($opts['limit'] ?? 100, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 200]]);
+    if ($galleryLimit === false || !is_int($galleryLimit)) {
+        echo json_encode(['error' => 'gallery_ops_invalid_limit']);
+        exit(3);
+    }
+    $start = CarbonImmutable::parse('2026-01-01 00:00:00', 'America/Sao_Paulo');
+    $end = $start->addYear();
+    $canonical = $validQuery->validNatalOrders($asOf, $start, $end, 'natal');
+    $totalValid = (clone $canonical)->count('o.id');
+    $pageRecords = (clone $canonical)
+        ->join('customers as c', 'c.id', '=', 'o.customer_id')
+        ->where('o.id', '>', $afterId)
+        ->orderBy('o.id')
+        ->limit($galleryLimit + 1)
+        ->select('o.id as order_id', 'o.uuid as order_uuid', 'c.name as customer_name',
+            'current_status.status as status_key', 'o.created_at', 'o.schedule_1')
+        ->get();
+    $hasMore = $pageRecords->count() > $galleryLimit;
+    $pageRecords = $pageRecords->take($galleryLimit);
+    $ids = $pageRecords->pluck('order_id')->map(static fn ($id) => (int) $id)->all();
+    $packages = [];
+    if ($ids !== []) {
+        $items = DB::table('orders_items as oi')
+            ->join('products as p', 'p.id', '=', 'oi.product_id')
+            ->whereIn('oi.order_id', $ids)
+            ->orderByRaw("CASE WHEN p.slug = 'natal' AND p.bundle = 'Y' THEN 0 WHEN p.slug = 'natal' THEN 1 ELSE 2 END")
+            ->orderBy('oi.id')
+            ->select('oi.order_id', 'p.name')
+            ->get();
+        foreach ($items as $it) {
+            $id = (int) $it->order_id;
+            if (!isset($packages[$id]) && trim((string) $it->name) !== '') {
+                $packages[$id] = (string) $it->name;
+            }
+        }
+    }
+    $out = [];
+    foreach ($pageRecords as $record) {
+        $orderId = (int) $record->order_id;
+        $out[] = [
+            'order_id' => $orderId,
+            'order_uuid' => (string) $record->order_uuid,
+            'customer_name' => trim((string) $record->customer_name),
+            'package_name' => $packages[$orderId] ?? null,
+            'status_key' => (string) $record->status_key,
+            'created_at' => $record->created_at
+                ? CarbonImmutable::parse((string) $record->created_at, 'UTC')->setTimezone('America/Sao_Paulo')->toIso8601String()
+                : null,
+            'session_at' => $record->schedule_1
+                ? CarbonImmutable::parse((string) $record->schedule_1, 'America/Sao_Paulo')->toIso8601String()
+                : null,
+        ];
+    }
+    $next = $hasMore && $out !== [] ? $out[count($out) - 1]['order_id'] : null;
+    echo json_encode([
+        'schema_version' => 1,
+        'source' => 'crm_canonical_valid_natal_orders',
+        'year' => 2026,
+        'as_of' => $asOf->toIso8601String(),
+        'total_valid' => (int) $totalValid,
+        'items' => $out,
+        'next_cursor' => $next,
+        'has_more' => $hasMore,
+        'bridge_telemetry' => nbBuildBridgeTelemetry($bridgeStartedMs, $activeCacheMode),
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    exit(0);
+}
+
 $explicitCompletedStatuses = defined(NatalValidOrdersQuery::class . '::EXPLICIT_COMPLETED_SESSION_STATUS_KEYS')
     ? NatalValidOrdersQuery::EXPLICIT_COMPLETED_SESSION_STATUS_KEYS
     : [
