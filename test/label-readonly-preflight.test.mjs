@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 
 const example='{"order_uuid":"11111111-aaaa-4111-8111-000000000101","order_id":5001}';
-const cwd=new URL('../',import.meta.url).pathname;
+const cwd=fileURLToPath(new URL('../',import.meta.url));
 const js='scripts/verify-crm-label-render-live.mjs';
 const php='scripts/diagnose-crm-label-render.php';
 const env={...process.env,EVYD_CRM_LABEL_RENDER_ENABLED:'1',EVYD_CRM_APP_PATH:'/nonexistent-crm-label-synthetic-only'};
