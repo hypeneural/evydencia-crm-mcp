@@ -1538,6 +1538,11 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      phone_masked:maskPhone(r?.whatsapp)
     }))};
   },
+  async proposalHistoryBatch({telefones,historico_limite=15}={}){
+   assertOperatorAuthorized();
+   if(!canUseForensicBridge())fail('proposals_history_bridge_unavailable');
+   return await runForensicBridge({action:'proposals.history.batch',telefones,ano:2026,historico_limite},{fresh:true});
+  },
   async zapiConnectionHistory({instanceId,limit=25}={}){
    if(typeof instanceId!=='string'||!/^[A-Za-z0-9_-]{4,80}$/.test(instanceId.trim()))fail('invalid_zapi_instance_id');
    const max=Math.min(100,Math.max(1,Number(limit)||25));

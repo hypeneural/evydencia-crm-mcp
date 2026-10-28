@@ -11,6 +11,7 @@ import {dirname,resolve} from 'node:path';
 import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
+import {prepareProposalPhones} from './proposal-phone-variants.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {createGameplayReadClient,probeGameplayPrivateAccess} from './gameplay-read-client.mjs';
 import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus,gameplayAuditEligibleStatuses} from './gameplay-order-status.mjs';
@@ -42,7 +43,7 @@ export const BUILD_INFO=Object.freeze(resolveBuildInfo());
 export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_campanha_publica','crm_horarios_publicos','crm_conexao_privada','crm_cliente_resumo','crm_cliente_360']);
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
 export const GAMEPLAY_CRM_TOOL_NAMES=Object.freeze(['crm_gameplay_links','crm_gameplay_auditoria','crm_gameplay_galerias_disponiveis']);
-export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar']);
+export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar','crm_propostas_natal_consultar_lote']);
 export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
 export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
 export const MALOTES_BATCH_TOOL_NAME='crm_processar_malotes_retirada';
@@ -178,6 +179,7 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_relatorio_natal_sem_participantes',capability:'natal_orders_without_participants',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_legacy_api',supports_filters:false,supports_pagination:true,supports_history:false,when:({direct})=>direct},
  {tool:'crm_relatorio_clientes_natal',capability:'natal_customers_segmentation',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_legacy_api',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct})=>direct},
  {tool:'crm_clientes_buscar',capability:'customers_and_leads_search',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct,full})=>Boolean(direct&&full)},
+ {tool:'crm_propostas_natal_consultar_lote',capability:'natal_proposal_history_batch',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full})=>Boolean(direct&&full)},
  {tool:'crm_previa_proposta_natal',capability:'natal_proposal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:true,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PROPOSAL_WRITE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)},
@@ -352,6 +354,12 @@ function summarizeToolResult(tool,res){
  }
 }
 
+const OUT_PROPOSAL_HISTORY=z.looseObject({
+ source:z.literal('CRM_NATAL_PROPOSAL_READ_ONLY'),
+ year:z.literal(2026),coverage:z.enum(['complete','partial','unavailable']),
+ inputs:z.array(z.looseObject({})),results:z.array(z.looseObject({})),
+ timezone:z.string().optional(),truncated_sources:z.array(z.string()).optional()
+});
 const OUT_CAPACIDADES=z.looseObject({
  service:z.string(),
  version:z.string(),
@@ -681,7 +689,7 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 });
 
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
-export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_GAMEPLAY_LINKS,OUT_GAMEPLAY_AUDIT,OUT_GAMEPLAY_AVAILABLE,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
+export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_GAMEPLAY_LINKS,OUT_GAMEPLAY_AUDIT,OUT_GAMEPLAY_AVAILABLE,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_PROPOSAL_HISTORY,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
 async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv}){
  const ex=auth?.extra||{};
@@ -1364,6 +1372,15 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_ORDERS_READY_WRITE,SCOPE_PRINT_WRITE]});
   }
   if(cfg.operatorFullCrm){
+   reg('crm_propostas_natal_consultar_lote','Histórico de propostas Natal 2026 por telefones (somente leitura)',
+    'Audita de 1 a 50 telefones (com/sem nono dígito) no CRM LIVE, incluindo campanha, cliente, pedido Natal, despacho, aceite/entrega/leitura/falha, etapas e eventos. NÃO agenda ou envia mensagens. Agendamento não é prova de envio; variantes legadas não comprovam identidade. Para detalhes use historico_limite.',
+    z.object({telefones:z.array(z.string().min(1).max(80)).min(1).max(50),
+     historico_limite:z.number().int().min(1).max(25).default(15)}),
+    OUT_PROPOSAL_HISTORY,async({telefones,historico_limite})=>{
+     if(!ex.canReadProposal)throw Error('insufficient_operator_scope');
+     prepareProposalPhones(telefones);
+     return await direct.proposalHistoryBatch({telefones,historico_limite});
+    });
    reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
     busca:z.string().min(2).max(120).optional(),
     nome_cliente:z.string().min(2).max(100).optional(),
