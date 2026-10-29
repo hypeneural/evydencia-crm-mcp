@@ -1354,6 +1354,18 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      const o=r?.order;
      if(!o||o.order_id!==order_id||typeof o.customer_name!=='string'||o.customer_name.trim().length<2)
       throw Error('printserver_order_not_found');
+     // Repeated tool calls with the same request_id must return the committed job
+     // even after the latest receipt moved from spooled to queued/claimed.
+     const audit=await printer.history(order_id);
+     const matched=Array.isArray(audit?.history)?audit.history.find(j=>j.request_id===request_id):null;
+     if(matched){
+      if(matched.reprint_of_job_id!==job_id_anterior||matched.order_id!==order_id)
+       throw Error('printserver_manual_reconciliation_required');
+      return {source:'PRINTSERVER',order_id,job_id:matched.job_id,
+       reprint_of_job_id:job_id_anterior,request_id,print_state:matched.state,
+       created_at:matched.created_at,replay:true,printed_physically:false,
+       crm_status_updated:false,whatsapp_sent:false};
+     }
      const receipt=await lookupPrint(order_id);
      // Do not authorize a fresh print from an uncertain claim or legacy artwork.
      if(receipt.job?.job_id!==job_id_anterior||receipt.state!=='spooled'||
