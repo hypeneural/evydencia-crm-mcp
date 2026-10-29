@@ -1,5 +1,9 @@
 # P25 — Exportação de público personalizado Meta a partir do CRM (29/10/2026)
 
+## Auditoria de código ampliada (29/10)
+
+**LEITURA OBRIGATÓRIA ANTES DE IMPLEMENTAR:** [META_AUDIENCE_DATA_MODEL_FORENSIC_20261029.md](./META_AUDIENCE_DATA_MODEL_FORENSIC_20261029.md) descreve ER real, classes e predicates de compra, discrepâncias do legado, OAuth e snapshot InnoDB. O código agora usa `evyd-meta-audience-export-v2`: `identity_crosscheck_complete`, `source_counts` obrigatórios, isolamento de dois Customer IDs que compartilham telefone/e-mail, pares de identificadores observados e limite 20 MB. O helper PHP `scripts/crm-meta-audience-preflight-read.php` verifica tabelas/índices no contexto do bridge, sem retornar dados pessoais, mas **não está publicado como ferramenta MCP**. Os 11 testes Node e lint isolado PHP passaram no sandbox de homologação local, e precisam ser reexecutados na branch por Antigravity. O código da importação global e o OAuth de exportação ainda não foram implementados.
+
 **Status:** BASE OFFLINE IMPLEMENTADA; **API/MCP GLOBAL LIVE AINDA NÃO IMPLEMENTADA**. Esta branch deriva do commit **LIVE real 6abe03992549cee83732ea538e728377a3c989fe**, não de `main` divergente. Nenhuma alteração em CRM Laravel, banco, VPS, Meta Ads, Z-API, PrintServer ou Gameplay.
 
 ## Objetivo comercial exato
