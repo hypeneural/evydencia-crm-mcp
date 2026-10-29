@@ -47,7 +47,7 @@ export function normalizeEmail(raw) {
 }
 
 function normalizeName(raw) {
-  if (typeof raw !== 'string') return '';
+  if (typeof raw !== 'string' || /^[\s]*[=+\-@]/.test(raw)) return '';
   // Meta FN/LN: lowercase roman letters, without accents/punctuation, for matching.
   const v = raw.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[ß]/gi,'ss').replace(/[æ]/gi,'ae').replace(/[œ]/gi,'oe')
