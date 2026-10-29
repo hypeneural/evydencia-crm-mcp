@@ -136,3 +136,27 @@ test('all spreadsheet formula-looking names removed, no CPF/order metadata leak'
   assert.match(x.csv,/first@example.com,5548999999999,,,br\r\n/);
   assert.doesNotMatch(x.csv,/document|cpf|order_|source_id/);
 });
+
+test('two plus signs are invalid and prefer a linked row with verified email',()=>{
+  assert.equal(formatMetaPhone('+55+48999999999'),null);
+  const out=build([
+    row({source_id:'c1',email:''}),
+    row({source:'proposal_2026',source_id:'p1',email:'quote@example.com'}),
+  ]);
+  assert.equal(out.counts.export_rows,1);
+  assert.match(out.csv,/quote@example.com,5548999999999/);
+});
+test('performance: 3000 synthetic unique contacts remain linear enough',()=>{
+  const batch=Array.from({length:3000},(_,i)=>row({
+    source_id:'c'+i,phone:'489'+String(10000000+i),
+    email:'synthetic'+i+'@example.invalid',
+  }));
+  const begin=performance.now();
+  const result=build(batch);
+  const elapsedMs=performance.now()-begin;
+  assert.equal(result.counts.export_rows,3000);
+  assert.equal(result.counts.eligible_people,3000);
+  assert.equal(validateMetaCustomerListCsv(result.csv).unique_phones,3000);
+  // Generous performance guard: no slow per-contact SQL or O(N^2) formatter loops.
+  assert.ok(elapsedMs<10_000,'aggregate formatter took unexpectedly long');
+});
