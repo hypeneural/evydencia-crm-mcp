@@ -40,6 +40,8 @@ export function printserverClient(cfg,{fetchFn=fetch,timeoutMs=12000}={}){
  }
  return Object.freeze({
   enqueue:data=>send('/v1/jobs','POST',data),
+  reprint:data=>send('/v1/jobs/reprint','POST',data),
+  history:orderId=>send('/v1/orders/'+Number(orderId)+'/label-history','GET'),
   capabilities:async()=>{
    // The public origin may also host MCP. Only /v1 is routed to the broker.
    const r=await send('/v1/capabilities','GET');

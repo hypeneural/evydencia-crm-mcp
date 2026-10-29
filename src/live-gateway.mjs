@@ -44,7 +44,7 @@ export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
 export const GAMEPLAY_CRM_TOOL_NAMES=Object.freeze(['crm_gameplay_links','crm_gameplay_auditoria','crm_gameplay_galerias_disponiveis']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar','crm_propostas_natal_consultar_lote']);
-export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
+export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_reimprimir_etiqueta','crm_consultar_impressao_etiqueta']);
 export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
 export const MALOTES_BATCH_TOOL_NAME='crm_processar_malotes_retirada';
 export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
@@ -187,6 +187,7 @@ const LIVE_CATALOG=Object.freeze([
  {tool:MALOTES_READY_TOOL_NAME,capability:'crm_order_ready_write',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_ORDERS_READY_WRITE,source:'crm_extension_sanctum',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,ready})=>Boolean(full&&ready)},
  {tool:MALOTES_BATCH_TOOL_NAME,capability:'malotes_photo_batch_workflow',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+(crm.orders.write or print.jobs.write; depends on modo)',source:'crm_malotes_saga',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,batch})=>Boolean(full&&batch)},
  {tool:'crm_solicitar_impressao_etiqueta',capability:'printserver_job_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)},
+ {tool:'crm_reimprimir_etiqueta',capability:'printserver_explicit_reprint',access:'write_external',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:true,when:({direct,full,print})=>Boolean(direct&&full&&print)},
  {tool:'crm_consultar_impressao_etiqueta',capability:'printserver_job_status',access:'read',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)}
 ]);
 
@@ -1340,6 +1341,50 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       whatsapp_sent:false,job_id:result.job_id,
       print_state:result.state,request_id:result.request_id,render_source:result.render_source,replay:result.replay,
       order_id,crm_order_url:o.crm_order_url??null};
+    },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
+   reg('crm_reimprimir_etiqueta','Reimprimir etiqueta com autorização explícita',
+    'Reimpressão física excepcional de uma etiqueta canônica 100x40 mm. Exige confirmação do operador, job_id anterior com estado spooled, escopo print.jobs.write e request_id idempotente. Registra data/hora e vínculo entre os trabalhos, sem motivo obrigatório. Nunca afirma papel físico; não altera CRM nem envia WhatsApp.',
+    z.object({order_id:z.number().int().min(1),job_id_anterior:z.string().uuid(),
+      confirmado_pelo_operador:z.boolean(),request_id:z.string().uuid()}),
+    OUT_GENERIC,async({order_id,job_id_anterior,confirmado_pelo_operador,request_id})=>{
+     if(!grantedScopes.has(SCOPE_PRINT_WRITE)||!ex.canPrint)throw Error('insufficient_operator_write_scope');
+     if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
+     await printer.capabilities();
+     const r=await direct.detail({order_id,detailLevel:'resumo',fresh:true});
+     const o=r?.order;
+     if(!o||o.order_id!==order_id||typeof o.customer_name!=='string'||o.customer_name.trim().length<2)
+      throw Error('printserver_order_not_found');
+     // Repeated tool calls with the same request_id must return the committed job
+     // even after the latest receipt moved from spooled to queued/claimed.
+     const audit=await printer.history(order_id);
+     const matched=Array.isArray(audit?.history)?audit.history.find(j=>j.request_id===request_id):null;
+     if(matched){
+      if(matched.reprint_of_job_id!==job_id_anterior||matched.order_id!==order_id)
+       throw Error('printserver_manual_reconciliation_required');
+      return {source:'PRINTSERVER',order_id,job_id:matched.job_id,
+       reprint_of_job_id:job_id_anterior,request_id,print_state:matched.state,
+       created_at:matched.created_at,replay:true,printed_physically:false,
+       crm_status_updated:false,whatsapp_sent:false};
+     }
+     const receipt=await lookupPrint(order_id);
+     // Do not authorize a fresh print from an uncertain claim or legacy artwork.
+     if(receipt.job?.job_id!==job_id_anterior||receipt.state!=='spooled'||
+        receipt.needs_reconciliation||receipt.job?.render_source!=='crm_canonical')
+      throw Error('printserver_manual_reconciliation_required');
+     if(!labelRenderEnabled)throw Error('crm_label_disabled');
+     const artwork=await labelRenderer({orderUuid:o.order_uuid,orderId:order_id,env:labelRenderEnv});
+     const result=await printer.reprint({
+      request_id,operator_id:ex.operatorId,order_id,
+      status_key:o.status_key??null,confirmed_by_operator:true,purpose:'order_label',
+      reprint_of_job_id:job_id_anterior,customer_name:o.customer_name,
+      package_name:o.package_name||'Pedido de fotos',...artwork
+     });
+     if(result?.job?.order_id!==order_id||!['queued','claimed','spooled'].includes(result.job?.state)||
+        result.job?.reprint_of_job_id!==job_id_anterior)throw Error('printserver_result_unknown');
+     return {source:'PRINTSERVER',order_id,job_id:result.job.job_id,
+      reprint_of_job_id:job_id_anterior,request_id,print_state:result.job.state,
+      created_at:result.job.created_at,replay:Boolean(result.replay),printed_physically:false,
+      crm_status_updated:false,whatsapp_sent:false};
     },PRINT_WRITE,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PRINT_WRITE]});
    reg('crm_consultar_impressao_etiqueta','Consultar estado do trabalho de impressão',
     'Consulta fila remota. spooled significa entregue ao executável/spooler do Windows, não etiqueta fisicamente impressa.',
