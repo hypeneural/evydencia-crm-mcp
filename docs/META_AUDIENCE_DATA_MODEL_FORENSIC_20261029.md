@@ -63,6 +63,9 @@ flowchart TB
 
 Índices confirmados por migrations: \`customers_whatsapp_e164_idx\`, \`customers_phone_e164_idx\`, \`pd_flow_phone_time_idx\` (= flow + phone hash + created_at), \`cs_lookup_active_idx\` (= phone hash + revocation/timestamps), \`pgi_phone_flow_idx\`. **A consulta global \`proposal_dispatches\` por flow+created_at não está necessariamente coberta eficientemente pelo índice flow+phone+created_at**; medir EXPLAIN read-only na homologação antes de sugerir migração. Não criar índices no CRM nesta PR.
 
+
+**Anomalia histórica de migrations:** `database/migrations/2021_08_10_123400_create_products_table.php` originalmente declara `products.uuid` como PK, mas `OrderItem`/queries atuais usam `products.id` e `orders_items.product_id`. Isso evidencia evolução de schema: **não deduzir estrutura LIVE de uma única migration antiga**. O preflight verifica `products.id` sem alterar a base, e bloqueia se faltar. A validação do caminho e de índices deve consultar também migrations posteriores e esquema efetivamente aplicado.
+
 ## Análise cirúrgica dos arquivos e falhas
 
 1. \`src/live-gateway.mjs\`: OAuth/escopos + registro de ferramenta \`reg(...)\`. Os metadados \`securitySchemes\` descrevem escopos, **mas são as verificações de runtime em \`grantedScopes\` e autorização do operador que garantem enforcement.** O export deve ter \`crm.audience.export\` específico e opt-in, não ser autorizado apenas por \`crm.read\`. O cálculo atual de scopes elegíveis pode conceder padrões automaticamente: auditar DCR, authorize, refresh e tokens antigos antes de adicionar novo escopo.
