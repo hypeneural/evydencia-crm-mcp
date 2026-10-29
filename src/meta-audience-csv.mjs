@@ -16,7 +16,7 @@ export function normalizePhone(raw) {
   if (typeof raw !== 'string') return null;
   const digits = raw.replace(/[\s()+.\-]/g, '');
   if (!/^(?:55)?\d{10,11}$/.test(digits)) return null;
-  const national = digits.startsWith('55') ? digits.slice(2) : digits;
+  const national = [12,13].includes(digits.length) && digits.startsWith('55') ? digits.slice(2) : digits;
   if (![10, 11].includes(national.length) || !DDD.has(national.slice(0,2))) return null;
   const subscriber = national.slice(2);
   if (subscriber.length === 9 && !/^9\d{8}$/.test(subscriber)) return null;
