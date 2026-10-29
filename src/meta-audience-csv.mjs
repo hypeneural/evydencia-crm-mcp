@@ -15,7 +15,7 @@ const CONTROL = /[\u0000-\u001f\u007f]/g;
 export function normalizePhone(raw) {
   if (typeof raw !== 'string' || raw.length > 40) return null;
   const value = raw.trim();
-  if (!value || /[^0-9+()\s.\-]/.test(value) || (value.includes('+') && !value.startsWith('+'))) return null;
+  if (!value || /[^0-9+()\s.\-]/.test(value) || (value.includes('+') && (!value.startsWith('+') || (value.match(/\+/g)||[]).length !== 1))) return null;
   let digits = value.replace(/[\s()+.\-]/g, '');
   if (value.startsWith('+') && !digits.startsWith('55')) return null;
   if (digits.startsWith('00')) {
@@ -178,7 +178,7 @@ export function buildMetaAudienceCsv({records,coverage}={}) {
     const phones=new Map();
     for(const r of valid) {
       const previous=phones.get(r.phone);
-      const score=x=>(x.source==='customer'?2:0)+(x.email?1:0);
+      const score=x=>(x.email?4:0)+(x.source==='customer'?2:0)+(x.name?1:0);
       if(!previous) phones.set(r.phone,r);
       else {
         counts.duplicate_phone_rows_collapsed++;
