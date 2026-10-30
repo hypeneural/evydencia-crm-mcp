@@ -242,12 +242,17 @@ try {
                 // Paid then reversed/chargeback: do not advertise until the
                 // current commercial outcome is reconciled by an operator.
                 if (isset($paidOrderIds2026[$oId])) $hasAmbiguousOrder = true;
-            } elseif (isset($paidOrderIds2026[$oId])) {
+            } elseif (isset($paidOrderIds2026[$oId])
+                && (isset($validBuyerStatuses[$st])
+                    || in_array($st, ['waiting_payment','order_created'], true))) {
+                // Real positive installment in 2026 can prove purchase even
+                // if an operational status update is slightly delayed.
                 $hasConfirmedPurchase = true;
-            } elseif (isset($validBuyerStatuses[$st]) && isset($allCandidateOrderIds[$oId])
-                && isset($orders2026Ids[$oId])) {
+            } elseif (isset($validBuyerStatuses[$st]) && isset($orders2026Ids[$oId])) {
                 $hasConfirmedPurchase = true;
-            } elseif (!in_array($st, ['waiting_payment','order_created'], true)) {
+            } elseif (isset($paidOrderIds2026[$oId])
+                || !in_array($st, ['waiting_payment','order_created'], true)) {
+                // Paid but unrecognised status, or unrecognised state generally.
                 $hasAmbiguousOrder = true;
             }
         }
@@ -274,8 +279,12 @@ try {
         $email = is_string($c->email) ? trim($c->email) : '';
 
         // Evaluate phones: prefer whatsapp_e164, fallback to phone_e164, then raw
-        $phone1 = evyNormalizePhoneE164($c->whatsapp_e164 ?: $c->whatsapp);
-        $phone2 = evyNormalizePhoneE164($c->phone_e164 ?: $c->phone);
+        // Do not lose a valid raw number just because a stale E164 field is
+        // populated with an invalid value.
+        $phone1 = evyNormalizePhoneE164($c->whatsapp_e164)
+            ?? evyNormalizePhoneE164($c->whatsapp);
+        $phone2 = evyNormalizePhoneE164($c->phone_e164)
+            ?? evyNormalizePhoneE164($c->phone);
 
         $phones = [];
         if ($phone1 !== null) $phones[] = $phone1;
