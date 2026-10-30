@@ -113,6 +113,18 @@ try {
     $suppressionEvaluator = app(\App\Services\CommunicationSuppression\CommunicationSuppressionEvaluator::class);
     $at = \Carbon\CarbonImmutable::now('America/Sao_Paulo');
     $suppressionRows = \App\Models\CommunicationSuppression::query()->active($at)
+        // Narrow the candidate set to rules that CAN match marketing for
+        // this season and WhatsApp/channel-all context; the evaluator still
+        // makes the final authoritative decision in PHP.
+        ->whereIn('communication_class',['marketing','all'])
+        ->whereIn('channel',['whatsapp','all'])
+        ->where(function($query){
+            $query->where('scope_type','global')
+                ->orWhere(function($season){
+                    $season->where('scope_type','season')
+                        ->where('scope_key','natal:2026');
+                });
+        })
         ->get(['id','phone_lookup_hash','customer_id','channel',
                'communication_class','scope_type','scope_key','reason_code',
                'starts_at','ends_at','revoked_at']);
@@ -167,6 +179,7 @@ try {
     foreach ($orders2026 as $ord) {
         $oId = (int) $ord->id;
         $cId = (int) $ord->customer_id;
+        if ($cId <= 0) throw new \RuntimeException('order_without_customer_relation');
         $allCandidateOrderIds[$oId] = true;
         $orders2026Ids[$oId] = true;
         $ordersByCustomer[$cId][$oId] = true;
@@ -184,6 +197,7 @@ try {
             ->whereIn('id', $missingOrderIds)
             ->get(['id', 'customer_id', 'created_at']);
         foreach ($extraOrders as $ord) {
+            if ((int)$ord->customer_id <= 0) throw new \RuntimeException('order_without_customer_relation');
             $ordersByCustomer[(int) $ord->customer_id][(int) $ord->id] = true;
         }
         if (count($extraOrders) !== count($missingOrderIds)) {
@@ -272,9 +286,13 @@ try {
 
     $records = [];
     $customerRecordsCount = 0;
+    $uniqueCustomerCount = 0;
+    $knownCustomerIds = [];
 
     foreach ($customers as $c) {
         $cId = (int) $c->id;
+        $knownCustomerIds[$cId] = true;
+        $uniqueCustomerCount++;
         $name = is_string($c->name) ? trim($c->name) : '';
         $email = is_string($c->email) ? trim($c->email) : '';
 
@@ -329,6 +347,8 @@ try {
     // 6. Query Natal 2026 Proposal Contacts & Dispatches.
     // Missing expected flow is a failure, NOT an empty proposal population.
     $proposalRecordsCount = 0;
+    $dispatchRecordsCount = 0;
+    $scheduledRecordsCount = 0;
     if (!$flow) throw new \RuntimeException('natal_2026_proposal_flow_unavailable');
     if ($flow) {
         $dispatches = $DB::table('proposal_dispatches')
@@ -340,6 +360,8 @@ try {
         foreach ($dispatches as $d) {
             $phone = evyNormalizePhoneE164($d->phone_e164);
             $resCustId = $d->resolved_customer_id !== null ? (int) $d->resolved_customer_id : null;
+            if ($resCustId !== null && !isset($knownCustomerIds[$resCustId]))
+                throw new \RuntimeException('proposal_resolved_customer_missing');
             $isBuyer = ($resCustId !== null && isset($buyerCustomerIds[$resCustId]));
 
             $dispatchSuppressed = $isSuppressed($phone, $resCustId);
@@ -359,6 +381,7 @@ try {
                 'identity_status' => 'verified',
             ];
             $proposalRecordsCount++;
+            $dispatchRecordsCount++;
         }
 
         // Also query verified legacy campaign_scheduled_contacts for Natal 2026
@@ -397,6 +420,7 @@ try {
                 'identity_status' => 'verified',
             ];
             $proposalRecordsCount++;
+            $scheduledRecordsCount++;
         }
     }
 
@@ -412,8 +436,15 @@ try {
         'marketing_permission_complete' => $legalBasisVerified,
         'identity_crosscheck_complete' => true,
         'source_counts' => [
+            // record count includes multiple verified phones per customer
             'customers' => $customerRecordsCount,
             'proposals' => $proposalRecordsCount,
+        ],
+        'origin_quality' => [
+            'unique_customers' => $uniqueCustomerCount,
+            'proposal_dispatch_rows' => $dispatchRecordsCount,
+            'scheduled_contact_rows' => $scheduledRecordsCount,
+            'scheduled_does_not_prove_quote_requested' => true,
         ],
     ];
 
