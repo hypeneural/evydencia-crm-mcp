@@ -494,3 +494,10 @@ test('Meta Audience: gestor preview reuses 45s snapshot unless explicitly forced
  assert.notEqual(p1.structuredContent.snapshot_id,p3.structuredContent.snapshot_id);
  await client.close();
 });
+
+
+test('Meta Audience: export flag by itself never enables master feature in shared gateway',()=>{
+ const gw=createTestGateway({EVYD_META_AUDIENCE_ENABLED:'0',EVYD_AUDIENCE_EXPORT_ENABLED:'1'});
+ assert.equal(gw.cfg.metaAudienceEnabled,false);
+ assert.equal(gw.cfg.audienceExportEnabled,false);
+});
