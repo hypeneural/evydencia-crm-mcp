@@ -70,8 +70,10 @@ test('P25.8 janitor refuses cleanup inside repository even when directory is pri
    const aliasParent=await mkdtemp(join(tmpdir(),'evyd-meta-janitor-alias-'));
    try{
     await symlink(inside,join(aliasParent,'alias'),'dir');
+    // A direct symlink is rejected by lstat before realpath/check-out checks;
+    // both failures are fail-closed. Assert specifically that no file is touched.
     await assert.rejects(()=>purgeExpiredAudienceExports(join(aliasParent,'alias')),
-      /private_directory_inside_checkout/);
+      /private_directory_(?:inside_checkout|insecure)/);
     assert.equal((await readdir(inside)).includes(own),true);
    }finally{await rm(aliasParent,{recursive:true,force:true});}
   }
