@@ -47,7 +47,17 @@ export async function purgeExpiredAudienceExports(directory,{nowMs=Date.now(),tt
       catch(err){
         // A periodic sweep and a pre-export sweep may race safely.
         // The other worker already removed this exact owned file.
-        if(err?.code!=='ENOENT')throw err;
+        if(err?.code==='ENOENT')continue;
+        if(process.platform==='win32'&&(err?.code==='EPERM'||err?.code==='EBUSY')){
+          let gone=false;
+          for(let i=0;i<5;i++){
+            const st=await lstat(child).catch(()=>null);
+            if(!st){gone=true;break;}
+            await new Promise(r=>setTimeout(r,10));
+          }
+          if(gone)continue;
+        }
+        throw err;
       }
     }
   }
