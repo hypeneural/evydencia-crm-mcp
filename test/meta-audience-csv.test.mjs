@@ -260,3 +260,43 @@ test('P25.7: marketing opt-out without buyer is counted as independent exclusion
  assert.equal(result.counts.excluded_suppressed,1);
  assert.equal(result.counts.export_rows,1);
 });
+
+
+test('P25.7: deterministic seeded batch permutations preserve output, totals and buyer suppression',()=>{
+ const rows=[];
+ for(let i=0;i<140;i++){
+   const basePhone='489'+String(10000000+i);
+   rows.push(row({source_id:'customer-'+i,phone:basePhone,
+     email:'c'+i+'@example.invalid',bought_2026:i%19===0,suppressed:i%23===0}));
+   if(i%7===0){
+    rows.push(row({source:'proposal_2026',source_id:'proposal-'+i,
+      phone:basePhone,email:'proposal'+i+'@example.invalid'}));
+   }
+   if(i%31===0){
+    rows.push(row({source_id:'customer-'+i,phone:'489'+String(10003000+i),
+      email:'c'+i+'@example.invalid',bought_2026:i%19===0,suppressed:i%23===0}));
+   }
+ }
+ const baseline=build(rows);
+ const keys=['sha256','csv'];
+ const metrics=['eligible_people','export_rows','excluded_2026_buyer',
+   'excluded_suppressed','identity_groups_with_buyer',
+   'identity_groups_with_suppression','identity_groups_buyer_and_suppressed',
+   'duplicate_phone_rows_collapsed'];
+ let state=0x0fad25f6;
+ function rand(){
+  state^=(state<<13);state^=state>>>17;state^=(state<<5);
+  return state>>>0;
+ }
+ for(let pass=0;pass<32;pass++){
+   const shuffled=[...rows];
+   for(let k=shuffled.length-1;k>0;k--){
+    const j=rand()%(k+1);
+    [shuffled[k],shuffled[j]]=[shuffled[j],shuffled[k]];
+   }
+   const next=build(shuffled);
+   for(const k of keys)assert.equal(next[k],baseline[k],'permutation '+pass+': '+k);
+   for(const k of metrics)assert.equal(next.counts[k],baseline.counts[k],
+      'permutation '+pass+': metric '+k);
+ }
+});
