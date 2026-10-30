@@ -1553,6 +1553,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       source_quality:item.coverage.origin_quality||{},
       query_telemetry:item.queryTelemetry||{sql_count:null,sql_ms:null},
       ready_for_export:item.result.counts.export_rows>=100 && item.result.counts.eligible_people>=100,
+      next_action:item.result.counts.export_rows>=100 && item.result.counts.eligible_people>=100
+       ?'Peça explicitamente para exportar o snapshot_id da prévia; o MCP reconferirá a lista.'
+       :'Lista ainda insuficiente; confira contagens, telefones inválidos e exclusões antes de solicitar exportação.',
    });
 
    reg('crm_meta_publico_natal_previa','Prévia analítica do público Meta Ads Natal 2026 (sem PII)',
@@ -1598,7 +1601,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     },READ,{requiredScopes:[GATEWAY_SCOPE]});
 
    reg('crm_meta_publico_natal_exportar','Exportar público Meta Ads Natal 2026 em CSV privado',
-    'Gera o CSV manual para upload na interface do Meta Ads sob escopo dedicado crm.audience.export e confirmação explícita do operador. Salva arquivo em disco privado (0600) e retorna apenas metadados e SHA-256, sem PII no chat.',
+    'Gera CSV privado mediante consentimento explícito do gestor e escopo crm.audience.export. Retorna contagens/arquivo_id, mas NÃO disponibiliza download pelo ChatGPT; o transporte autenticado ainda não existe. Nunca envie a lista à Meta automaticamente.',
     z.object({confirmado_pelo_operador:z.boolean(),snapshot_id:z.string().min(16).max(100)}),
     OUT_META_AUDIENCE_EXPORT,async({confirmado_pelo_operador,snapshot_id})=>{
      if(!grantedScopes.has(SCOPE_AUDIENCE_EXPORT)||!ex.canExportAudience)throw Error('insufficient_operator_export_scope');
@@ -1655,6 +1658,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       sha256:validated.sha256,
       arquivo_id:exportId,
       delivery_status:'private_gateway_storage_only',
+      download_available_in_chat:false,
+      next_action:'Arquivo guardado no servidor. Download pelo ChatGPT ainda não implementado; não confunda arquivo_id com link.',
       // A filesystem path is NOT a downloadable URL in ChatGPT.
       expira_em:new Date(Date.now()+3600*1000).toISOString(),
       contains_personal_data:true,
