@@ -73,8 +73,9 @@ test('P0: persisted CRM suppression HMAC must be validated',async()=>{
  assert.match(s,/hash_equals\(\$hash, \$hasher->hash\(\$persistedPhone\)\)/);
  assert.match(s,/meta_audience_suppression_hash_mismatch/);
 });
-test('P0: official MCP scope challenge uses array of scopes',async()=>{
+test('P0: official MCP v2 scope challenge returns ScopeChallenge object with scoped array',async()=>{
  const s=await source('src/live-gateway.mjs');
- assert.match(s,/\?undefined:\[\.\.\.requiredScopes\]/);
- assert.doesNotMatch(s,/errorDescription:'Audience export scope required'/);
+ assert.match(s,/\?undefined:\{scopes:\[\.\.\.requiredScopes\],errorDescription:/);
+ assert.doesNotMatch(s,/Object\.assign\(\[\/\*\?undefined/);
+ assert.doesNotMatch(s,/\?undefined:\[\.\.\.requiredScopes\]/);
 });
