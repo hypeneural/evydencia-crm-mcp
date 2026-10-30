@@ -70,6 +70,7 @@ test('P25.8 gateway starts and stops only its own janitor when export is enabled
  assert.match(s,/cfg\.audienceExportEnabled&&cfg\.audiencePrivateCsvDir/);
  assert.match(s,/startMetaAudienceJanitor\(cfg\.audiencePrivateCsvDir/);
  assert.match(s,/audienceJanitor\?\.stop\(\)/);
+ assert.match(s,/meta_audience_retention_janitor_enabled:Boolean\(audienceJanitor\)/);
  assert.doesNotMatch(s,/execSync\(['"]systemctl/);
 });
 
