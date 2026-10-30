@@ -160,3 +160,17 @@ test('performance: 3000 synthetic unique contacts remain linear enough',()=>{
   // Generous performance guard: no slow per-contact SQL or O(N^2) formatter loops.
   assert.ok(elapsedMs<10_000,'aggregate formatter took unexpectedly long');
 });
+
+
+test('100 phone rows from only 50 people do NOT satisfy Meta audience readiness',()=>{
+  const records=[];
+  for(let i=0;i<50;i++){
+    const same='customer-'+i;
+    records.push(row({source_id:same,phone:'489'+String(10000000+i),email:'c'+i+'@example.com'}));
+    records.push(row({source_id:same,phone:'489'+String(10001000+i),email:'c'+i+'@example.com'}));
+  }
+  const result=build(records);
+  assert.equal(result.counts.export_rows,100);
+  assert.equal(result.counts.eligible_people,50);
+  assert.throws(()=>assertMetaAudienceUploadReady(result),/NOT_READY/);
+});
