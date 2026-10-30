@@ -47,6 +47,9 @@ if (!$legalBasisVerified) {
     ], $forensicStartedMs);
 }
 
+// Pure, locally testable classifier; no database access in this dependency.
+require_once __DIR__ . '/crm-meta-audience-purchase-classifier.php';
+
 // Helper: Normalize phone to E.164 (+55...) matching src/meta-audience-csv.mjs rules.
 function evyNormalizePhoneE164(?string $raw): ?string
 {
@@ -228,62 +231,23 @@ try {
         }
     }
 
-    $validBuyerStatuses = [
-        'payment_confirmed' => true,
-        'session_schedule' => true,
-        'session_schedule_confirmed' => true,
-        'selection_schedule' => true,
-        'selection_schedule_confirmed' => true,
-        'waiting_product_retrieve' => true,
-        'product_retrieve_confirmed' => true,
-        'order_completed' => true,
-    ];
-    // Match App\Enums\OrderStatus keys, not human-language aliases.
-    $reversedStatuses = [
-        'order_aborted' => true,
-        'payment_chargeback' => true,
-        'payment_refunded' => true,
-    ];
-
-    // Determine purchase state per customer
+    // Domain logic is extracted into a pure, locally testable function:
+    // no accidental divergence between the synthetic tests and SQL adapter.
     $buyerCustomerIds = [];
     $ambiguousCustomerIds = [];
-
     foreach ($ordersByCustomer as $cId => $orderMap) {
-        $hasConfirmedPurchase = false;
-        $hasAmbiguousOrder = false;
-
+        $facts = [];
         foreach (array_keys($orderMap) as $oId) {
-            if (!isset($ordersWithStatus[$oId])) {
-                // Missing order_status history => ambiguous
-                $hasAmbiguousOrder = true;
-                continue;
-            }
-            $st = $latestStatusByOrder[$oId] ?? '';
-            if (isset($reversedStatuses[$st])) {
-                // Paid then reversed/chargeback: do not advertise until the
-                // current commercial outcome is reconciled by an operator.
-                if (isset($paidOrderIds2026[$oId])) $hasAmbiguousOrder = true;
-            } elseif (isset($paidOrderIds2026[$oId])
-                && (isset($validBuyerStatuses[$st])
-                    || in_array($st, ['waiting_payment','order_created'], true))) {
-                // Real positive installment in 2026 can prove purchase even
-                // if an operational status update is slightly delayed.
-                $hasConfirmedPurchase = true;
-            } elseif (isset($validBuyerStatuses[$st]) && isset($orders2026Ids[$oId])) {
-                $hasConfirmedPurchase = true;
-            } elseif (isset($paidOrderIds2026[$oId])
-                || !in_array($st, ['waiting_payment','order_created'], true)) {
-                // Paid but unrecognised status, or unrecognised state generally.
-                $hasAmbiguousOrder = true;
-            }
+            $facts[] = [
+                'status' => $latestStatusByOrder[$oId] ?? null,
+                'has_status' => isset($ordersWithStatus[$oId]),
+                'created_2026' => isset($orders2026Ids[$oId]),
+                'paid_2026' => isset($paidOrderIds2026[$oId]),
+            ];
         }
-
-        if ($hasConfirmedPurchase) {
-            $buyerCustomerIds[$cId] = true;
-        } elseif ($hasAmbiguousOrder) {
-            $ambiguousCustomerIds[$cId] = true;
-        }
+        $decision = evyMetaAudienceClassifyPurchases2026($facts);
+        if ($decision['buyer']) $buyerCustomerIds[$cId] = true;
+        if ($decision['ambiguous']) $ambiguousCustomerIds[$cId] = true;
     }
 
     // 5. Query ALL Customers
