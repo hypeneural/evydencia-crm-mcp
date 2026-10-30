@@ -62,7 +62,7 @@ export function gatewayConfig(env){
  const printOps=String(env.EVYD_PRINT_ALLOWED_OPERATOR_IDS||'').split(',').map(s=>s.trim()).filter(Boolean);
  if(env.EVYD_PRINTSERVER_ENABLED==='1'&&(!printOps.length||printOps.some(id=>!allowedOperators.has(id))))fail('print_operator_allowlist');
  const printAllowedOperators=new Set(printOps);
- const audienceOps=String(env.EVYD_AUDIENCE_ALLOWED_OPERATOR_IDS||env.EVYD_AUDIENCE_ALLOWED_OPERATORS||env.EVYD_ALLOWED_OPERATOR_IDS||'').split(',').map(s=>s.trim()).filter(Boolean);
+ const audienceOps=String(env.EVYD_AUDIENCE_ALLOWED_OPERATOR_IDS||env.EVYD_AUDIENCE_ALLOWED_OPERATORS||'').split(',').map(s=>s.trim()).filter(Boolean);
  if(audienceOps.some(id=>!allowedOperators.has(id)))fail('audience_operator_allowlist');
  const audienceAllowedOperators=new Set(audienceOps);
  const redirects=String(env.EVYD_OAUTH_REDIRECT_URIS||DEFAULT_REDIRECTS).split(',').map(s=>s.trim()).filter(Boolean);
@@ -138,7 +138,7 @@ export function gatewayConfig(env){
   malotesPrintBatchEnabled:env.EVYD_MALOTES_PRINT_BATCH_ENABLED==='1',
   printAllowedOperators,
   metaAudienceEnabled:env.EVYD_META_AUDIENCE_ENABLED==='1'||env.EVYD_AUDIENCE_EXPORT_ENABLED==='1',
-  audienceExportEnabled:env.EVYD_AUDIENCE_EXPORT_ENABLED!=='0',
+  audienceExportEnabled:env.EVYD_AUDIENCE_EXPORT_ENABLED==='1',
   audienceAllowedOperators,
   // Always use the explicit environment passed to gatewayConfig (also in tests).
   // No implicit path in the repository for files containing customer contacts.
