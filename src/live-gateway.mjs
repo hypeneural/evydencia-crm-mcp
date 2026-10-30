@@ -22,6 +22,7 @@ import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PRO
 import {buildMetaAudienceCsv,assertMetaAudienceUploadReady} from './meta-audience-csv.mjs';
 import {validateMetaCustomerListCsv} from './meta-audience-csv-validator.mjs';
 import {purgeExpiredAudienceExports} from './meta-audience-private-files.mjs';
+import {startMetaAudienceJanitor} from './meta-audience-janitor.mjs';
 import {mkdir,open,unlink,realpath} from 'node:fs/promises';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
@@ -1852,6 +1853,12 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  const operators=operatorVerifier(cfg,{fetchFn,now});
  const oauth=createOAuthServer(cfg,{operators,now,log});
  const audienceSnapshots=new Map();
+ // One sweeper per gateway process, including after a restart; no extra
+ // cron/systemd unit and no impact on unrelated CRM/PrintServer services.
+ const audienceJanitor=cfg.audienceExportEnabled&&cfg.audiencePrivateCsvDir
+  ?startMetaAudienceJanitor(cfg.audiencePrivateCsvDir,{
+    onError:()=>log({evt:'meta_audience_janitor_error'}),
+  }):null;
  let mcp,zapi=null;
  const zapiDiag=cfg.zapiDiagEnabled?createZapiInstanceDiagnostics(cfg,{
   fetchFn,
@@ -1937,7 +1944,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   log({evt:'http',method:request.method,path:path.slice(0,64),status:res.status,ms:Math.round(performance.now()-t0)});
   return res;
  }
- return {cfg,zapi,perf,handle,close:async()=>{await Promise.allSettled([mcp.close(),zapi?.close()])}};
+ return {cfg,zapi,perf,handle,close:async()=>{audienceJanitor?.stop();await Promise.allSettled([mcp.close(),zapi?.close()])}};
 }
 
 // node:http bridge (the @modelcontextprotocol/node adapter is not a dependency).
