@@ -502,3 +502,32 @@ test('Meta Audience: export flag by itself never enables master feature in share
  assert.equal(gw.cfg.metaAudienceEnabled,false);
  assert.equal(gw.cfg.audienceExportEnabled,false);
 });
+
+
+test('Meta Audience: export fails closed if CSV directory is inside the Git checkout', async()=>{
+ const inside=resolve(process.cwd(),'.test-meta-inside-repo-'+Date.now());
+ const legacyReader={metaAudienceRead:async()=>buildSyntheticBackendData(105)};
+ const gw=createTestGateway({META_PRIVATE_CSV_DIR:inside},{legacyReader});
+ const tokens=await authorizeToken(gw,'fake-op7-export');
+ const client=new Client({name:'test-client',version:'1.0.0'});
+ const transport=new StreamableHTTPClientTransport(new URL('http://localhost/mcp'),{
+  requestInit:{headers:{Authorization:'Bearer '+tokens.access_token}},
+  fetch:(url,init)=>gw.handle(new Request(url,init),{ip:'10.0.0.1',host:'localhost'}),
+ });
+ try{
+  await client.connect(transport);
+  const preview=await client.callTool({name:'crm_meta_publico_natal_previa',arguments:{}});
+  assert.equal(preview.isError,undefined);
+  const exp=await client.callTool({name:'crm_meta_publico_natal_exportar',
+   arguments:{confirmado_pelo_operador:true,snapshot_id:preview.structuredContent.snapshot_id}});
+  assert.equal(exp.isError,true);
+  const text=exp.content[0].text;
+  assert.match(text,/crm_meta_audience_private_directory_inside_checkout/);
+  assert.doesNotMatch(text,/@example\.com|55489999/);
+  const entries=await readdir(inside);
+  assert.equal(entries.filter(name=>name.endsWith('.csv')).length,0);
+ }finally{
+  await client.close().catch(()=>{});
+  await rm(inside,{recursive:true,force:true});
+ }
+});
