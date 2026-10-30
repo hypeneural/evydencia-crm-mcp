@@ -320,6 +320,7 @@ test('Meta Audience: end-to-end execution of preview and export with synthetic d
   assert.ok(!previaText.includes('4899999'), 'previa text must not contain phone numbers');
   assert.ok(!previaText.includes('@example.com'), 'previa text must not contain email addresses');
   assert.ok(!previaText.includes('Comprador'), 'previa text must not contain names');
+  assert.match(previaText, /supressoes_exclusivas=\d+, optouts_marketing_total=\d+, sobreposicao_compra_e_optout=\d+/, 'previa text must explain suppression scope and buyer overlap');
 
   // 2. Call export tool with confirmed operator
   const exp = await client.callTool({

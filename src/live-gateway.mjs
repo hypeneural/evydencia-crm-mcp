@@ -367,8 +367,11 @@ function summarizeToolResult(tool,res){
    return `OK [crm_pedido_detalhe]: order_id=${res.order?.order_id??'n/d'}, parcelas=${Array.isArray(res.order?.installments)?res.order.installments.length:0}, eventos_status=${res.order?.status_history_count??0}. Consulte structuredContent.`;
   case 'crm_clientes_buscar':
    return `OK [crm_clientes_buscar]: retornados=${Array.isArray(res.customers)?res.customers.length:0}, total=${res.pagination?.total_matching_customers??'n/d'}. Consulte structuredContent.`;
-  case 'crm_meta_publico_natal_previa':
-   return `OK [crm_meta_publico_natal_previa]: snapshot=${res.snapshot_id}, elegiveis=${res.counts?.export_rows??0}, compradores_excluidos=${res.counts?.excluded_2026_buyer??0}, supressoes=${res.counts?.excluded_suppressed??0}, ready=${res.ready_for_export}. Zero dados pessoais exibidos.`;
+  case 'crm_meta_publico_natal_previa': {
+   const c = res.counts || {};
+   const supInfo = `supressoes_exclusivas=${c.excluded_suppressed??0}, optouts_marketing_total=${c.identity_groups_with_suppression??0}, sobreposicao_compra_e_optout=${c.identity_groups_buyer_and_suppressed??0}`;
+   return `OK [crm_meta_publico_natal_previa]: snapshot=${res.snapshot_id}, elegiveis=${c.export_rows??0}, compradores_excluidos=${c.excluded_2026_buyer??0}, ${supInfo}, ready=${res.ready_for_export}. Zero dados pessoais exibidos.`;
+  }
   case 'crm_meta_publico_natal_exportar':
    return `OK [crm_meta_publico_natal_exportar]: arquivo gerado com sucesso. Linhas=${res.rows}, telefones_unicos=${res.unique_phones}, sha256=${res.sha256}. Arquivo salvo em local privado restrito (expira em ${res.expira_em}). Zero dados pessoais no chat.`;
   case 'crm_renderizar_card_visual':
