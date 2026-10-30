@@ -466,3 +466,31 @@ test('Meta Audience: buyers added after preview invalidate old CSV and require n
  assert.equal(JSON.parse(exp.content[0].text).error,'crm_meta_audience_snapshot_changed_review_again');
  await client.close();
 });
+
+
+test('Meta Audience: gestor preview reuses 45s snapshot unless explicitly forced',async()=>{
+ let reads=0;
+ const legacyReader={metaAudienceRead:async()=>{
+  reads++;
+  const snapshot=buildSyntheticBackendData(105);
+  snapshot.snapshot_id='snapshot-fresh-'+reads+'-2026';
+  snapshot.coverage.snapshot_id=snapshot.snapshot_id;
+  return snapshot;
+ }};
+ const gw=createTestGateway({}, {legacyReader});
+ const tokens=await authorizeToken(gw,'fake-op7-export');
+ const client=new Client({name:'test-client',version:'1.0.0'});
+ const transport=new StreamableHTTPClientTransport(new URL('http://localhost/mcp'),{
+  requestInit:{headers:{Authorization:'Bearer '+tokens.access_token}},
+  fetch:(url,init)=>gw.handle(new Request(url,init),{ip:'10.0.0.1',host:'localhost'}),
+ });
+ await client.connect(transport);
+ const p1=await client.callTool({name:'crm_meta_publico_natal_previa',arguments:{forcar_atualizacao:false}});
+ const p2=await client.callTool({name:'crm_meta_publico_natal_previa',arguments:{forcar_atualizacao:false}});
+ assert.equal(reads,1,'second non-forced preview must reuse the recent snapshot');
+ assert.equal(p1.structuredContent.snapshot_id,p2.structuredContent.snapshot_id);
+ const p3=await client.callTool({name:'crm_meta_publico_natal_previa',arguments:{forcar_atualizacao:true}});
+ assert.equal(reads,2,'forced preview must refresh from CRM');
+ assert.notEqual(p1.structuredContent.snapshot_id,p3.structuredContent.snapshot_id);
+ await client.close();
+});
