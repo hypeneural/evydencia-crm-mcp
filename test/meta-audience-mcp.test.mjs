@@ -442,3 +442,29 @@ test('Meta Audience: preview blocks legal policy missing without echoing PII', a
  assert.doesNotMatch(JSON.stringify(r),/5548999999999/);
  await client.close();
 });
+
+
+test('Meta Audience: buyers added after preview invalidate old CSV and require new review', async()=>{
+ let calls=0;
+ const legacyReader={metaAudienceRead:async()=>{
+  const snapshot=buildSyntheticBackendData(105);
+  calls++;
+  if(calls>1) snapshot.records[3].bought_2026=true;
+  return snapshot;
+ }};
+ const gw=createTestGateway({}, {legacyReader});
+ const tokens=await authorizeToken(gw,'fake-op7-export');
+ const client=new Client({name:'test-client',version:'1.0.0'});
+ const transport=new StreamableHTTPClientTransport(new URL('http://localhost/mcp'),{
+  requestInit:{headers:{Authorization:'Bearer '+tokens.access_token}},
+  fetch:(url,init)=>gw.handle(new Request(url,init),{ip:'10.0.0.1',host:'localhost'}),
+ });
+ await client.connect(transport);
+ const preview=await client.callTool({name:'crm_meta_publico_natal_previa',arguments:{}});
+ assert.equal(preview.isError,undefined);
+ const exp=await client.callTool({name:'crm_meta_publico_natal_exportar',
+  arguments:{confirmado_pelo_operador:true,snapshot_id:preview.structuredContent.snapshot_id}});
+ assert.equal(exp.isError,true);
+ assert.equal(JSON.parse(exp.content[0].text).error,'crm_meta_audience_snapshot_changed_review_again');
+ await client.close();
+});
