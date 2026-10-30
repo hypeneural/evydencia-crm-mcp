@@ -155,4 +155,4 @@ Se falhar, corrigir somente o P0 demonstrado, repetir teste focal e uma suíte c
 
 **Limitação de consulta:** Developers/Business Help podem exigir login ou aplicar rate limit; o template realmente mostrado no Gerenciador de Públicos da conta do gestor prevalece para mapear colunas, sem alterar a regra de não enviar dados pessoais a GitHub/ChatGPT.
 
-**Status deste documento:** `P25_8_LIVE_CONFIRMED`, `P25_9_CODE_COMMITTED`, `P25_9_NATIVE_QA_PENDING`, `META_UPLOAD_UNVERIFIED`, `MERGE_MAIN_NO_GO`.
+**Status verificado:** `P25_8_LIVE_CONFIRMED`, `P25_9_GITHUB_ACTIONS_LINUX_387_OF_387_PASS` ([run 41059767852](https://github.com/hypeneural/evydencia-crm-mcp/actions/runs/41059767852), commit de código `39bc6b8`, Node/CI Ubuntu), `P25_9_ANTIGRAVITY_LOCAL_QA_PENDING`, `P25_9_LIVE_NOT_DEPLOYED`, `META_UPLOAD_UNVERIFIED`, `MERGE_MAIN_NO_GO`. Os commits seguintes de documentação não alteram o código executável.
