@@ -114,3 +114,19 @@ invariáveis os demais processos da VPS.
 
 Recomenda-se homologar e publicar o hotfix P25.8 no MCP isoladamente,
 sem vincular essa pequena correção ao merge da main ou ao upload Meta.
+
+## 7. Defesa adicional do janitor antes do próximo QA
+
+Como a nova varredura inicia antes de qualquer exportação, o método de
+limpeza passou a validar o diretório **de maneira independente** do
+gateway, usando `realpath` + `relative` para garantir que o diretório
+privado não esteja dentro do checkout Git nem através de symlink
+intermediário. A mesma regra se aplica ao janitor CLI.
+
+Regressão adicional incluída em `test/meta-audience-private-files.test.mjs`:
+arquivo sintético expirado dentro de checkout ou acessado por alias
+simbólico **não** é apagado; diretórios externos restritos continuam
+permitidos. Sem acesso a dados reais.
+
+A varredura ao iniciar e a cada 15 minutos continua protegida por
+`cfg.audienceExportEnabled` e `cfg.audiencePrivateCsvDir`.
