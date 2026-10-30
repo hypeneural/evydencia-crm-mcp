@@ -4,7 +4,7 @@ import test, {before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {randomBytes, createHash} from 'node:crypto';
-import {rm, readFile} from 'node:fs/promises';
+import {rm, readFile, readdir, stat} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {Client, StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
 import {createGateway} from '../src/live-gateway.mjs';
@@ -334,7 +334,10 @@ test('Meta Audience: end-to-end execution of preview and export with synthetic d
   assert.equal(exp.structuredContent.unique_phones, 105);
   assert.equal(typeof exp.structuredContent.sha256, 'string');
   assert.equal(exp.structuredContent.sha256.length, 64);
-  assert.ok(exp.structuredContent.arquivo_privado_path);
+  assert.equal(exp.structuredContent.delivery_status,'private_gateway_storage_only');
+  assert.match(exp.structuredContent.arquivo_id,/^[0-9a-f-]{36}$/i);
+  assert.equal(exp.structuredContent.arquivo_privado_path,undefined,
+    'server-side filesystem paths must not leak in tool payloads');
 
   // Verify zero PII in export text response
   const expText = exp.content[0].text;
@@ -343,7 +346,13 @@ test('Meta Audience: end-to-end execution of preview and export with synthetic d
   assert.ok(expText.includes(exp.structuredContent.sha256), 'export text mentions SHA-256');
 
   // Verify file on disk
-  const savedCsv = await readFile(exp.structuredContent.arquivo_privado_path, 'utf8');
+  const names=await readdir(TEST_DIR);
+  const expected='meta-audience-natal2026-'+exp.structuredContent.arquivo_id+'.csv';
+  assert.ok(names.includes(expected),'file is stored in injected private directory');
+  const privateFile=resolve(TEST_DIR,expected);
+  const info=await stat(privateFile);
+  if(process.platform!=='win32')assert.equal(info.mode&0o077,0,'CSV file must be private 0600');
+  const savedCsv = await readFile(privateFile, 'utf8');
   const validated = validateMetaCustomerListCsv(savedCsv, {minRows: 100});
   assert.equal(validated.ready, true);
   assert.equal(validated.rows, 105);
@@ -390,4 +399,46 @@ test('Meta Audience: domain exclusions, upload gate and independent CSV validato
     assert.ok(!cols[1].includes('+'), 'phone must not have +');
     assert.equal(cols[4], 'br', 'country must be br');
   }
+});
+
+
+test('Meta Audience: preview snapshot is mandatory, never silently rebuilt', async()=>{
+ const legacyReader={metaAudienceRead:async()=>buildSyntheticBackendData(105)};
+ const gw=createTestGateway({}, {legacyReader});
+ const tokens=await authorizeToken(gw,'fake-op7-export');
+ const client=new Client({name:'test-client',version:'1.0.0'});
+ const transport=new StreamableHTTPClientTransport(new URL('http://localhost/mcp'),{
+  requestInit:{headers:{Authorization:'Bearer '+tokens.access_token}},
+  fetch:(url,init)=>gw.handle(new Request(url,init),{ip:'10.0.0.1',host:'localhost'}),
+ });
+ await client.connect(transport);
+ const missing=await client.callTool({name:'crm_meta_publico_natal_exportar',
+  arguments:{confirmado_pelo_operador:true,snapshot_id:'snapshot-does-not-exist-2026'}});
+ assert.equal(missing.isError,true);
+ assert.equal(JSON.parse(missing.content[0].text).error,'crm_meta_audience_snapshot_missing_or_expired');
+ await client.close();
+});
+test('Meta Audience: audience allowlist missing fails closed, even with global CRM access', async()=>{
+ const gw=createTestGateway({EVYD_AUDIENCE_ALLOWED_OPERATOR_IDS:''});
+ const tok=await authorizeToken(gw,'fake-op7-export');
+ assert.ok(!tok.scope.includes('crm.audience.export'));
+});
+test('Meta Audience: preview blocks legal policy missing without echoing PII', async()=>{
+ const legacyReader={metaAudienceRead:async()=>({
+  source:'CRM_META_AUDIENCE_READ_ONLY',available:false,reason:'legal_basis_not_verified',
+  customer_phone:'DO_NOT_LEAK_5548999999999',
+ })};
+ const gw=createTestGateway({}, {legacyReader});
+ const tokens=await authorizeToken(gw,'fake-op7-export');
+ const client=new Client({name:'test-client',version:'1.0.0'});
+ const transport=new StreamableHTTPClientTransport(new URL('http://localhost/mcp'),{
+  requestInit:{headers:{Authorization:'Bearer '+tokens.access_token}},
+  fetch:(url,init)=>gw.handle(new Request(url,init),{ip:'10.0.0.1',host:'localhost'}),
+ });
+ await client.connect(transport);
+ const r=await client.callTool({name:'crm_meta_publico_natal_previa',arguments:{}});
+ assert.equal(r.isError,true);
+ assert.equal(JSON.parse(r.content[0].text).error,'crm_meta_audience_legal_basis_not_verified');
+ assert.doesNotMatch(JSON.stringify(r),/5548999999999/);
+ await client.close();
 });
