@@ -21,7 +21,8 @@ import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJ
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,SCOPE_AUDIENCE_EXPORT,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {buildMetaAudienceCsv,assertMetaAudienceUploadReady} from './meta-audience-csv.mjs';
 import {validateMetaCustomerListCsv} from './meta-audience-csv-validator.mjs';
-import {mkdir,open,lstat,unlink} from 'node:fs/promises';
+import {purgeExpiredAudienceExports} from './meta-audience-private-files.mjs';
+import {mkdir,open,unlink} from 'node:fs/promises';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {readyForPickupClient} from './malotes-ready-client.mjs';
@@ -1554,11 +1555,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      const validated=validateMetaCustomerListCsv(result.csv,{minRows:100});
 
      await mkdir(PRIVATE_EXPORTS_DIR,{recursive:true,mode:0o700});
-     const directoryInfo=await lstat(PRIVATE_EXPORTS_DIR);
-     if(!directoryInfo.isDirectory()||directoryInfo.isSymbolicLink()
-        ||(directoryInfo.mode&0o077)!==0){
-      throw Error('crm_meta_audience_private_directory_insecure');
-     }
+     // Purge orphan CSVs left by a previous process restart; the in-process
+     // one-hour timer below is merely a second line of defense.
+     await purgeExpiredAudienceExports(PRIVATE_EXPORTS_DIR,{ttlMs:3600*1000});
      const exportId=randomUUID();
      const filePath=resolve(PRIVATE_EXPORTS_DIR,`meta-audience-natal2026-${exportId}.csv`);
      // Fail if an unexpected file already exists; never overwrite past exports.
