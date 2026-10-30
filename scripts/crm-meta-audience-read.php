@@ -125,13 +125,21 @@ try {
                         ->where('scope_key','natal:2026');
                 });
         })
-        ->get(['id','phone_lookup_hash','customer_id','channel',
+        ->get(['id','phone_e164','phone_lookup_hash','customer_id','channel',
                'communication_class','scope_type','scope_key','reason_code',
                'starts_at','ends_at','revoked_at']);
     $rulesByHash = [];
     $rulesByCustomer = [];
     foreach ($suppressionRows as $rule) {
         $hash = (string) $rule->phone_lookup_hash;
+        // Prove the installed hasher uses the SAME secret/key derivation as
+        // rows already persisted in CRM. Without this, every opt-out can be
+        // silently missed while tests with empty suppression tables pass.
+        $persistedPhone = evyNormalizePhoneE164((string) $rule->phone_e164);
+        if ($persistedPhone === null || $hash === ''
+            || !hash_equals($hash, $hasher->hash($persistedPhone))) {
+            throw new \RuntimeException('meta_audience_suppression_hash_mismatch');
+        }
         if ($hash !== '') $rulesByHash[$hash][] = $rule;
         if ($rule->customer_id !== null) $rulesByCustomer[(int)$rule->customer_id][] = $rule;
     }
