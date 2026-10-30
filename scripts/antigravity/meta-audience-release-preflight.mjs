@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Privacy-safe, offline inspection of Meta Audience feature flags for a canary.
 // No database, CRM, network, tokens, paths or PII are printed.
-import {lstat} from 'node:fs/promises';
-import {isAbsolute} from 'node:path';
+import {lstat,realpath} from 'node:fs/promises';
+import {isAbsolute,relative,resolve,dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 const env=process.env;
 const master=env.EVYD_META_AUDIENCE_ENABLED==='1';
@@ -17,7 +18,13 @@ let privateDir=false;
 if(directory&&isAbsolute(directory)){
  try {
   const st=await lstat(directory);
-  privateDir=st.isDirectory()&&!st.isSymbolicLink()
+  const [canonicalDirectory,canonicalRepoRoot]=await Promise.all([
+    realpath(directory),
+    realpath(resolve(dirname(fileURLToPath(import.meta.url)),'../..')),
+  ]);
+  const relativeDirectory=relative(canonicalRepoRoot,canonicalDirectory);
+  const outsideCheckout=relativeDirectory.startsWith('..')||isAbsolute(relativeDirectory);
+  privateDir=outsideCheckout&&st.isDirectory()&&!st.isSymbolicLink()
     &&(process.platform==='win32'||(st.mode&0o077)===0);
  }catch{}
 }
