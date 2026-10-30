@@ -114,12 +114,12 @@ before(async()=>{
 });
 after(()=>new Promise(r=>crm.close(r)));
 
-async function connect(g,crmToken,{exchange=true}={}){
+async function connect(g,crmToken,{exchange=true,scope='crm.read'}={}){
  const reg=await call(g,'/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({redirect_uris:[REDIR],token_endpoint_auth_method:'none',client_name:'ChatGPT'})});
  assert.equal(reg.status,201);
  const {client_id}=await reg.json();
  const verifier=randomBytes(32).toString('base64url'),challenge=createHash('sha256').update(verifier).digest('base64url');
- const q=new URLSearchParams({response_type:'code',client_id,redirect_uri:REDIR,code_challenge:challenge,code_challenge_method:'S256',state:'st-123',resource:'http://localhost/mcp',scope:'crm.read'});
+ const q=new URLSearchParams({response_type:'code',client_id,redirect_uri:REDIR,code_challenge:challenge,code_challenge_method:'S256',state:'st-123',resource:'http://localhost/mcp',...(scope?{scope}:{})});
  const pg=await call(g,'/authorize?'+q);
  assert.equal(pg.status,200);
  const txn=/name="txn" value="([^"]+)"/.exec(await pg.text())[1];
@@ -828,6 +828,138 @@ test('crm_propostas_natal_consultar_lote is registered with readOnlyHint, reject
   assert.equal(errEmpty.isError,true);
  }finally{
   await client.close();
+  await g.close();
+ }
+});
+
+test('Issue #27 P0 — incremental OAuth authorization for print.jobs.write, scope challenges and narrow refresh preservation',async()=>{
+ const printed=[],renders=[];
+ const bridgeFetch=async(url,opt)=>{
+  const read=brokerReadFixture(url);if(read)return read;
+  if(String(url)==='https://print.example.test/v1/jobs'){
+   printed.push(JSON.parse(opt.body));
+   return new Response(JSON.stringify({replay:false,job:{job_id:'d83ed2db-f4f1-4a55-b632-61e246a22b38',order_id:6001,
+    render_source:'crm_canonical',state:'queued'}}),{status:201,headers:{'Content-Type':'application/json'}});
+  }
+  return fetch(url,opt);
+ };
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',
+  EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',
+  EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1',
+  EVYD_META_AUDIENCE_ENABLED:'1',
+  EVYD_AUDIENCE_EXPORT_ENABLED:'1',
+  EVYD_AUDIENCE_ALLOWED_OPERATOR_IDS:'7'
+ }),{
+  fetchFn:bridgeFetch,
+  labelRenderer:async options=>{
+   renders.push(options);
+   return {label_source:'crm_canonical',label_png_base64:'fake-test-only-png',label_png_sha256:'a'.repeat(64)};
+  },
+  log:e=>logs.push(e),
+  now
+ });
+
+ try{
+  // 1. Scenario 1: Operator 7 connects with crm.read + crm.audience.export (missing print.jobs.write).
+  const connNarrow=await connect(g,'fake-op7-read-000001',{scope:'crm.read crm.audience.export'});
+  assert.ok(connNarrow.tokens.scope.split(/\s+/).includes('crm.read'));
+  assert.ok(connNarrow.tokens.scope.split(/\s+/).includes('crm.audience.export'));
+  assert.ok(!connNarrow.tokens.scope.split(/\s+/).includes('print.jobs.write'),'print.jobs.write is not granted initially');
+
+  const clientNarrow=await mcp(g,connNarrow.tokens.access_token);
+  try{
+   // Verify capacities report reflects narrow grant
+   const caps=await clientNarrow.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(caps.structuredContent.oauth_authorization.print_scope_granted,false);
+   assert.equal(caps.structuredContent.oauth_authorization.print_tool_enabled,false);
+
+   // Calling print tool must trigger HTTP 403 scope challenge (MCP client throws InsufficientScopeError)
+   await assert.rejects(async()=>clientNarrow.callTool({
+    name:'crm_solicitar_impressao_etiqueta',
+    arguments:{order_id:6001,confirmado_pelo_operador:true}
+   }),err=>/403|insufficient.scope|print.jobs.write/i.test(String(err)),'must trigger OAuth scope challenge');
+
+   // Direct HTTP call must return HTTP 403 with WWW-Authenticate header
+   const rawRes=await call(g,'/mcp',{
+    method:'POST',
+    headers:{'content-type':'application/json',accept:'application/json, text/event-stream',authorization:'Bearer '+connNarrow.tokens.access_token},
+    body:JSON.stringify({jsonrpc:'2.0',id:101,method:'tools/call',params:{name:'crm_solicitar_impressao_etiqueta',arguments:{order_id:6001,confirmado_pelo_operador:true}}})
+   });
+   assert.equal(rawRes.status,403);
+   const authHdr=rawRes.headers.get('www-authenticate')||'';
+   assert.match(authHdr,/Bearer error="insufficient_scope"/);
+   assert.match(authHdr,/scope="[^"]*print\.jobs\.write[^"]*"/);
+   assert.match(authHdr,/resource_metadata=/);
+
+   // Zero calls reached broker and zero renders
+   assert.equal(printed.length,0);
+   assert.equal(renders.length,0);
+  }finally{
+   await clientNarrow.close();
+  }
+
+  // 2. Scenario 2: Operator 7 connects with crm.read + print.jobs.write (incremental authorization approved).
+  const connPrint=await connect(g,'fake-op7-read-000001',{scope:'crm.read print.jobs.write'});
+  assert.ok(connPrint.tokens.scope.split(/\s+/).includes('print.jobs.write'));
+  assert.ok(!connPrint.tokens.scope.split(/\s+/).includes('crm.orders.write'),'never grants unrequested crm.orders.write');
+
+  const clientPrint=await mcp(g,connPrint.tokens.access_token);
+  try{
+   const caps=await clientPrint.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(caps.structuredContent.oauth_authorization.print_scope_granted,true);
+   assert.equal(caps.structuredContent.oauth_authorization.print_tool_enabled,true);
+
+   // Execution succeeds cleanly with zero physical prints
+   const resPrint=await clientPrint.callTool({
+    name:'crm_solicitar_impressao_etiqueta',
+    arguments:{order_id:6001,confirmado_pelo_operador:true}
+   });
+   assert.equal(resPrint.isError,undefined,JSON.stringify(resPrint.content));
+   assert.equal(resPrint.structuredContent.render_source,'crm_canonical');
+   assert.equal(resPrint.structuredContent.print_state,'queued');
+   assert.equal(printed.length,1);
+   assert.equal(renders.length,1);
+  }finally{
+   await clientPrint.close();
+  }
+
+  // 3. Scenario 3: Operator 9 (unlisted in print allowed operators) requests print.jobs.write.
+  const connOp9=await connect(g,'fake-op9-read-000002',{scope:'crm.read print.jobs.write'});
+  assert.ok(!connOp9.tokens.scope.split(/\s+/).includes('print.jobs.write'),'unlisted operator is never granted print scope');
+
+  const clientOp9=await mcp(g,connOp9.tokens.access_token);
+  try{
+   const {tools}=await clientOp9.listTools();
+   assert.ok(!tools.some(t=>t.name==='crm_solicitar_impressao_etiqueta'),'unauthorized operator cannot see print tool');
+  }finally{
+   await clientOp9.close();
+  }
+
+  // 4. Scenario 4: Refresh token preserves explicitly granted narrow print scope without privilege escalation.
+  const refreshRes=await call(g,'/token',form({
+   grant_type:'refresh_token',
+   refresh_token:connPrint.tokens.refresh_token,
+   client_id:connPrint.client_id
+  }));
+  assert.equal(refreshRes.status,200);
+  const refreshed=await refreshRes.json();
+  assert.ok(refreshed.scope.split(/\s+/).includes('print.jobs.write'));
+  assert.ok(!refreshed.scope.split(/\s+/).includes('crm.orders.write'));
+  assert.ok(!refreshed.scope.split(/\s+/).includes('crm.audience.export'));
+
+  const clientRefreshed=await mcp(g,refreshed.access_token);
+  try{
+   const capsRefreshed=await clientRefreshed.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(capsRefreshed.structuredContent.oauth_authorization.print_scope_granted,true);
+  }finally{
+   await clientRefreshed.close();
+  }
+ }finally{
   await g.close();
  }
 });
