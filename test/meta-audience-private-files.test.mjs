@@ -55,3 +55,24 @@ test('P25.8 two concurrent cleanup passes are idempotent on the same expired fil
   assert.equal(results.reduce((sum,r)=>sum+r.deleted,0),1);
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('P25.8 janitor refuses cleanup inside repository even when directory is private',async()=>{
+ const inside=await mkdtemp(join(process.cwd(),'.test-meta-janitor-in-repo-'));
+ await chmod(inside,0o700);
+ try{
+  const own='meta-audience-natal2026-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.csv';
+  await writeFile(join(inside,own),'synthetic-only',{mode:0o600});
+  await utimes(join(inside,own),new Date(0),new Date(0));
+  await assert.rejects(()=>purgeExpiredAudienceExports(inside),/private_directory_inside_checkout/);
+  assert.equal((await readdir(inside)).includes(own),true);
+  if(process.platform!=='win32'){
+   const aliasParent=await mkdtemp(join(tmpdir(),'evyd-meta-janitor-alias-'));
+   try{
+    await symlink(inside,join(aliasParent,'alias'),'dir');
+    await assert.rejects(()=>purgeExpiredAudienceExports(join(aliasParent,'alias')),
+      /private_directory_inside_checkout/);
+    assert.equal((await readdir(inside)).includes(own),true);
+   }finally{await rm(aliasParent,{recursive:true,force:true});}
+  }
+ }finally{await rm(inside,{recursive:true,force:true});}
+});
