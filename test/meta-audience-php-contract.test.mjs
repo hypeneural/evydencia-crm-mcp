@@ -1,0 +1,60 @@
+// Static P0 regression checks are NOT a substitute for PHP lint or MySQL tests.
+// They guard against reintroducing specific defects found in Antigravity e5a5beb.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {resolve,dirname} from 'node:path';
+const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+const source=async rel=>await readFile(resolve(root,rel),'utf8');
+
+test('P0: php policy uses CRM canonical suppression hasher, not proposal hash',async()=>{
+ const s=await source('scripts/crm-meta-audience-read.php');
+ assert.match(s,/CommunicationSuppressionHasher::class/);
+ assert.match(s,/CommunicationSuppressionEvaluator::class/);
+ assert.doesNotMatch(s,/hash_hmac\('sha256',\s*\$p,\s*\$hashKey\)/);
+ assert.doesNotMatch(s,/\$hashKey\s*=\s*\(string\)\s*config\('proposals\.hash_key'/);
+});
+
+test('P0: 2026 paid older orders resolved before merging into order ID set',async()=>{
+ const s=await source('scripts/crm-meta-audience-read.php');
+ const missing=s.indexOf('$missingOrderIds = array_diff');
+ const merging=s.indexOf('$allCandidateOrderIds[$oId] = true;',missing);
+ assert.ok(missing>0 && merging>missing);
+ assert.match(s,/paid_2026_orders_missing_referential_integrity/);
+ assert.match(s,/orders2026Ids/);
+});
+
+test('P0: business status keys from Laravel OrderStatus include refunded and chargeback',async()=>{
+ const s=await source('scripts/crm-meta-audience-read.php');
+ assert.match(s,/'payment_refunded'\s*=>\s*true/);
+ assert.match(s,/'payment_chargeback'\s*=>\s*true/);
+ assert.match(s,/hasAmbiguousOrder/);
+ assert.match(s,/unexpected_transaction_isolation/);
+});
+
+test('P0: legal approval must be server-side and missing approval never returns records',async()=>{
+ const s=await source('scripts/crm-meta-audience-read.php');
+ assert.match(s,/EVYD_META_AUDIENCE_LGPD_APPROVED/);
+ assert.match(s,/EVYD_META_AUDIENCE_LGPD_POLICY_REF/);
+ assert.match(s,/legal_basis_not_verified/);
+ const check=s.indexOf('if (!$legalBasisVerified)');
+ const customers=s.indexOf("DB::table('customers')");
+ assert.ok(check>0&&customers>check);
+});
+
+test('P0: MCP export never silently regenerates missing preview or exposes server path',async()=>{
+ const s=await source('src/live-gateway.mjs');
+ assert.match(s,/crm_meta_audience_snapshot_missing_or_expired/);
+ assert.match(s,/crm_meta_audience_snapshot_changed_review_again/);
+ assert.match(s,/private_gateway_storage_only/);
+ assert.doesNotMatch(s,/arquivo_privado_path:filePath/);
+ assert.match(s,/purgeExpiredAudienceExports/);
+});
+
+test('P0: OAuth dedicated audience permission is default deny',async()=>{
+ const s=await source('src/oauth-gateway.mjs');
+ assert.match(s,/audienceExportEnabled:env\.EVYD_AUDIENCE_EXPORT_ENABLED==='1'/);
+ assert.doesNotMatch(s,/EVYD_AUDIENCE_ALLOWED_OPERATORS\|\|env\.EVYD_ALLOWED_OPERATOR_IDS/);
+ assert.match(s,/SCOPE_AUDIENCE_EXPORT/);
+});
