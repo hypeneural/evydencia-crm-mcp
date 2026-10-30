@@ -945,7 +945,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   // before the callback; the handler also checks permissions defensively.
   const exportScopeChallenge=requiredScopes.includes(SCOPE_AUDIENCE_EXPORT)
    ?({authInfo})=>requiredScopes.every(scope=>authInfo?.scopes?.includes(scope))
-      ?undefined:Object.assign([/*?undefined:[...requiredScopes]*/...requiredScopes],{scopes:[...requiredScopes]})
+      ?undefined:{scopes:[...requiredScopes],errorDescription:'Audience export requires the explicitly granted OAuth scope'}
    :undefined;
   m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,
     ...(exportScopeChallenge?{scopeChallenge:exportScopeChallenge}:{}),
