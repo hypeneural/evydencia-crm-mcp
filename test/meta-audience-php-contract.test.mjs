@@ -108,3 +108,13 @@ test('P25.4: SQL keeps buyer status joins bounded and selects only latest operat
  assert.match(s,/->joinSub\(\$latestIds, 'latest'/);
  assert.doesNotMatch(s,/->orderBy\('id', 'asc'\)\s*->get\(\['id', 'order_id', 'status'\]\)/);
 });
+
+
+test('P25.7: origin telemetry distinguishes unique customers, source rows and suppression scope',async()=>{
+ const s=await source('scripts/crm-meta-audience-read.php');
+ assert.match(s,/'unique_customers'\s*=>\s*\$uniqueCustomerCount/);
+ assert.match(s,/'customer_source_rows'\s*=>\s*\$customerRecordsCount/);
+ assert.match(s,/'proposal_source_rows'\s*=>\s*\$proposalRecordsCount/);
+ assert.match(s,/'suppression_scope'\s*=>\s*'whatsapp_or_all_marketing_global_or_natal2026'/);
+ assert.match(s,/'buyer_customer_ids'\s*=>\s*count\(\$buyerCustomerIds\)/);
+});
