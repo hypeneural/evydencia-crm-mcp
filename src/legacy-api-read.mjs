@@ -1543,6 +1543,11 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    if(!canUseForensicBridge())fail('proposals_history_bridge_unavailable');
    return await runForensicBridge({action:'proposals.history.batch',telefones,ano:2026,historico_limite},{fresh:true});
   },
+  async metaAudienceRead({legal_basis_policy='legitimate_interest_customer_reactivation_with_optout_check',fresh=false}={}){
+   assertOperatorAuthorized();
+   if(!canUseForensicBridge())fail('meta_audience_bridge_unavailable');
+   return await runForensicBridge({action:'meta.audience.read',year:2026,legal_basis_policy},{fresh});
+  },
   async zapiConnectionHistory({instanceId,limit=25}={}){
    if(typeof instanceId!=='string'||!/^[A-Za-z0-9_-]{4,80}$/.test(instanceId.trim()))fail('invalid_zapi_instance_id');
    const max=Math.min(100,Math.max(1,Number(limit)||25));

@@ -18,7 +18,10 @@ import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGamep
 import {lookupGameplayWithCustomerLinks} from './gameplay-links.mjs';
 import {paginatePublishedFamilies} from './gameplay-family-inventory.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
-import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
+import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,SCOPE_AUDIENCE_EXPORT,supportedGatewayScopes} from './oauth-gateway.mjs';
+import {buildMetaAudienceCsv,assertMetaAudienceUploadReady} from './meta-audience-csv.mjs';
+import {validateMetaCustomerListCsv} from './meta-audience-csv-validator.mjs';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {readyForPickupClient} from './malotes-ready-client.mjs';
@@ -44,6 +47,7 @@ export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
 export const GAMEPLAY_CRM_TOOL_NAMES=Object.freeze(['crm_gameplay_links','crm_gameplay_auditoria','crm_gameplay_galerias_disponiveis']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar','crm_propostas_natal_consultar_lote']);
+export const META_AUDIENCE_TOOL_NAMES=Object.freeze(['crm_meta_publico_natal_previa','crm_meta_publico_natal_exportar']);
 export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
 export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
 export const MALOTES_BATCH_TOOL_NAME='crm_processar_malotes_retirada';
@@ -180,6 +184,8 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_relatorio_clientes_natal',capability:'natal_customers_segmentation',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_legacy_api',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct})=>direct},
  {tool:'crm_clientes_buscar',capability:'customers_and_leads_search',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct,full})=>Boolean(direct&&full)},
  {tool:'crm_propostas_natal_consultar_lote',capability:'natal_proposal_history_batch',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full})=>Boolean(direct&&full)},
+ {tool:'crm_meta_publico_natal_previa',capability:'meta_audience_natal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,metaAudience})=>Boolean(direct&&metaAudience)},
+ {tool:'crm_meta_publico_natal_exportar',capability:'meta_audience_natal_export',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_AUDIENCE_EXPORT,source:'crm_direct_forensic_bridge',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,metaAudience})=>Boolean(direct&&metaAudience)},
  {tool:'crm_previa_proposta_natal',capability:'natal_proposal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:true,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PROPOSAL_WRITE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)},
@@ -190,8 +196,8 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_consultar_impressao_etiqueta',capability:'printserver_job_status',access:'read',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,malotesBatchEnabled=false,malotesPrintBatchEnabled=false,perfSnapshot=null,gameplayEnabled=false}={}){
- const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled),batch:Boolean(malotesBatchEnabled||malotesPrintBatchEnabled)};
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,malotesBatchEnabled=false,malotesPrintBatchEnabled=false,perfSnapshot=null,gameplayEnabled=false,metaAudienceEnabled=false}={}){
+ const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled),batch:Boolean(malotesBatchEnabled||malotesPrintBatchEnabled),metaAudience:Boolean(metaAudienceEnabled)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
@@ -265,7 +271,8 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
  // Count only original v0.12 tools; UI, PrintServer and Gameplay are additive.
  const printSet=new Set(PRINTSERVER_TOOL_NAMES);
  const gameplaySet=new Set(GAMEPLAY_CRM_TOOL_NAMES);
- const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)&&!gameplaySet.has(t.tool)).length;
+ const metaSet=new Set(META_AUDIENCE_TOOL_NAMES);
+  const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)&&!gameplaySet.has(t.tool)&&!metaSet.has(t.tool)).length;
  const mcpUiActive=Boolean(directEnabled&&operatorFullCrm&&uiAppsEnabled);
  return {
   service:'evydencia-crm-mcp-live',
@@ -279,6 +286,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   forensic_audit_enabled:Boolean(directEnabled&&operatorFullCrm),
   proposal_dispatch_enabled:Boolean(operatorFullCrm),
   mcp_ui_apps_enabled:mcpUiActive,
+  meta_audience_enabled:Boolean(metaAudienceEnabled&&directEnabled),
   write_requires_explicit_confirmation:true,
   tools_total_catalog:tools.length,
   tools_active_count:activeTools.length,
@@ -288,6 +296,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   ...(gameplayEnabled&&directEnabled?{gameplay_crm_tools:GAMEPLAY_CRM_TOOL_NAMES}:{}),
   ...(directEnabled&&operatorFullCrm?{forensic_crm_tools:FORENSIC_CRM_TOOL_NAMES}:{}),
   ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{}),
+  ...(metaAudienceEnabled&&directEnabled?{meta_audience_tools:META_AUDIENCE_TOOL_NAMES}:{}),
   ...(mcpUiActive?{ui_crm_tools:UI_CRM_TOOL_NAMES,ui_resource_uri:MCP_UI_CARD_RESOURCE_URI,ui_fallback_resource_uri:MCP_UI_CARD_V1_FALLBACK_URI}:{}),
   ...(zapiContext?.diagEnabled?{
    zapi_diagnostics_enabled:true,
@@ -337,6 +346,10 @@ function summarizeToolResult(tool,res){
    return `OK [crm_pedido_detalhe]: order_id=${res.order?.order_id??'n/d'}, parcelas=${Array.isArray(res.order?.installments)?res.order.installments.length:0}, eventos_status=${res.order?.status_history_count??0}. Consulte structuredContent.`;
   case 'crm_clientes_buscar':
    return `OK [crm_clientes_buscar]: retornados=${Array.isArray(res.customers)?res.customers.length:0}, total=${res.pagination?.total_matching_customers??'n/d'}. Consulte structuredContent.`;
+  case 'crm_meta_publico_natal_previa':
+   return `OK [crm_meta_publico_natal_previa]: snapshot=${res.snapshot_id}, elegiveis=${res.counts?.export_rows??0}, compradores_excluidos=${res.counts?.excluded_2026_buyer??0}, supressoes=${res.counts?.excluded_suppressed??0}, ready=${res.ready_for_export}. Zero dados pessoais exibidos.`;
+  case 'crm_meta_publico_natal_exportar':
+   return `OK [crm_meta_publico_natal_exportar]: arquivo gerado com sucesso. Linhas=${res.rows}, telefones_unicos=${res.unique_phones}, sha256=${res.sha256}. Arquivo salvo em local privado restrito (expira em ${res.expira_em}). Zero dados pessoais no chat.`;
   case 'crm_renderizar_card_visual':
    return formatVisualCardTextFallback(res);
   case 'crm_previa_proposta_natal':
@@ -353,6 +366,57 @@ function summarizeToolResult(tool,res){
    return `OK [${tool}]: consulta concluída. Consulte structuredContent.`;
  }
 }
+
+const OUT_META_AUDIENCE_PREVIEW=z.looseObject({
+ source:z.literal('CRM_META_AUDIENCE_PREVIEW'),
+ target_year:z.literal(2026),
+ snapshot_id:z.string(),
+ as_of:z.string(),
+ purchase_rule:z.literal('ANY_VALID_PURCHASE_2026'),
+ coverage:z.looseObject({
+  customers_complete:z.boolean(),
+  proposals_complete:z.boolean(),
+  purchases_2026_complete:z.boolean(),
+  suppression_complete:z.boolean(),
+  marketing_permission_complete:z.boolean(),
+  identity_crosscheck_complete:z.boolean()
+ }),
+ source_counts:z.looseObject({
+  customers:z.number().int().nonnegative(),
+  proposals:z.number().int().nonnegative()
+ }),
+ counts:z.looseObject({
+  input:z.number().int().nonnegative(),
+  customer_records:z.number().int().nonnegative(),
+  proposal_records:z.number().int().nonnegative(),
+  duplicate_identity_rows:z.number().int().nonnegative(),
+  duplicate_phone_rows_collapsed:z.number().int().nonnegative(),
+  excluded_2026_buyer:z.number().int().nonnegative(),
+  excluded_suppressed:z.number().int().nonnegative(),
+  excluded_no_marketing_permission:z.number().int().nonnegative(),
+  excluded_ambiguous_or_unknown:z.number().int().nonnegative(),
+  excluded_conflicting_customer_ids:z.number().int().nonnegative(),
+  excluded_no_valid_phone:z.number().int().nonnegative(),
+  eligible_people:z.number().int().nonnegative(),
+  export_rows:z.number().int().nonnegative()
+ }),
+ ready_for_export:z.boolean()
+});
+
+const OUT_META_AUDIENCE_EXPORT=z.looseObject({
+ source:z.literal('CRM_META_AUDIENCE_EXPORT'),
+ ready:z.boolean(),
+ snapshot_id:z.string(),
+ as_of:z.string(),
+ rows:z.number().int().nonnegative(),
+ unique_phones:z.number().int().nonnegative(),
+ rows_with_email:z.number().int().nonnegative(),
+ sha256:z.string(),
+ arquivo_privado_path:z.string(),
+ expira_em:z.string(),
+ contains_personal_data:z.literal(true),
+ counts:z.record(z.any()).optional()
+});
 
 const OUT_PROPOSAL_HISTORY=z.looseObject({
  source:z.literal('CRM_NATAL_PROPOSAL_READ_ONLY'),
@@ -371,6 +435,7 @@ const OUT_CAPACIDADES=z.looseObject({
  forensic_audit_enabled:z.boolean(),
  proposal_dispatch_enabled:z.boolean(),
  mcp_ui_apps_enabled:z.boolean().nullish(),
+ meta_audience_enabled:z.boolean().optional(),
  write_requires_explicit_confirmation:z.boolean(),
  tools_total_catalog:z.number().int(),
  tools_active_count:z.number().int(),
@@ -379,7 +444,9 @@ const OUT_CAPACIDADES=z.looseObject({
   operator_id:z.string(),
   granted_scopes:z.array(z.string()),
   print_scope_granted:z.boolean(),
-  print_tool_enabled:z.boolean()
+  print_tool_enabled:z.boolean(),
+  audience_export_scope_granted:z.boolean().optional(),
+  audience_export_tool_enabled:z.boolean().optional()
  }).nullish(),
  tools:z.array(z.looseObject({
   tool:z.string(),
@@ -691,12 +758,12 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
 export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_GAMEPLAY_LINKS,OUT_GAMEPLAY_AUDIT,OUT_GAMEPLAY_AVAILABLE,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_PROPOSAL_HISTORY,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
-async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv}){
+async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv,legacyReader=null}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
  const grantedScopes=new Set(Array.isArray(auth?.scopes)&&auth.scopes.length?auth.scopes:[GATEWAY_SCOPE]);
  const crm=crmClient({baseUrl:cfg.crmBaseUrl,token:ex.upstream,privateEnabled:true,timeoutMs:cfg.crmTimeoutMs,fetchFn,strictEnvelope:true});
- const direct=cfg.internalReadToken?legacyReadClient({
+ const direct=legacyReader??(cfg.internalReadToken?legacyReadClient({
   baseUrl:cfg.crmBaseUrl,
   token:cfg.internalReadToken,
   fetchFn,
@@ -709,7 +776,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
    upstreamGrantHash:ex.upstreamGrantHash||'',
    cacheSecret:ex.cacheSecret||null
   }
- }):null;
+ }):null);
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
  // Optional Gameplay configuration is captured by gatewayConfig(env) and
  // never implicitly loaded from another process-global environment.
@@ -855,7 +922,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean(cfg.malotesBatchEnabled&&ex.canReady),malotesPrintBatchEnabled:Boolean(cfg.malotesPrintBatchEnabled&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled),perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay)}),
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean(cfg.malotesBatchEnabled&&ex.canReady),malotesPrintBatchEnabled:Boolean(cfg.malotesPrintBatchEnabled&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled),perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay),metaAudienceEnabled:Boolean(cfg.metaAudienceEnabled)}),
   // Report EFFECTIVE token scopes, not scopes_supported advertised by OAuth metadata.
   // No access tokens, gateway secrets or upstream abilities in this response.
   oauth_authorization:{
@@ -863,7 +930,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
    granted_scopes:[...grantedScopes].sort(),
    print_scope_granted:grantedScopes.has(SCOPE_PRINT_WRITE),
    orders_write_scope_granted:grantedScopes.has(SCOPE_ORDERS_READY_WRITE),
-   print_tool_enabled:Boolean(printCfg.enabled&&ex.canPrint&&grantedScopes.has(SCOPE_PRINT_WRITE))
+   print_tool_enabled:Boolean(printCfg.enabled&&ex.canPrint&&grantedScopes.has(SCOPE_PRINT_WRITE)),
+   audience_export_scope_granted:grantedScopes.has(SCOPE_AUDIENCE_EXPORT),
+   audience_export_tool_enabled:Boolean(cfg.audienceExportEnabled&&ex.canExportAudience&&grantedScopes.has(SCOPE_AUDIENCE_EXPORT))
   },
   ...(verificar_gameplay?{gameplay_private_probe:await probeGameplayPrivateAccess(gameplay)}:{})
  }));
@@ -1427,6 +1496,70 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      prepareProposalPhones(telefones);
      return await direct.proposalHistoryBatch({telefones,historico_limite});
     });
+   if(cfg.metaAudienceEnabled&&direct){
+   const metaAudienceCache=new Map();
+   const PRIVATE_EXPORTS_DIR=process.env.META_PRIVATE_CSV_DIR||resolve(process.cwd(),'.private_exports');
+
+   reg('crm_meta_publico_natal_previa','Prévia analítica do público Meta Ads Natal 2026 (sem PII)',
+    'Consulta clientes do CRM e propostas Natal 2026, excluindo compradores de 2026 de qualquer produto, supressões e opt-outs. Retorna SOMENTE contadores agregados, integridade e cobertura, sem nenhum dado pessoal.',
+    z.object({forcar_atualizacao:z.boolean().default(false)}),
+    OUT_META_AUDIENCE_PREVIEW,async({forcar_atualizacao})=>{
+     const raw=await direct.metaAudienceRead({fresh:Boolean(forcar_atualizacao)});
+     const result=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
+     metaAudienceCache.set(raw.coverage.snapshot_id,{raw,result,expiresAt:Date.now()+15*60*1000});
+     return {
+      source:'CRM_META_AUDIENCE_PREVIEW',
+      target_year:2026,
+      snapshot_id:raw.coverage.snapshot_id,
+      as_of:raw.coverage.as_of,
+      purchase_rule:raw.coverage.purchase_rule,
+      coverage:raw.coverage,
+      source_counts:raw.coverage.source_counts,
+      counts:result.counts,
+      ready_for_export:result.counts.export_rows>=100
+     };
+    },READ,{requiredScopes:[GATEWAY_SCOPE]});
+
+   reg('crm_meta_publico_natal_exportar','Exportar público Meta Ads Natal 2026 em CSV privado',
+    'Gera o CSV manual para upload na interface do Meta Ads sob escopo dedicado crm.audience.export e confirmação explícita do operador. Salva arquivo em disco privado (0600) e retorna apenas metadados e SHA-256, sem PII no chat.',
+    z.object({confirmado_pelo_operador:z.boolean(),snapshot_id:z.string().optional()}),
+    OUT_META_AUDIENCE_EXPORT,async({confirmado_pelo_operador,snapshot_id})=>{
+     if(!grantedScopes.has(SCOPE_AUDIENCE_EXPORT)||!ex.canExportAudience)throw Error('insufficient_operator_export_scope');
+     if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
+
+     let item=snapshot_id?metaAudienceCache.get(snapshot_id):null;
+     if(!item||item.expiresAt<Date.now()){
+      const raw=await direct.metaAudienceRead({fresh:true});
+      const result=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
+      item={raw,result,expiresAt:Date.now()+15*60*1000};
+      metaAudienceCache.set(raw.coverage.snapshot_id,item);
+     }
+
+     const {result}=item;
+     assertMetaAudienceUploadReady(result,{minRows:100});
+     const validated=validateMetaCustomerListCsv(result.csv,{minRows:100});
+
+     await mkdir(PRIVATE_EXPORTS_DIR,{recursive:true,mode:0o700});
+     const filePath=resolve(PRIVATE_EXPORTS_DIR,`meta-audience-natal2026-${result.snapshot_id}.csv`);
+     await writeFile(filePath,result.csv,{mode:0o600,encoding:'utf8'});
+
+     return {
+      source:'CRM_META_AUDIENCE_EXPORT',
+      ready:true,
+      snapshot_id:result.snapshot_id,
+      as_of:result.as_of,
+      rows:validated.rows,
+      unique_phones:validated.unique_phones,
+      rows_with_email:validated.rows_with_email,
+      sha256:validated.sha256,
+      arquivo_privado_path:filePath,
+      expira_em:new Date(Date.now()+3600*1000).toISOString(),
+      contains_personal_data:true,
+      counts:result.counts
+     };
+    },WRITE_IDEMPOTENT,{requiredScopes:[GATEWAY_SCOPE,SCOPE_AUDIENCE_EXPORT]});
+  }
+
    reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
     busca:z.string().min(2).max(120).optional(),
     nome_cliente:z.string().min(2).max(100).optional(),
@@ -1592,7 +1725,7 @@ function rateLimiter(now){
  };
 }
 
-export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now(),labelRenderer=renderCanonicalCrmLabel}={}){
+export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now(),labelRenderer=renderCanonicalCrmLabel,legacyReader=null}={}){
  const cfg=gatewayConfig(env);
  const printCfg=printserverConfig(env);
  const perf=createGatewayPerfTracker();
@@ -1615,14 +1748,14 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   now,
   log,
   diagnostics:zapiDiag,
-  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES,...PRINTSERVER_TOOL_NAMES,...ZAPI_INSTANCE_TOOL_NAMES],
+  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES,...PRINTSERVER_TOOL_NAMES,...ZAPI_INSTANCE_TOOL_NAMES,...META_AUDIENCE_TOOL_NAMES],
   gatewayVersion:GATEWAY_VERSION,
   onToolsUpdated:()=>mcp?.notify?.toolsChanged?.()
  }):null;
  const resourceUrl=new URL(cfg.resource);
  const resourceMetadataUrl=getOAuthProtectedResourceMetadataUrl(resourceUrl);
  const gate=requireBearerAuth({verifier:oauth.verifier,requiredScopes:[GATEWAY_SCOPE],resourceMetadataUrl,expectedResource:resourceUrl});
- mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
+ mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env,legacyReader}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:supportedGatewayScopes(cfg),resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
