@@ -7,7 +7,7 @@ import {McpServer,createMcpHandler,fromJsonSchema,requireBearerAuth,getOAuthProt
 import * as z from 'zod/v4';
 import {execFileSync} from 'node:child_process';
 import {randomUUID,randomBytes} from 'node:crypto';
-import {dirname,resolve,isAbsolute} from 'node:path';
+import {dirname,resolve,isAbsolute,relative} from 'node:path';
 import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
@@ -22,7 +22,7 @@ import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PRO
 import {buildMetaAudienceCsv,assertMetaAudienceUploadReady} from './meta-audience-csv.mjs';
 import {validateMetaCustomerListCsv} from './meta-audience-csv-validator.mjs';
 import {purgeExpiredAudienceExports} from './meta-audience-private-files.mjs';
-import {mkdir,open,unlink} from 'node:fs/promises';
+import {mkdir,open,unlink,realpath} from 'node:fs/promises';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {readyForPickupClient} from './malotes-ready-client.mjs';
@@ -1633,6 +1633,15 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      const validated=validateMetaCustomerListCsv(freshResult.csv,{minRows:100});
 
      await mkdir(PRIVATE_EXPORTS_DIR,{recursive:true,mode:0o700});
+     // Never write PII beneath the Git checkout, even if .gitignore hides CSVs
+     // and even if an intermediate path component is a symlink.
+     const [canonicalPrivateDir,canonicalRepoRoot]=await Promise.all([
+      realpath(PRIVATE_EXPORTS_DIR),realpath(REPO_ROOT)
+     ]);
+     const inRepo=relative(canonicalRepoRoot,canonicalPrivateDir);
+     if(inRepo===''||(!inRepo.startsWith('..')&&!isAbsolute(inRepo))){
+      throw Error('crm_meta_audience_private_directory_inside_checkout');
+     }
      // Purge orphan CSVs left by a previous process restart; the in-process
      // one-hour timer below is merely a second line of defense.
      await purgeExpiredAudienceExports(PRIVATE_EXPORTS_DIR,{ttlMs:3600*1000});
