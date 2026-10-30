@@ -80,3 +80,19 @@ test('P0: official MCP v2 scope challenge returns ScopeChallenge object with sco
  assert.doesNotMatch(s,/Object\.assign\(\[\/\*\?undefined/);
  assert.doesNotMatch(s,/\?undefined:\[\.\.\.requiredScopes\]/);
 });
+
+
+test('P25.4: CSV containing PII may never be written inside the Git checkout',async()=>{
+ const code=await source('src/live-gateway.mjs');
+ const preflight=await source('scripts/antigravity/meta-audience-release-preflight.mjs');
+ assert.match(code,/realpath\(PRIVATE_EXPORTS_DIR\),realpath\(REPO_ROOT\)/);
+ assert.match(code,/crm_meta_audience_private_directory_inside_checkout/);
+ assert.match(preflight,/outsideCheckout/);
+});
+test('P25.4: large Meta bridge is isolated from unrelated forensic readers',async()=>{
+ const code=await source('src/legacy-api-read.mjs');
+ assert.match(code,/MAX_META_AUDIENCE_STDOUT_BYTES=24\*1024\*1024/);
+ assert.match(code,/MAX_BRIDGE_STDOUT_BYTES=8\*1024\*1024/);
+ assert.match(code,/payload\?\.action==='meta\.audience\.read'/);
+ assert.match(code,/audience\?MAX_META_AUDIENCE_STDOUT_BYTES:MAX_BRIDGE_STDOUT_BYTES/);
+});
