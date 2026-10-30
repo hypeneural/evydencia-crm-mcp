@@ -236,6 +236,12 @@ test('Meta Audience: discovery and capabilities report preview and export tools'
   const names = tools.map(t => t.name);
   assert.ok(names.includes('crm_meta_publico_natal_previa'), 'crm_meta_publico_natal_previa must be registered');
   assert.ok(names.includes('crm_meta_publico_natal_exportar'), 'crm_meta_publico_natal_exportar must be registered');
+  const metaExportTool=tools.find(t=>t.name==='crm_meta_publico_natal_exportar');
+  assert.equal(metaExportTool?.annotations?.readOnlyHint,false);
+  assert.equal(metaExportTool?.annotations?.idempotentHint,false,
+    'private CSV creation must not advertise automatic safe retries');
+  assert.equal(metaExportTool?.annotations?.openWorldHint,false,
+    'private local CSV storage does not call the external Meta API');
 
   const cap = await client.callTool({name: 'crm_capacidades', arguments: {}});
   assert.equal(cap.structuredContent.meta_audience_enabled, true);
@@ -531,4 +537,41 @@ test('Meta Audience: export fails closed if CSV directory is inside the Git chec
   await client.close().catch(()=>{});
   await rm(inside,{recursive:true,force:true});
  }
+});
+
+test('P25.9: changed buyer/opt-out audit counts invalidate preview even when CSV is identical', async()=>{
+ let reads=0;
+ const legacyReader={metaAudienceRead:async()=>{
+  const snapshot=buildSyntheticBackendData(105);
+  reads++;
+  if(reads>1)snapshot.records[0].suppressed=true; // already excluded buyer; CSV stays identical
+  return snapshot;
+ }};
+ const base=buildSyntheticBackendData(105);
+ const altered=buildSyntheticBackendData(105);
+ altered.records[0].suppressed=true;
+ const oldOutput=buildMetaAudienceCsv({records:base.records,coverage:base.coverage});
+ const nextOutput=buildMetaAudienceCsv({records:altered.records,coverage:altered.coverage});
+ assert.equal(oldOutput.sha256,nextOutput.sha256,'CSV itself is unchanged');
+ assert.notEqual(oldOutput.counts.identity_groups_with_suppression,
+  nextOutput.counts.identity_groups_with_suppression,'audit context changed');
+
+ const gw=createTestGateway({}, {legacyReader});
+ const tokens=await authorizeToken(gw,'fake-op7-export');
+ const client=new Client({name:'test-client',version:'1.0.0'});
+ const transport=new StreamableHTTPClientTransport(new URL('http://localhost/mcp'),{
+  requestInit:{headers:{Authorization:'Bearer '+tokens.access_token}},
+  fetch:(url,init)=>gw.handle(new Request(url,init),{ip:'10.0.0.1',host:'localhost'})
+ });
+ try{
+  await client.connect(transport);
+  const preview=await client.callTool({name:'crm_meta_publico_natal_previa',arguments:{}});
+  assert.equal(preview.isError,undefined);
+  assert.equal(preview.structuredContent.counts.identity_groups_with_suppression,1);
+  const exp=await client.callTool({name:'crm_meta_publico_natal_exportar',
+   arguments:{confirmado_pelo_operador:true,snapshot_id:preview.structuredContent.snapshot_id}});
+  assert.equal(exp.isError,true,'changed counts require review instead of silently exporting');
+  assert.equal(JSON.parse(exp.content[0].text).error,'crm_meta_audience_snapshot_changed_review_again');
+  assert.equal(reads,2);
+ }finally{await client.close();}
 });
