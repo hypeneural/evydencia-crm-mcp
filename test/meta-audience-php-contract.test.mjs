@@ -26,11 +26,13 @@ test('P0: 2026 paid older orders resolved before merging into order ID set',asyn
 });
 
 test('P0: business status keys from Laravel OrderStatus include refunded and chargeback',async()=>{
- const s=await source('scripts/crm-meta-audience-read.php');
- assert.match(s,/'payment_refunded'\s*=>\s*true/);
- assert.match(s,/'payment_chargeback'\s*=>\s*true/);
- assert.match(s,/hasAmbiguousOrder/);
- assert.match(s,/unexpected_transaction_isolation/);
+ const reader=await source('scripts/crm-meta-audience-read.php');
+ const classifier=await source('scripts/crm-meta-audience-purchase-classifier.php');
+ assert.match(classifier,/'payment_refunded'/);
+ assert.match(classifier,/'payment_chargeback'/);
+ assert.match(classifier,/\$ambiguous\s*=\s*true/);
+ assert.match(reader,/evyMetaAudienceClassifyPurchases2026/);
+ assert.match(reader,/unexpected_transaction_isolation/);
 });
 
 test('P0: legal approval must be server-side and missing approval never returns records',async()=>{
@@ -57,4 +59,22 @@ test('P0: OAuth dedicated audience permission is default deny',async()=>{
  assert.match(s,/audienceExportEnabled:env\.EVYD_AUDIENCE_EXPORT_ENABLED==='1'/);
  assert.doesNotMatch(s,/EVYD_AUDIENCE_ALLOWED_OPERATORS\|\|env\.EVYD_ALLOWED_OPERATOR_IDS/);
  assert.match(s,/SCOPE_AUDIENCE_EXPORT/);
+});
+
+test('P0: only eligible scheduled dispatches enter Meta, not legacy scheduled-only recipients',async()=>{
+ const s=await source('scripts/crm-meta-audience-read.php');
+ assert.match(s,/->where\('status', 'scheduled'\)/);
+ assert.match(s,/->whereIn\('eligibility_status', \['allowed', 'eligible'\]\)/);
+ assert.match(s,/scheduled_only_not_exported/);
+ assert.doesNotMatch(s,/'source_id' => 'scheduled-' \./);
+});
+test('P0: persisted CRM suppression HMAC must be validated',async()=>{
+ const s=await source('scripts/crm-meta-audience-read.php');
+ assert.match(s,/hash_equals\(\$hash, \$hasher->hash\(\$persistedPhone\)\)/);
+ assert.match(s,/meta_audience_suppression_hash_mismatch/);
+});
+test('P0: official MCP scope challenge uses array of scopes',async()=>{
+ const s=await source('src/live-gateway.mjs');
+ assert.match(s,/\?undefined:\[\.\.\.requiredScopes\]/);
+ assert.doesNotMatch(s,/errorDescription:'Audience export scope required'/);
 });
