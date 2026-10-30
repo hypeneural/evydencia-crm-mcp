@@ -59,9 +59,10 @@ try {
         ->get(['table_name','index_name','seq_in_index','column_name']);
     $indexes = [];
     foreach ($indexRows as $index) {
-        $key = (string)$index->table_name;
-        $idx = (string)$index->index_name;
-        $indexes[$key][$idx][] = (string)$index->column_name;
+        $row = array_change_key_case((array) $index, CASE_LOWER);
+        $key = (string) ($row['table_name'] ?? '');
+        $idx = (string) ($row['index_name'] ?? '');
+        $indexes[$key][$idx][] = (string) ($row['column_name'] ?? '');
     }
     $indexChecks = [];
     foreach ([
