@@ -211,26 +211,37 @@ try {
 
     // Resolve customer IDs of older orders paid in the target year.
     if (!empty($missingOrderIds)) {
-        $extraOrders = $DB::table('orders')
-            ->whereIn('id', $missingOrderIds)
-            ->get(['id', 'customer_id', 'created_at']);
-        foreach ($extraOrders as $ord) {
-            if ((int)$ord->customer_id <= 0) throw new \RuntimeException('order_without_customer_relation');
-            $ordersByCustomer[(int) $ord->customer_id][(int) $ord->id] = true;
+        // Bound IN lists prevent MySQL placeholder limits. Keep every SELECT
+        // inside the same InnoDB REPEATABLE READ transaction.
+        $resolvedOlderOrders = 0;
+        foreach (array_chunk($missingOrderIds, 1000) as $orderBatch) {
+            $extraOrders = $DB::table('orders')
+                ->whereIn('id', $orderBatch)
+                ->get(['id', 'customer_id', 'created_at']);
+            $resolvedOlderOrders += count($extraOrders);
+            foreach ($extraOrders as $ord) {
+                if ((int)$ord->customer_id <= 0) throw new \RuntimeException('order_without_customer_relation');
+                $ordersByCustomer[(int) $ord->customer_id][(int) $ord->id] = true;
+            }
         }
-        if (count($extraOrders) !== count($missingOrderIds)) {
+        if ($resolvedOlderOrders !== count($missingOrderIds)) {
             throw new \RuntimeException('paid_2026_orders_missing_referential_integrity');
         }
     }
 
-    // Fetch latest status for all candidate orders
+    // Match the CRM's latest operational status rule (MAX(id)), but fetch
+    // ONLY one status row per order. Avoid loading every historical status.
     $latestStatusByOrder = [];
     $ordersWithStatus = [];
-    if (!empty($allCandidateOrderIds)) {
-        $statusRows = $DB::table('orders_status')
-            ->whereIn('order_id', array_keys($allCandidateOrderIds))
-            ->orderBy('id', 'asc')
-            ->get(['id', 'order_id', 'status']);
+    foreach (array_chunk(array_keys($allCandidateOrderIds), 1000) as $orderBatch) {
+        $latestIds = $DB::table('orders_status')
+            ->whereIn('order_id', $orderBatch)
+            ->groupBy('order_id')
+            ->selectRaw('MAX(id) AS id');
+        $statusRows = $DB::table('orders_status AS os')
+            ->joinSub($latestIds, 'latest', function ($join) {
+                $join->on('latest.id', '=', 'os.id');
+            })->get(['os.order_id', 'os.status']);
         foreach ($statusRows as $sr) {
             $oId = (int) $sr->order_id;
             $latestStatusByOrder[$oId] = (string) $sr->status;
