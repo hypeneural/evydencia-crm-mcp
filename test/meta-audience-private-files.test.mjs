@@ -15,6 +15,10 @@ test('private CSV janitor removes only expired, exact owned exports', async()=>{
   for(const name of [expired,fresh,unrelated])await writeFile(join(dir,name),'synthetic-only',{mode:0o600});
   await utimes(join(dir,expired),new Date(0),new Date(0));
   await utimes(join(dir,unrelated),new Date(0),new Date(0));
+  const preview=await purgeExpiredAudienceExports(dir,{nowMs:Date.now(),ttlMs:3600_000,dryRun:true});
+  assert.equal(preview.expired,1);
+  assert.equal(preview.deleted,0);
+  assert.equal((await readdir(dir)).includes(expired),true);
   const result=await purgeExpiredAudienceExports(dir,{nowMs:Date.now(),ttlMs:3600_000});
   assert.equal(result.deleted,1);
   assert.deepEqual((await readdir(dir)).sort(),[fresh,unrelated].sort());
