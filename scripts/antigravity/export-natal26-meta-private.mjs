@@ -21,13 +21,22 @@ try {
  const r=relative(root,dir),stat=await lstat(dir);
  if((r===''||(!r.startsWith('..')&&!isAbsolute(r)))||!stat.isDirectory()||stat.isSymbolicLink()||(process.platform!=='win32'&&(stat.mode&0o077)!==0))throw Error('AUDIENCE_PRIVATE_EXPORT_NOT_CONFIGURED');
  const input=JSON.stringify({action:'meta.audience.read',year:2026,purchase_rule:rule});
- const response=execFileSync('php',[resolve(repo,'scripts/crm-forensic-bridge.php'),input],{
-  env:process.env,encoding:'utf8',maxBuffer:24*1024*1024,timeout:60000,stdio:['ignore','pipe','pipe']
- });
- const raw=JSON.parse(response);
- if(raw.available===false||!Array.isArray(raw.records)||raw.coverage?.purchase_rule!==rule)throw Error('AUDIENCE_SOURCE_INCOMPLETE');
- const built=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
- assertMetaAudienceUploadReady(built);
+ const readSnapshot=()=>{
+  const response=execFileSync('php',[resolve(repo,'scripts/crm-forensic-bridge.php'),input],{
+   env:process.env,encoding:'utf8',maxBuffer:24*1024*1024,timeout:60000,stdio:['ignore','pipe','pipe']
+  });
+  const raw=JSON.parse(response);
+  if(raw.available===false||!Array.isArray(raw.records)||raw.coverage?.purchase_rule!==rule)throw Error('AUDIENCE_SOURCE_INCOMPLETE');
+  const built=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
+  assertMetaAudienceUploadReady(built);
+  return {raw,built};
+ };
+ const first=readSnapshot();
+ const {raw,built}=readSnapshot(); // fresh SQL transaction just before private write
+ if(first.built.sha256!==built.sha256
+   ||JSON.stringify(first.built.counts)!==JSON.stringify(built.counts)
+   ||JSON.stringify(first.raw.coverage.source_counts)!==JSON.stringify(raw.coverage.source_counts))
+  throw Error('AUDIENCE_SOURCE_CHANGED_REVIEW_AGAIN');
  const checked=validateMetaCustomerListCsv(built.csv);
  const name='meta-audience-natal2026-'+randomUUID()+'.csv';
  const destination=resolve(dir,name);
