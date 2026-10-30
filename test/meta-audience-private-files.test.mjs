@@ -5,6 +5,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {purgeExpiredAudienceExports} from '../src/meta-audience-private-files.mjs';
 
+// The on-export sweep and the process janitor can examine the same file.
+// Concurrent deletion must be idempotent, not abort a legitimate export.
+
 test('private CSV janitor removes only expired, exact owned exports', async()=>{
  const dir=await mkdtemp(join(tmpdir(),'evyd-meta-private-'));
  await chmod(dir,0o700);
@@ -33,5 +36,22 @@ test('private CSV janitor refuses invalid or insecure directories', async()=>{
    await chmod(dir,0o777);
    await assert.rejects(()=>purgeExpiredAudienceExports(dir),/private_directory_insecure/);
   }
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+
+test('P25.8 two concurrent cleanup passes are idempotent on the same expired file',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'evyd-meta-racing-'));
+ await chmod(dir,0o700);
+ try{
+  const target='meta-audience-natal2026-aaaaaaaa-bbbb-cccc-dddd-111111111111.csv';
+  await writeFile(join(dir,target),'synthetic',{mode:0o600});
+  await utimes(join(dir,target),new Date(0),new Date(0));
+  const results=await Promise.all([
+   purgeExpiredAudienceExports(dir,{ttlMs:3600_000}),
+   purgeExpiredAudienceExports(dir,{ttlMs:3600_000}),
+  ]);
+  assert.equal((await readdir(dir)).includes(target),false);
+  assert.equal(results.reduce((sum,r)=>sum+r.deleted,0),1);
  }finally{await rm(dir,{recursive:true,force:true});}
 });
