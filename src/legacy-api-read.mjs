@@ -10,6 +10,10 @@ import {baseURL,day,phone} from './core.mjs';
 export const BRIDGE_PROJECTION_VERSION='v0.12.1-hardened';
 const MAX_BRIDGE_STDIN_BYTES=16384;
 const MAX_BRIDGE_STDOUT_BYTES=8*1024*1024;
+// The audience reader returns full PII only to this local private process.
+// Keep a SEPARATE, hard-capped output budget instead of raising limits for
+// every unrelated CRM bridge on the shared VPS.
+const MAX_META_AUDIENCE_STDOUT_BYTES=24*1024*1024;
 const SCRIPTS_DIR=resolve(dirname(fileURLToPath(import.meta.url)),'..','scripts');
 const BRIDGE_SCRIPT=resolve(SCRIPTS_DIR,'crm-natal-bridge.php');
 const FORENSIC_BRIDGE_SCRIPT=resolve(SCRIPTS_DIR,'crm-forensic-bridge.php');
@@ -879,6 +883,7 @@ export function forensicOrderProjection(raw,{includeParticipants=false,fullProfi
   customer_phone_masked:maskPhone(c.whatsapp||c.phone),
   status_id:statusId,
   status_key:statusKey,
+  status_event_id:Number.isSafeInteger(x.status_event_id)?x.status_event_id:null,
   status_label:statusLabel,
   created_at:typeof x.created_at==='string'?x.created_at:null,
   created_at_brt:toBrt(x.created_at),
@@ -1022,7 +1027,7 @@ export function legacyOrderProjection(raw,{includeParticipants=false,fullProfile
  return forensicOrderProjection(raw,{includeParticipants,fullProfile});
 }
 
-export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,includeParticipants=false,operatorContext=null}){
+export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,includeParticipants=false,operatorContext=null,bypassBridgeCache=false}){
  const base=baseURL(baseUrl);if(typeof token!=='string'||token.length<12)fail('missing_token');
  const fullProfile=Boolean(includeParticipants);
  const opCtx=operatorContext&&typeof operatorContext==='object'?operatorContext:null;
@@ -1062,7 +1067,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
   return 15000;
  };
 
- async function execPhpJsonBridge(scriptPath,payload,{bridgeTimeoutMs,kind}){
+ async function execPhpJsonBridge(scriptPath,payload,{bridgeTimeoutMs,kind,fresh=false,maxOutputBytes=MAX_BRIDGE_STDOUT_BYTES}){
   assertOperatorAuthorized();
   const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
   const cacheKey=buildScopedBridgeCacheKey({
@@ -1071,7 +1076,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    authScope:`${opCtx?.authScope||'direct_read'}|fp:${fullProfile?1:0}`,
    upstreamGrantHash:opCtx?.upstreamGrantHash||'none',
    projectionVersion:BRIDGE_PROJECTION_VERSION,
-   kind,
+   kind:fresh?kind+'_fresh':kind,
    base,
    appPath:crmAppPath,
    payload
@@ -1080,7 +1085,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    return await SHARED_BRIDGE_READ_CACHE.execute(cacheKey,async()=>{
     const {stdout}=await spawnPhpBridgeStdin(scriptPath,JSON.stringify(payload),{
      timeoutMs:bridgeTimeoutMs,
-     maxBuffer:MAX_BRIDGE_STDOUT_BYTES,
+     maxBuffer:maxOutputBytes,
      env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
     });
     let parsed;
@@ -1090,17 +1095,21 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      fail(SAFE_BRIDGE_CODE.test(safeErr)?safeErr:`${kind}_contract_error`);
     }
     return parsed;
-   },{effectiveTtlMs:readCacheTtlMs()});
+   },{effectiveTtlMs:fresh||bypassBridgeCache?0:readCacheTtlMs()});
   }catch(e){
    if(typeof e?.message==='string'&&e.message.startsWith('legacy_read_'))throw e;
    fail(classifyBridgeExecError(e,kind));
   }
  }
 
- async function runForensicBridge(payload){
+ async function runForensicBridge(payload,{fresh=false}={}){
+  const audience=payload?.action==='meta.audience.read';
   return await execPhpJsonBridge(FORENSIC_BRIDGE_SCRIPT,payload,{
-   bridgeTimeoutMs:Math.max(timeoutMs,15000),
-   kind:'forensic_bridge'
+   // Full audience scan may be slower than a single-order lookup; do not
+   // raise global timeouts and NEVER retry side effects (bridge is read-only).
+   bridgeTimeoutMs:audience?Math.max(timeoutMs,45000):Math.max(timeoutMs,15000),
+   maxOutputBytes:audience?MAX_META_AUDIENCE_STDOUT_BYTES:MAX_BRIDGE_STDOUT_BYTES,
+   kind:'forensic_bridge',fresh
   });
  }
 
@@ -1139,6 +1148,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const max=Math.min(25,Math.max(1,Number(opts?.limit)||10));
    const page=Math.max(1,Number(opts?.page)||1);
    const detailLevel=['resumo','padrao','forense'].includes(opts?.detailLevel)?opts.detailLevel:'padrao';
+   const canonicalPaginationRequired=opts?.canonicalPaginationRequired===true;
    if(fullProfile&&canUseForensicBridge()){
     const bridgeFilters={};
     const keyMap={'customer.name':'customer_name','customer.whatsapp':'customer_whatsapp','customer.uuid':'customer_uuid','order.uuid':'order_uuid','order.id':'order_id','order.status':'order_status','product.slug':'product_slug','order.created-start':'created_start','order.created-end':'created_end','order.session-start':'session_start','order.session-end':'session_end','payment_method_name':'payment_method_name','has_open_balance':'has_open_balance'};
@@ -1146,6 +1156,46 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      if(v!==undefined&&v!==null&&v!==''&&keyMap[k])bridgeFilters[keyMap[k]]=v;
     }
     return await runForensicBridge({action:'orders.search',filters:bridgeFilters,limit:max,page,detail_level:detailLevel,full_profile:true});
+   }
+   if(canonicalPaginationRequired){
+    // Fallback only when Laravel proves server-side pagination. The CRM
+    // OrderService uses paginate(200): requesting page 2 is NOT equivalent
+    // to slicing page 2 out of a locally received page 1.
+    const params=legacyFilters(filters);
+    params.set('page',String(page));
+    const raw=await get('/api/orders/search',params);
+    const rows=raw?.data,meta=raw?.meta;
+    const validInt=v=>v!==null&&v!==undefined&&v!==''&&Number.isSafeInteger(Number(v))&&Number(v)>=0;
+    const current=Number(meta?.current_page);
+    const perPage=Number(meta?.per_page);
+    const total=Number(meta?.total);
+    const lastPage=Number(meta?.last_page);
+    if(!Array.isArray(rows)||!validInt(meta?.current_page)||current!==page||
+       !validInt(meta?.per_page)||perPage<1||perPage>200||
+       !validInt(meta?.total)||!validInt(meta?.last_page)||
+       lastPage!==Math.max(1,Math.ceil(total/perPage))||
+       page>lastPage || rows.length!==Math.min(perPage,Math.max(0,total-(page-1)*perPage))){
+      fail('canonical_pagination_unavailable');
+    }
+    return {
+     source:'CRM_API_SERVER_PAGINATED',scope:'PAGINATED_CANONICAL_ORDER_LIST',
+     detail_level:detailLevel,
+     pagination:{page,per_page:perPage,returned_count:rows.length,
+      total_matching_orders:total,total_pages:lastPage,has_more:page<lastPage},
+     orders:rows.map(r=>{
+      const projected=forensicOrderProjection(r,{includeParticipants,fullProfile,detailLevel});
+      // Laravel OrderResource.status exposes {id,name}, not enum key.
+      // These IDs are pinned to App/Enums/OrderStatus.php on CRM main.
+      const byId={
+       1:'order_aborted',2:'payment_chargeback',3:'order_created',
+       4:'waiting_payment',5:'payment_confirmed',6:'session_schedule',
+       7:'session_schedule_confirmed',8:'selection_schedule',
+       9:'selection_schedule_confirmed',10:'waiting_product_retrieve',
+       11:'product_retrieve_confirmed',12:'order_completed',13:'payment_refunded'
+      };
+      return {...projected,status_key:projected.status_key||byId[projected.status_id]||null};
+     }),
+    };
    }
    const cleanFilters={};
    for(const [k,v] of Object.entries(filters||{})){if(allKeys.has(k)&&v!==undefined&&v!==null&&v!=='')cleanFilters[k]=v}
@@ -1259,6 +1309,8 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    const orderId=isObj&&Number.isSafeInteger(locator.order_id)?locator.order_id:null;
    const detailLevel=isObj&&['resumo','padrao','forense'].includes(locator.detailLevel)?locator.detailLevel:'forense';
    const includeCalendarSync=isObj&&typeof locator.includeCalendarSync==='boolean'?locator.includeCalendarSync:undefined;
+   // A write-adjacent print guard must never consume the 15s diagnostic cache.
+   const fresh=isObj&&locator.fresh===true;
    if(idUuid!==undefined&&idUuid!==null&&idUuid!==''&&!uuid(idUuid))fail('invalid_uuid');
    if(!idUuid&&(!orderId||orderId<1))fail('invalid_uuid');
 
@@ -1269,7 +1321,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      detail_level:detailLevel,
      ...(includeCalendarSync!==undefined?{include_calendar_sync:includeCalendarSync}:{}),
      full_profile:true
-    });
+    },{fresh});
     if(res?.order)res.order=await attachProbedAvatarToOrder(res.order);
     return res;
    }
@@ -1493,6 +1545,16 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
      name:typeof r?.name==='string'?r.name.slice(0,100):null,
      phone_masked:maskPhone(r?.whatsapp)
     }))};
+  },
+  async proposalHistoryBatch({telefones,historico_limite=15}={}){
+   assertOperatorAuthorized();
+   if(!canUseForensicBridge())fail('proposals_history_bridge_unavailable');
+   return await runForensicBridge({action:'proposals.history.batch',telefones,ano:2026,historico_limite},{fresh:true});
+  },
+  async metaAudienceRead({legal_basis_policy='legitimate_interest_customer_reactivation_with_optout_check',fresh=false}={}){
+   assertOperatorAuthorized();
+   if(!canUseForensicBridge())fail('meta_audience_bridge_unavailable');
+   return await runForensicBridge({action:'meta.audience.read',year:2026,legal_basis_policy},{fresh});
   },
   async zapiConnectionHistory({instanceId,limit=25}={}){
    if(typeof instanceId!=='string'||!/^[A-Za-z0-9_-]{4,80}$/.test(instanceId.trim()))fail('invalid_zapi_instance_id');

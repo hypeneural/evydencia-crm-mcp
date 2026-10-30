@@ -10,6 +10,8 @@ dist/
 # Nunca versionar dados comerciais exportados do CRM
 /private/
 /snapshots/
+.private_exports/
+*.csv
 *.live.json
 natal-2026-digest*.json
 

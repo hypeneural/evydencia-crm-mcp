@@ -856,6 +856,7 @@ function projectOrdersBatch(
             'customer' => $isSummaryOnly ? null : $custProjected,
             'status_id' => $currentStatusEnum?->value ?? null,
             'status_key' => $currentStatusKey,
+            'status_event_id' => $lastStatusRow?->id,
             'status_label' => $currentStatusEnum?->description ?? null,
             'status' => [
                 'id' => $currentStatusEnum?->value ?? null,
@@ -1774,6 +1775,19 @@ if ($action === 'zapi_connection_history') {
         'integration_account' => $integrationAccountSummary,
         'events' => array_slice($matched, 0, $limit),
     ], $forensicStartedMs);
+}
+
+if ($action === 'proposals.history.batch') {
+    require __DIR__ . '/crm-proposal-history-read.php';
+}
+
+// Schema-only diagnostic, no PII. Not exposed as an MCP tool until review.
+if ($action === 'meta.audience.schema.preflight') {
+    require __DIR__ . '/crm-meta-audience-preflight-read.php';
+}
+
+if ($action === "meta.audience.read" || $action === "meta.audience.extract" || $action === "meta.audience.preview") {
+    require __DIR__ . "/crm-meta-audience-read.php";
 }
 
 fwrite(STDERR, json_encode(['error' => 'unknown_forensic_action']) . "\n");

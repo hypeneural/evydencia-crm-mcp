@@ -6,6 +6,13 @@
 - **MCP Apps UI:** `ui://evydencia/crm-visual-card-v2.html` (recurso principal de Pedido e Cliente 360) + `ui://evydencia/crm-visual-card-v1.html` (fallback temporário de compatibilidade/rollback).
 - **Topologia de Deploy na VPS (`185.241.151.207`):** serviço `systemd` nativo `evydencia-crm-mcp-live.service` em `/opt/evydencia-mcp/app` (`User=evydmcp`, Node 22 em `/opt/evydencia-mcp/.node22/bin/node`, `EnvironmentFile=/srv/secrets/evydencia-crm-mcp/gateway.env`, proxy reverso Caddy -> `https://mcp-crm.etijucas.com.br/mcp`). Os artefatos em `deploy/gateway/` são referência offline validada por `npm run vps:preflight`.
 
+## Extensão PrintServer (PR #12, opt-in)
+- O catálogo original da `main` tem 30 ferramentas (29 originais + 1 card visual). Na PR #12/produção que a publicou, o catálogo do operador autorizado tem **33** (3 ferramentas PrintServer adicionais); conferir o SHA implantado com `crm_capacidades`. O item `legacy_v012_tools_preserved_count` exclui também as 3 novas ferramentas.
+- As chamadas da versão atual para `crm_capacidades` também retornam `oauth_authorization` com **escopos efetivamente concedidos** — não confundir `scopes_supported` do manifesto com `granted_scopes`.
+- A única exceção ao lookup de pedido na **consulta de status** da impressão é `order_id=999999`, fixture sintética sem pedido comercial. Exigir escopo `print.jobs.write`, operador em allowlist e reconciliação de `job.order_id`; para qualquer outro ID, consulta CRM obrigatória.
+- Para auditoria sem efeitos colaterais: `npm run printserver:smoke:read` na VPS autenticada, `crm_previa_malotes_retirada` em pedidos aprovados e `crm_consultar_impressao_etiqueta` do job sintético; nunca gerar trabalho novo em smoke.
+- Referência para Antigravity: `docs/AUDITORIA_CHATGPT_LIVE_PRINTSERVER_20261026.md`. PRs podem estar implantadas a partir de branch mesmo **Draft**; reconciliar o SHA remoto antes de cogitar merge/deploy. Não tocar no PrintServer Windows ou CRM durante esse hotfix.
+
 ## Regras Inegociáveis
 1. **Escopo estrito:** altere somente `hypeneural/evydencia-crm-mcp`. O CRM Laravel (`hypeneural/evydencia-crm` em `/var/www/evydencia/current`) é referência canônica **somente leitura** — proibido modificar código, banco, migrations, filas ou webhooks do CRM.
 2. **Zero disparos reais em testes/smoke:** nunca invoque `zapi_send_*`, `zapi_group_*` de escrita nem `crm_enviar_proposta_natal` durante testes ou smoke checks.

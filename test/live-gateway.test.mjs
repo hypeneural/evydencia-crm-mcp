@@ -16,7 +16,8 @@ const OPS={
  'fake-op7-wild-000007':{id:7,ab:['*']},
  'fake-op99-read-00004':{id:99,ab:R},
  'fake-op7-expd-000005':{id:7,ab:R,exp:'2020-01-01T00:00:00Z'},
- 'fake-op7-read-000006':{id:7,ab:R}
+ 'fake-op7-read-000006':{id:7,ab:R},
+ 'fake-op7-ready-000008':{id:7,ab:[...R,'extension:proposal-read','extension:orders-ready-write']}
 };
 const INTERNAL_TOK='fake-internal-crm-read-token-000001';
 const revoked=new Set(),crmLog=[],logs=[],secrets=[...Object.keys(OPS),INTERNAL_TOK];
@@ -30,6 +31,12 @@ const gw=x=>createGateway(env(x),{log:e=>logs.push(e),now});
 const call=(g,path,init={},host='localhost')=>g.handle(new Request(new URL(path,'http://localhost'),init),{ip:'10.0.0.1',host});
 const form=o=>({method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o).toString()});
 const env1=data=>JSON.stringify({schema_version:'1.0',generated_at:new Date(clock).toISOString(),data});
+const brokerReadFixture=url=>{
+ if(String(url)==='https://print.example.test/v1/capabilities')return Response.json({service:'evydencia-printserver',capabilities:{independent_order_labels:true,order_label_receipts:true}});
+ const match=/^https:\/\/print\.example\.test\/v1\/orders\/(\d+)\/label-job$/.exec(String(url));
+ if(match)return Response.json({order_id:Number(match[1]),state:'not_requested',job:null,needs_reconciliation:false});
+ return null;
+};
 
 before(async()=>{
  crm=createServer((req,res)=>{
@@ -49,12 +56,35 @@ before(async()=>{
    });
    return;
   }
+  if(req.method==='POST'&&u.pathname==='/api/v1/extension/orders/6002/ready-for-pickup'){
+   if(!OPS[tok]?.ab?.includes('extension:orders-ready-write'))return send(403,'{}');
+   let text='';req.on('data',b=>{text+=b});
+   req.on('end',()=>{
+    const data=JSON.parse(text||'{}');
+    if(data.operator_id!==7||data.expected_status_event_id!==120||data.confirmed_by_operator!==true)
+     return send(409,JSON.stringify({error:{code:'STATUS_CONFLICT'}}));
+    send(200,JSON.stringify({success:true,state:'ready',order_id:6002,status_key:'waiting_product_retrieve',
+     status_event_id:121,changes_applied:true,replay:false,notification_delivery_verified:false}));
+   });
+   return;
+  }
   if(req.method!=='GET')return send(405,'{}');
   if(u.pathname==='/health/live')return send(200,JSON.stringify({status:'ok'}));
   if(u.pathname.startsWith('/api/orders/')||u.pathname.startsWith('/api/reports/')){
    if(auth!==INTERNAL_TOK)return send(401,JSON.stringify({message:'Unauthorized'}));
    const sampleOrder={id:5001,uuid:'11111111-aaaa-4111-8111-000000000101',status:{id:10,name:'Aguardando Retirar'},customer:{name:'Cliente Ficticia 7',whatsapp:'48999990001'},created_at:'2026-10-01T17:33:09.000000Z',schedule_1:'2026-11-10 10:00:00',items:[{id:1,quantity:'1.000',total:'450.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'200.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'Crianca Ficticia',birthday:'2024-04-30',age:'2 anos e 5 meses',relationship:'Filho (a)'}],summary:{total:450,received:200,remaining:250}};
    const newerOrder={id:5127,uuid:'22222222-bbbb-4222-8222-000000000202',status:{id:6,name:'Sessão Agendada'},customer:{name:'Larissa Exemplo',whatsapp:'48988881775'},created_at:'2026-10-23T17:33:09.000000Z',schedule_1:'2026-11-02 09:00:00',items:[{id:2,quantity:'1.000',total:'480.00',product:{name:'Experiência Então é Natal',slug:'natal',reference:'enatal'}}],installments:[{total:'120.00',method:{name:'Pix - Pagar.me',type:{name:'Pix'}}}],participants:[{name:'João Miguel Exemplo',birth:'2024-04-30',birth_for_extense:'há 2 anos e 5 meses',relation:{id:1,name:'Filho (a)'}}],summary:{total:480,received:120,remaining:360}};
+   if(u.pathname==='/api/orders/search'&&u.searchParams.toString().includes('6002')){
+    return send(200,JSON.stringify({data:[{...newerOrder,id:6002,
+     uuid:'44444444-dddd-4444-8444-000000000404',status_event_id:120,status_key:'session_schedule',
+     status:{id:6,name:'Sessão Agendada'},summary:{total:480,received:480,remaining:0},
+     customer:{name:'Cliente Sintetica',whatsapp:'48999990001'}}]}));
+   }
+   if(u.pathname==='/api/orders/search'&&u.searchParams.toString().includes('6001')){
+    return send(200,JSON.stringify({data:[{...sampleOrder,id:6001,
+     uuid:'33333333-cccc-4333-8333-000000000303',status_key:'waiting_product_retrieve',summary:{total:480,received:480,remaining:0},
+     installments:[],customer:{name:'Cliente Sintetica Natal',whatsapp:'48999990001'}}]}));
+   }
    if(u.pathname==='/api/orders/search')return send(200,JSON.stringify({data:[sampleOrder,newerOrder]}));
    if(u.pathname==='/api/orders/11111111-aaaa-4111-8111-000000000101/detail')return send(200,JSON.stringify({data:sampleOrder}));
    if(u.pathname==='/api/reports/natal-statistics')return send(200,JSON.stringify({source:'CRM_CANONICAL_NATAL_STATISTICS',reference_year:2026,cutoff_mmdd:u.searchParams.get('date')||'10-25',detail_level:u.searchParams.get('detail_level')||'resumo',kpis_2026:{valid_orders:101,unique_customers:100,scheduled_sessions:91,confirmed_realized_sessions:23,past_scheduled_sessions:27,past_scheduled_pending_confirmation:4,contracted_revenue_cents:5477600,contracted_revenue_reais:54776},ytd_comparison_at_cutoff:{'2026':{year:2026,accum_orders:101},'2025':{year:2025,accum_orders:142,diff_orders_2026_vs_year:-41},'2024':{year:2024,accum_orders:124,diff_orders_2026_vs_year:-23}}}));
@@ -84,12 +114,12 @@ before(async()=>{
 });
 after(()=>new Promise(r=>crm.close(r)));
 
-async function connect(g,crmToken,{exchange=true}={}){
+async function connect(g,crmToken,{exchange=true,scope='crm.read'}={}){
  const reg=await call(g,'/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({redirect_uris:[REDIR],token_endpoint_auth_method:'none',client_name:'ChatGPT'})});
  assert.equal(reg.status,201);
  const {client_id}=await reg.json();
  const verifier=randomBytes(32).toString('base64url'),challenge=createHash('sha256').update(verifier).digest('base64url');
- const q=new URLSearchParams({response_type:'code',client_id,redirect_uri:REDIR,code_challenge:challenge,code_challenge_method:'S256',state:'st-123',resource:'http://localhost/mcp',scope:'crm.read'});
+ const q=new URLSearchParams({response_type:'code',client_id,redirect_uri:REDIR,code_challenge:challenge,code_challenge_method:'S256',state:'st-123',resource:'http://localhost/mcp',...(scope?{scope}:{})});
  const pg=await call(g,'/authorize?'+q);
  assert.equal(pg.status,200);
  const txn=/name="txn" value="([^"]+)"/.exec(await pg.text())[1];
@@ -339,7 +369,7 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
   assert.equal(cap.structuredContent.version,'0.12.0');
   assert.equal(cap.structuredContent.forensic_audit_enabled,true);
   assert.equal(cap.structuredContent.mcp_ui_apps_enabled,true);
-  assert.equal(cap.structuredContent.legacy_v012_tools_preserved_count,17);
+  assert.equal(cap.structuredContent.legacy_v012_tools_preserved_count,18);
   assert.equal(cap.structuredContent.write_requires_explicit_confirmation,true);
   assert.ok(!cap.structuredContent.tools.some(t=>t.state==='MOCK_ONLY'),'live capability inventory excludes legacy MOCK_ONLY tools');
   assert.equal(typeof cap.structuredContent.build_commit,'string');
@@ -415,5 +445,521 @@ test('Regression P0 — write scope enforcement, securitySchemes metadata, opera
  }finally{
   await c9.close();
   await c7.close();
+ }
+});
+
+test('authorized canonical label uses CRM PNG exactly and never exposes PNG in MCP result',async()=>{
+ const printed=[],renders=[];
+ const bridgeFetch=async(url,opt)=>{
+  const read=brokerReadFixture(url);if(read)return read;
+  if(String(url)==='https://print.example.test/v1/jobs'){
+   printed.push(JSON.parse(opt.body));
+   return new Response(JSON.stringify({replay:false,job:{job_id:'d83ed2db-f4f1-4a55-b632-61e246a22b38',order_id:6001,
+    render_source:'crm_canonical',state:'queued'}}),{status:201,headers:{'Content-Type':'application/json'}});
+  }
+  return fetch(url,opt);
+ };
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1'
+ }),{fetchFn:bridgeFetch,labelRenderer:async options=>{
+  renders.push(options);
+  return {label_source:'crm_canonical',label_png_base64:'fake-test-only-png',label_png_sha256:'a'.repeat(64)};
+ },log:e=>logs.push(e),now});
+ const op=await connect(g,'fake-op7-read-000001'),client=await mcp(g,op.tokens.access_token);
+ try{
+  const result=await client.callTool({name:'crm_solicitar_impressao_etiqueta',
+   arguments:{order_id:6001,confirmado_pelo_operador:true}});
+  assert.equal(result.isError,undefined,JSON.stringify(result.content));
+  assert.equal(result.structuredContent.render_source,'crm_canonical');
+  assert.equal(result.structuredContent.print_state,'queued');
+  assert.equal(result.structuredContent.label_png_base64,undefined);
+  assert.equal(renders.length,1);
+  assert.equal(renders[0].orderId,6001);
+  assert.equal(renders[0].orderUuid,'33333333-cccc-4333-8333-000000000303');
+  assert.equal(printed.length,1);
+  assert.equal(printed[0].label_source,'crm_canonical');
+  assert.equal(printed[0].label_png_base64,'fake-test-only-png');
+  assert.equal(printed[0].status_key,'waiting_product_retrieve');
+  assert.equal(printed[0].purpose,'order_label');
+ }finally{await client.close();await g.close()}
+});
+test('failed canonical render cannot enqueue a plain fallback label',async()=>{
+ let submitted=0;
+ const bridgeFetch=async(url,opt)=>{
+  const read=brokerReadFixture(url);if(read)return read;
+  if(String(url)==='https://print.example.test/v1/jobs'){submitted++;throw Error('test_unexpected_print')}
+  return fetch(url,opt);
+ };
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1'
+ }),{fetchFn:bridgeFetch,labelRenderer:async()=>{throw Error('crm_label_render_unavailable')},log:e=>logs.push(e),now});
+ const op=await connect(g,'fake-op7-read-000001'),client=await mcp(g,op.tokens.access_token);
+ try{
+  const result=await client.callTool({name:'crm_solicitar_impressao_etiqueta',
+   arguments:{order_id:6001,confirmado_pelo_operador:true}});
+  assert.equal(result.isError,true);
+  assert.equal(submitted,0);
+ }finally{await client.close();await g.close()}
+});
+
+
+test('new operator-scoped status10 tool calls only the canonical CRM extension route',async()=>{
+ const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_MALOTES_READY_WRITE_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7'});
+ const op=await connect(g,'fake-op7-ready-000008');
+ const client=await mcp(g,op.tokens.access_token);
+ try{
+  const before=crmLog.filter(x=>x.method==='POST'&&x.path.endsWith('/ready-for-pickup')).length;
+  const res=await client.callTool({name:'crm_marcar_disponivel_retirada',
+   arguments:{order_id:6002,expected_status_event_id:120,confirmado_pelo_operador:true}});
+  assert.equal(res.isError,undefined,JSON.stringify(res.content));
+  assert.equal(res.structuredContent.state,'ready');
+  assert.equal(res.structuredContent.status_key,'waiting_product_retrieve');
+  assert.equal(res.structuredContent.notification_delivery_verified,false);
+  assert.equal(crmLog.filter(x=>x.method==='POST'&&x.path.endsWith('/ready-for-pickup')).length,before+1);
+ }finally{await client.close();await g.close()}
+});
+test('PrintServer synthetic job status is readable with print scope, never needs a fake CRM order',async()=>{
+ const TEST_JOB='95bab7dc-62e9-498f-afbd-68775f05e549';
+ const statusCalls=[];
+ const fakeFetch=async(input,options)=>{
+  const url=String(input);
+  if(url.startsWith('https://print.example.test/v1/jobs/')){
+   statusCalls.push({url,method:options?.method});
+   return new Response(JSON.stringify({job:{job_id:TEST_JOB,order_id:999999,state:'spooled'}}),{
+    status:200,headers:{'Content-Type':'application/json'}
+   });
+  }
+  return fetch(input,options);
+ };
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48)
+ }),{fetchFn:fakeFetch,log:e=>logs.push(e),now});
+ const op=await connect(g,'fake-op7-read-000001');
+ const client=await mcp(g,op.tokens.access_token);
+ try{
+  const capabilities=await client.callTool({name:'crm_capacidades',arguments:{}});
+  assert.equal(capabilities.structuredContent.oauth_authorization.operator_id,'7');
+  assert.equal(capabilities.structuredContent.oauth_authorization.print_scope_granted,true);
+  assert.equal(capabilities.structuredContent.oauth_authorization.print_tool_enabled,true);
+  assert.ok(capabilities.structuredContent.oauth_authorization.granted_scopes.includes('print.jobs.write'));
+  assert.equal(capabilities.structuredContent.legacy_v012_tools_preserved_count,
+   capabilities.structuredContent.tools.filter(t=>t.registered&&!t.tool.startsWith('crm_renderizar_card_visual')&&!t.tool.startsWith('crm_previa_malotes_retirada')&&!t.tool.startsWith('crm_solicitar_impressao_etiqueta')&&!t.tool.startsWith('crm_consultar_impressao_etiqueta')).length);
+  const r=await client.callTool({name:'crm_consultar_impressao_etiqueta',arguments:{order_id:999999,job_id:TEST_JOB}});
+  assert.equal(r.isError,undefined);
+  assert.equal(r.structuredContent.print_state,'spooled');
+  assert.equal(r.structuredContent.synthetic_test,true);
+  assert.equal(r.structuredContent.printed_physically,false);
+  assert.equal(statusCalls.length,1);
+  assert.equal(statusCalls[0].method,'GET');
+  const noCrm=await client.callTool({name:'crm_consultar_impressao_etiqueta',arguments:{order_id:999998,job_id:TEST_JOB}});
+  assert.equal(noCrm.isError,true);
+  assert.equal(statusCalls.length,1,'real/non-synthetic missing order cannot query broker');
+ }finally{
+  await client.close();
+  await g.close();
+ }
+});
+
+test('PrintServer tool scope uses a dedicated operator allowlist and never prints without confirmation',async()=>{
+ const g=gw({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48)
+ });
+ const op7=await connect(g,'fake-op7-read-000001');
+ const op9=await connect(g,'fake-op9-read-000002');
+ assert.ok(op7.tokens.scope.split(/\s+/).includes('print.jobs.write'),'explicitly allowed operator gets print scope even with read-only CRM ability');
+ assert.ok(!op9.tokens.scope.split(/\s+/).includes('print.jobs.write'),'unlisted operator cannot print');
+ const c7=await mcp(g,op7.tokens.access_token);
+ const c9=await mcp(g,op9.tokens.access_token);
+ try{
+  const t7=(await c7.listTools()).tools;
+  const t9=(await c9.listTools()).tools;
+  assert.ok(t7.some(t=>t.name==='crm_solicitar_impressao_etiqueta'));
+  assert.ok(!t9.some(t=>t.name==='crm_solicitar_impressao_etiqueta'));
+  const printTool=t7.find(t=>t.name==='crm_solicitar_impressao_etiqueta');
+  assert.deepEqual(printTool._meta?.securitySchemes,[{type:'oauth2',scopes:['crm.read','print.jobs.write']}]);
+  assert.equal(printTool.annotations?.readOnlyHint,false);
+  assert.equal(printTool.annotations?.destructiveHint,true,'printing is an irreversible physical action');
+  assert.equal(printTool.annotations?.openWorldHint,false,'only the fixed private LABEL fleet');
+  assert.equal(printTool.annotations?.idempotentHint,true,'broker deduplicates arrival labels per order');
+  const c7Caps=await c7.callTool({name:'crm_capacidades',arguments:{}});
+  const c9Caps=await c9.callTool({name:'crm_capacidades',arguments:{}});
+  assert.equal(c7Caps.structuredContent.oauth_authorization.print_scope_granted,true);
+  assert.equal(c9Caps.structuredContent.oauth_authorization.print_scope_granted,false);
+  assert.equal(c9Caps.structuredContent.oauth_authorization.print_tool_enabled,false);
+  const result=await c7.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:{order_id:5001,confirmado_pelo_operador:false}});
+  assert.equal(result.isError,true);
+  assert.equal(JSON.parse(result.content[0].text).error,'operator_confirmation_required');
+ }finally{
+  await c7.close();
+  await c9.close();
+  await g.close();
+ }
+});
+test('Gameplay discovery requires full CRM operator mode, never just a valid Gameplay bearer',async()=>{
+ const options={EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_GAMEPLAY_READ_ENABLED:'1',
+  EVYD_GAMEPLAY_READ_ORIGIN:'http://127.0.0.1:51234',
+  EVYD_GAMEPLAY_READ_TOKEN:'synthetic-gameplay-read-bearer-for-test-00001'};
+ const plain=gw({...options,EVYD_ENABLE_OPERATOR_FULL_CRM:'0'});
+ const plainAuth=await connect(plain,'fake-op7-read-000001');
+ const plainClient=await mcp(plain,plainAuth.tokens.access_token);
+ const plainNames=(await plainClient.listTools()).tools.map(t=>t.name);
+ assert.equal(plainNames.includes('crm_gameplay_links'),false);
+ assert.equal(plainNames.includes('crm_gameplay_auditoria'),false);
+ assert.equal(plainNames.includes('crm_gameplay_galerias_disponiveis'),false);
+ const full=gw({...options,EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
+ const fullAuth=await connect(full,'fake-op7-read-000001');
+ const fullClient=await mcp(full,fullAuth.tokens.access_token);
+ const fullNames=(await fullClient.listTools()).tools.map(t=>t.name);
+ assert.equal(fullNames.includes('crm_gameplay_links'),true);
+ assert.equal(fullNames.includes('crm_gameplay_auditoria'),true);
+ assert.equal(fullNames.includes('crm_gameplay_galerias_disponiveis'),true);
+ const capabilities=await fullClient.callTool({name:'crm_capacidades',arguments:{}});
+ assert.equal(capabilities.structuredContent.gameplay_read_enabled,true);
+});
+
+test('Gameplay bulk audit fails closed when CRM canonical pagination bridge is absent',async()=>{
+ const g=gw({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_GAMEPLAY_READ_ENABLED:'1',
+  EVYD_GAMEPLAY_READ_ORIGIN:'http://127.0.0.1:51234',
+  EVYD_GAMEPLAY_READ_TOKEN:'synthetic-gameplay-read-bearer-for-test-00001'
+ });
+ const auth=await connect(g,'fake-op7-read-000001');
+ const client=await mcp(g,auth.tokens.access_token);
+ const result=await client.callTool({name:'crm_gameplay_auditoria',arguments:{}});
+ assert.equal(result.isError,true);
+ assert.match(result.content[0]?.text||'',/legacy_read_canonical_pagination_unavailable/);
+});
+
+test('print-only batch tool is visible with CRM order write disabled; schema excludes all status writes',async()=>{
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1',
+  EVYD_MALOTES_PRINT_BATCH_ENABLED:'1',
+  EVYD_MALOTES_READY_WRITE_ENABLED:'0',
+  EVYD_MALOTES_BATCH_ENABLED:'0'
+ }),{labelRenderer:async()=>{throw Error('no_render_in_read_only_test')},log:e=>logs.push(e),now});
+ const op=await connect(g,'fake-op7-read-000001'),client=await mcp(g,op.tokens.access_token);
+ try{
+  const tools=(await client.listTools()).tools;
+  const names=tools.map(t=>t.name);
+  assert.ok(names.includes('crm_processar_malotes_retirada'));
+  assert.ok(!names.includes('crm_marcar_disponivel_retirada'));
+  const batch=tools.find(t=>t.name==='crm_processar_malotes_retirada');
+  assert.deepEqual(batch.inputSchema.properties.modo.enum,['so_imprime','misto']);
+  assert.deepEqual(batch.inputSchema.properties.pedidos.items.properties.modo.enum,['so_imprime']);
+  assert.ok(!batch.inputSchema.properties.pedidos.items.required.includes('expected_status_event_id'));
+  const caps=(await client.callTool({name:'crm_capacidades',arguments:{}})).structuredContent;
+  assert.equal(caps.oauth_authorization.orders_write_scope_granted,false);
+  assert.equal(caps.oauth_authorization.print_scope_granted,true);
+  assert.equal(caps.tools.find(t=>t.tool==='crm_processar_malotes_retirada').state,'LIVE_ACTIVE');
+  assert.equal(caps.tools.find(t=>t.tool==='crm_marcar_disponivel_retirada').state,'NOT_AVAILABLE');
+ }finally{await client.close();await g.close()}
+});
+
+// Synthetic protocol fixture: the CRM and broker persist independently and every
+// effect passes through the actual OAuth/MCP schemas and authorization handlers.
+function independentMalotesFixture({brokerAuthorized=true,brokerCompatible=true,timeoutAfterAccept=false,mismatch=false}={}){
+ const orders=new Map([
+  [6002,{id:6002,status_key:'session_schedule',status_event_id:120,status:{id:6},remaining:0}],
+  [6003,{id:6003,status_key:'order_aborted',status_event_id:130,status:{id:13},remaining:250}]
+ ]),receipts=new Map(),effects=[],reads=[];
+ let renders=0;
+ const json=body=>Response.json(body);
+ const fixtureFetch=async(input,opt={})=>{
+  const u=new URL(String(input));
+  if(u.origin==='https://print.example.test'){
+   if(!brokerAuthorized)return json({error:'unauthorized'},{status:401});
+   if(u.pathname==='/healthz')return json({service:'evydencia-crm-mcp-live',ok:true});
+   if(u.pathname==='/v1/capabilities')return json({service:'evydencia-printserver',capabilities:brokerCompatible?{independent_order_labels:true,order_label_receipts:true}:{}});
+   const match=/^\/v1\/orders\/(\d+)\/label-job$/.exec(u.pathname);
+   if(match){const id=Number(match[1]);reads.push('receipt:'+id);return json(receipts.get(id)||{order_id:id,state:'not_requested',job:null,needs_reconciliation:false})}
+   if(u.pathname==='/v1/jobs'&&opt.method==='POST'){
+    const body=JSON.parse(opt.body);effects.push({type:'print',body});
+    const job={order_id:body.order_id,job_id:'d83ed2db-f4f1-4a55-b632-61e246a22b38',request_id:body.request_id,state:'queued',render_source:'crm_canonical'};
+    receipts.set(body.order_id,{order_id:body.order_id,state:'queued',job,needs_reconciliation:false});
+    if(timeoutAfterAccept)throw new TypeError('synthetic_transport_lost_after_accept');
+    return json({replay:false,job});
+   }
+   throw Error('unexpected_broker_path');
+  }
+  if(u.pathname==='/api/orders/search'){
+   const id=Number(u.searchParams.get('order[id]')||u.searchParams.get('order.id'));
+   const o=orders.get(id);reads.push('order:'+id);
+   return json({data:o?[{...o,id:mismatch?7000:o.id,
+    uuid:'44444444-dddd-4444-8444-000000000404',customer:{name:'Cliente Sintetica',whatsapp:'48999990001'},
+    summary:{total:480,received:480-o.remaining,remaining:o.remaining},
+    installments:[{total:480,payment_total:480-o.remaining,payment_at:'2026-10-01T10:00:00Z'}],items:[]}]:[]});
+  }
+  const mark=/^\/api\/v1\/extension\/orders\/(\d+)\/ready-for-pickup$/.exec(u.pathname);
+  if(mark&&opt.method==='POST'){
+   const body=JSON.parse(opt.body),o=orders.get(Number(mark[1]));
+   effects.push({type:'ready',body});assert.equal(body.expected_status_event_id,o.status_event_id);
+   o.status_key='waiting_product_retrieve';o.status={id:10};o.status_event_id++;
+   return json({success:true,order_id:o.id,state:'ready',status_key:o.status_key,status_event_id:o.status_event_id,changes_applied:true,replay:false});
+  }
+  return fetch(input,opt);
+ };
+ const g=createGateway(env({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1',EVYD_MALOTES_READY_WRITE_ENABLED:'1',
+  EVYD_MALOTES_BATCH_ENABLED:'1',EVYD_MALOTES_PRINT_BATCH_ENABLED:'1'}),
+ {fetchFn:fixtureFetch,labelRenderer:async()=>{renders++;return {label_source:'crm_canonical',label_png_base64:'synthetic-png',label_png_sha256:'a'.repeat(64)}},log:e=>logs.push(e),now});
+ return {g,orders,receipts,effects,reads,renders:()=>renders};
+}
+
+test('unit print works on an unpaid terminal order; repeated call reuses its durable receipt',async()=>{
+ const f=independentMalotesFixture(),op=await connect(f.g,'fake-op7-ready-000008'),c=await mcp(f.g,op.tokens.access_token);
+ try{
+  const args={order_id:6003,confirmado_pelo_operador:true};
+  const one=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:args});
+  assert.equal(one.isError,undefined,JSON.stringify(one));assert.equal(one.structuredContent.crm_status_updated,false);
+  assert.equal(f.effects.length,1);assert.equal(f.effects[0].type,'print');
+  assert.equal(f.effects[0].body.purpose,'order_label');assert.equal(f.effects[0].body.status_key,'order_aborted');
+  assert.equal(f.orders.get(6003).remaining,250);assert.equal(f.orders.get(6003).status_event_id,130);
+  const two=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:args});
+  assert.equal(two.structuredContent.replay,true);assert.equal(f.effects.length,1);assert.equal(f.renders(),1);
+ }finally{await c.close();await f.g.close()}
+});
+
+test('mixed batch keeps ready/print independent and completion repeats no completed effects',async()=>{
+ const f=independentMalotesFixture(),op=await connect(f.g,'fake-op7-ready-000008'),c=await mcp(f.g,op.tokens.access_token);
+ try{
+  const args={modo:'misto',pedidos:[{order_id:6002,modo:'so_baixa',expected_status_event_id:120},
+   {order_id:6003,modo:'baixa_e_imprime',expected_status_event_id:130}],confirmado_pelo_operador:true};
+  const r=await c.callTool({name:'crm_processar_malotes_retirada',arguments:args});
+  assert.equal(r.isError,undefined,JSON.stringify(r));const report=r.structuredContent;
+  assert.equal(report.results[0].baixa,'ready');assert.equal(report.results[0].impressao,'not_requested');
+  assert.equal(report.results[0].status_event_id,121);assert.match(report.results[0].baixa_request_id,/^[a-f0-9-]{36}$/);
+  assert.equal(report.results[1].baixa,'blocked');assert.equal(report.results[1].impressao,'queued');
+  assert.deepEqual(f.effects.map(e=>e.type),['ready','print']);
+  const preview=await c.callTool({name:'crm_previa_malotes_retirada',arguments:{order_ids:[6002,6002,6003],acoes:args.pedidos.map(({order_id,modo})=>({order_id,modo}))}});
+  assert.equal(preview.structuredContent.orders.length,2);assert.equal(preview.structuredContent.orders[0].status_event_id,121);
+  assert.equal(preview.structuredContent.orders[1].modo,'baixa_e_imprime');assert.equal(preview.structuredContent.orders[1].impressao.job_id,report.results[1].job_id);
+  assert.equal(preview.structuredContent.automatic_pickup_status_write_available,true);
+  const retry=await c.callTool({name:'crm_processar_malotes_retirada',arguments:args});
+  assert.equal(retry.structuredContent.results[0].baixa,'already_ready');assert.equal(retry.structuredContent.results[1].impressao_replay,true);
+  assert.equal(f.effects.length,2);
+ }finally{await c.close();await f.g.close()}
+});
+
+test('action scopes, duplicate IDs and missing confirmation reject the entire batch before effects',async()=>{
+ const f=independentMalotesFixture();
+ // A real sealed, explicitly narrowed synthetic grant; the operator itself has both abilities.
+ const seal=createSealer(Buffer.from(KEY,'base64')),token=seal.seal('eva',{cid:'synthetic-client',op:'7',up:'fake-op7-ready-000008',
+  sc:'crm.read print.jobs.write',sc_narrow:true,aud:'http://localhost/mcp',exp:Math.floor(clock/1000)+600});
+ secrets.push(token);const c=await mcp(f.g,token);
+ try{
+  const denied=await c.callTool({name:'crm_processar_malotes_retirada',arguments:{modo:'misto',
+   pedidos:[{order_id:6003,modo:'so_imprime'},{order_id:6002,modo:'so_baixa',expected_status_event_id:120}],confirmado_pelo_operador:true}});
+  assert.equal(denied.isError,true);assert.equal(err(denied),'insufficient_operator_write_scope');
+  const duplicate=await c.callTool({name:'crm_processar_malotes_retirada',arguments:{modo:'so_imprime',
+   pedidos:[{order_id:6003},{order_id:6003}],confirmado_pelo_operador:true}});
+  assert.equal(err(duplicate),'malotes_duplicate_or_invalid_order');
+  const unconfirmed=await c.callTool({name:'crm_processar_malotes_retirada',arguments:{modo:'so_imprime',pedidos:[{order_id:6003}]}});
+  assert.equal(unconfirmed.isError,true);assert.equal(f.effects.length,0);assert.equal(f.reads.length,0);
+  const p=await c.callTool({name:'crm_previa_malotes_retirada',arguments:{order_ids:[6002]}});
+  assert.equal(p.structuredContent.automatic_pickup_status_write_available,false);
+ }finally{await c.close();await f.g.close()}
+});
+
+test('print accepted before timeout is reconciled by receipt, without second dispatch',async()=>{
+ const f=independentMalotesFixture({timeoutAfterAccept:true}),op=await connect(f.g,'fake-op7-ready-000008'),c=await mcp(f.g,op.tokens.access_token);
+ try{
+  const args={order_id:6003,confirmado_pelo_operador:true};
+  const one=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:args});
+  assert.equal(err(one),'printserver_result_unknown');
+  const two=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:args});
+  assert.equal(two.isError,undefined);assert.equal(two.structuredContent.replay,true);assert.equal(f.effects.length,1);
+ }finally{await c.close();await f.g.close()}
+});
+
+test('old broker and divergent CRM identity fail closed before render or dispatch',async()=>{
+ for(const options of [{brokerCompatible:false},{mismatch:true}]){
+  const f=independentMalotesFixture(options),op=await connect(f.g,'fake-op7-ready-000008'),c=await mcp(f.g,op.tokens.access_token);
+  try{
+   const result=await c.callTool({name:'crm_solicitar_impressao_etiqueta',arguments:{order_id:6003,confirmado_pelo_operador:true}});
+   assert.equal(result.isError,true);assert.equal(f.effects.length,0);assert.equal(f.renders(),0);
+  }finally{await c.close();await f.g.close()}
+ }
+});
+
+test('crm_propostas_natal_consultar_lote is registered with readOnlyHint, rejects invalid batches (>50 or empty) and requires operator scope',async()=>{
+ const g=gw({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_ENABLE_OPERATOR_FULL_CRM:'1'
+ });
+ const auth=await connect(g,'fake-op7-write-00003');
+ const client=await mcp(g,auth.tokens.access_token);
+ try{
+  const {tools}=await client.listTools();
+  const tool=tools.find(t=>t.name==='crm_propostas_natal_consultar_lote');
+  assert.ok(tool,'crm_propostas_natal_consultar_lote tool must be registered');
+  assert.equal(tool.annotations?.readOnlyHint,true,'must declare readOnlyHint: true');
+  assert.equal(tool.inputSchema.type,'object');
+  assert.deepEqual(tool.inputSchema.required,['telefones']);
+  assert.equal(tool.inputSchema.properties.telefones.type,'array');
+  assert.equal(tool.inputSchema.properties.telefones.maxItems,50);
+  assert.equal(tool.inputSchema.properties.telefones.minItems,1);
+  assert.equal(tool.inputSchema.properties.historico_limite.type,'integer');
+
+  // Input validation: rejects >50 phones
+  const errOver=await client.callTool({name:'crm_propostas_natal_consultar_lote',arguments:{telefones:Array(51).fill('48996425287')}});
+  assert.equal(errOver.isError,true);
+
+  // Input validation: rejects empty phones
+  const errEmpty=await client.callTool({name:'crm_propostas_natal_consultar_lote',arguments:{telefones:[]}});
+  assert.equal(errEmpty.isError,true);
+ }finally{
+  await client.close();
+  await g.close();
+ }
+});
+
+test('Issue #27 P0 — incremental OAuth authorization for print.jobs.write, scope challenges and narrow refresh preservation',async()=>{
+ const printed=[],renders=[];
+ const bridgeFetch=async(url,opt)=>{
+  const read=brokerReadFixture(url);if(read)return read;
+  if(String(url)==='https://print.example.test/v1/jobs'){
+   printed.push(JSON.parse(opt.body));
+   return new Response(JSON.stringify({replay:false,job:{job_id:'d83ed2db-f4f1-4a55-b632-61e246a22b38',order_id:6001,
+    render_source:'crm_canonical',state:'queued'}}),{status:201,headers:{'Content-Type':'application/json'}});
+  }
+  return fetch(url,opt);
+ };
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',
+  EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',
+  EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1',
+  EVYD_META_AUDIENCE_ENABLED:'1',
+  EVYD_AUDIENCE_EXPORT_ENABLED:'1',
+  EVYD_AUDIENCE_ALLOWED_OPERATOR_IDS:'7'
+ }),{
+  fetchFn:bridgeFetch,
+  labelRenderer:async options=>{
+   renders.push(options);
+   return {label_source:'crm_canonical',label_png_base64:'fake-test-only-png',label_png_sha256:'a'.repeat(64)};
+  },
+  log:e=>logs.push(e),
+  now
+ });
+
+ try{
+  // 1. Scenario 1: Operator 7 connects with crm.read + crm.audience.export (missing print.jobs.write).
+  const connNarrow=await connect(g,'fake-op7-read-000001',{scope:'crm.read crm.audience.export'});
+  assert.ok(connNarrow.tokens.scope.split(/\s+/).includes('crm.read'));
+  assert.ok(connNarrow.tokens.scope.split(/\s+/).includes('crm.audience.export'));
+  assert.ok(!connNarrow.tokens.scope.split(/\s+/).includes('print.jobs.write'),'print.jobs.write is not granted initially');
+
+  const clientNarrow=await mcp(g,connNarrow.tokens.access_token);
+  try{
+   // Verify capacities report reflects narrow grant
+   const caps=await clientNarrow.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(caps.structuredContent.oauth_authorization.print_scope_granted,false);
+   assert.equal(caps.structuredContent.oauth_authorization.print_tool_enabled,false);
+
+   // Calling print tool must trigger HTTP 403 scope challenge (MCP client throws InsufficientScopeError)
+   await assert.rejects(async()=>clientNarrow.callTool({
+    name:'crm_solicitar_impressao_etiqueta',
+    arguments:{order_id:6001,confirmado_pelo_operador:true}
+   }),err=>/403|insufficient.scope|print.jobs.write/i.test(String(err)),'must trigger OAuth scope challenge');
+
+   // Direct HTTP call must return HTTP 403 with WWW-Authenticate header
+   const rawRes=await call(g,'/mcp',{
+    method:'POST',
+    headers:{'content-type':'application/json',accept:'application/json, text/event-stream',authorization:'Bearer '+connNarrow.tokens.access_token},
+    body:JSON.stringify({jsonrpc:'2.0',id:101,method:'tools/call',params:{name:'crm_solicitar_impressao_etiqueta',arguments:{order_id:6001,confirmado_pelo_operador:true}}})
+   });
+   assert.equal(rawRes.status,403);
+   const authHdr=rawRes.headers.get('www-authenticate')||'';
+   assert.match(authHdr,/Bearer error="insufficient_scope"/);
+   assert.match(authHdr,/scope="[^"]*print\.jobs\.write[^"]*"/);
+   assert.match(authHdr,/resource_metadata=/);
+
+   // Zero calls reached broker and zero renders
+   assert.equal(printed.length,0);
+   assert.equal(renders.length,0);
+  }finally{
+   await clientNarrow.close();
+  }
+
+  // 2. Scenario 2: Operator 7 connects with crm.read + print.jobs.write (incremental authorization approved).
+  const connPrint=await connect(g,'fake-op7-read-000001',{scope:'crm.read print.jobs.write'});
+  assert.ok(connPrint.tokens.scope.split(/\s+/).includes('print.jobs.write'));
+  assert.ok(!connPrint.tokens.scope.split(/\s+/).includes('crm.orders.write'),'never grants unrequested crm.orders.write');
+
+  const clientPrint=await mcp(g,connPrint.tokens.access_token);
+  try{
+   const caps=await clientPrint.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(caps.structuredContent.oauth_authorization.print_scope_granted,true);
+   assert.equal(caps.structuredContent.oauth_authorization.print_tool_enabled,true);
+
+   // Execution succeeds cleanly with zero physical prints
+   const resPrint=await clientPrint.callTool({
+    name:'crm_solicitar_impressao_etiqueta',
+    arguments:{order_id:6001,confirmado_pelo_operador:true}
+   });
+   assert.equal(resPrint.isError,undefined,JSON.stringify(resPrint.content));
+   assert.equal(resPrint.structuredContent.render_source,'crm_canonical');
+   assert.equal(resPrint.structuredContent.print_state,'queued');
+   assert.equal(printed.length,1);
+   assert.equal(renders.length,1);
+  }finally{
+   await clientPrint.close();
+  }
+
+  // 3. Scenario 3: Operator 9 (unlisted in print allowed operators) requests print.jobs.write.
+  const connOp9=await connect(g,'fake-op9-read-000002',{scope:'crm.read print.jobs.write'});
+  assert.ok(!connOp9.tokens.scope.split(/\s+/).includes('print.jobs.write'),'unlisted operator is never granted print scope');
+
+  const clientOp9=await mcp(g,connOp9.tokens.access_token);
+  try{
+   const {tools}=await clientOp9.listTools();
+   assert.ok(!tools.some(t=>t.name==='crm_solicitar_impressao_etiqueta'),'unauthorized operator cannot see print tool');
+  }finally{
+   await clientOp9.close();
+  }
+
+  // 4. Scenario 4: Refresh token preserves explicitly granted narrow print scope without privilege escalation.
+  const refreshRes=await call(g,'/token',form({
+   grant_type:'refresh_token',
+   refresh_token:connPrint.tokens.refresh_token,
+   client_id:connPrint.client_id
+  }));
+  assert.equal(refreshRes.status,200);
+  const refreshed=await refreshRes.json();
+  assert.ok(refreshed.scope.split(/\s+/).includes('print.jobs.write'));
+  assert.ok(!refreshed.scope.split(/\s+/).includes('crm.orders.write'));
+  assert.ok(!refreshed.scope.split(/\s+/).includes('crm.audience.export'));
+
+  const clientRefreshed=await mcp(g,refreshed.access_token);
+  try{
+   const capsRefreshed=await clientRefreshed.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(capsRefreshed.structuredContent.oauth_authorization.print_scope_granted,true);
+  }finally{
+   await clientRefreshed.close();
+  }
+ }finally{
+  await g.close();
  }
 });
