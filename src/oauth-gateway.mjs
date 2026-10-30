@@ -137,8 +137,10 @@ export function gatewayConfig(env){
   // Print-only batches do not authorize commercial CRM status writes.
   malotesPrintBatchEnabled:env.EVYD_MALOTES_PRINT_BATCH_ENABLED==='1',
   printAllowedOperators,
-  metaAudienceEnabled:env.EVYD_META_AUDIENCE_ENABLED==='1'||env.EVYD_AUDIENCE_EXPORT_ENABLED==='1',
-  audienceExportEnabled:env.EVYD_AUDIENCE_EXPORT_ENABLED==='1',
+  // Two deliberate switches: granting export MUST NOT implicitly turn on
+  // the master Meta Audience feature in the shared CRM production gateway.
+  metaAudienceEnabled:env.EVYD_META_AUDIENCE_ENABLED==='1',
+  audienceExportEnabled:env.EVYD_META_AUDIENCE_ENABLED==='1'&&env.EVYD_AUDIENCE_EXPORT_ENABLED==='1',
   audienceAllowedOperators,
   // Always use the explicit environment passed to gatewayConfig (also in tests).
   // No implicit path in the repository for files containing customer contacts.
