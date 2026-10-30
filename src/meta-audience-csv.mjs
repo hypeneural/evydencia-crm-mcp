@@ -10,6 +10,7 @@ const MAX_CSV_BYTES = 20 * 1024 * 1024;
 const REQUIRED_COVERAGE = ['customers_complete','proposals_complete','purchases_2026_complete',
   'suppression_complete','marketing_permission_complete','identity_crosscheck_complete'];
 const HEADER = 'email,phone,fn,ln,country';
+export const AUDIENCE_RULES=Object.freeze(['ANY_VALID_PURCHASE_2026','NO_VALID_NATAL_2026_PURCHASE']);
 const CONTROL = /[\u0000-\u001f\u007f]/g;
 
 export function normalizePhone(raw) {
@@ -65,7 +66,7 @@ function csvEscape(raw) {
 }
 function validateCoverage(c) {
   if (!c || typeof c !== 'object' || c.target_year !== 2026
-      || c.purchase_rule !== 'ANY_VALID_PURCHASE_2026'
+      || !AUDIENCE_RULES.includes(c.purchase_rule)
       || !/^[A-Za-z0-9_-]{8,96}$/.test(String(c.snapshot_id||''))
       || typeof c.as_of !== 'string' || !Number.isFinite(Date.parse(c.as_of))
       || !REQUIRED_COVERAGE.every(k=>c[k]===true)
