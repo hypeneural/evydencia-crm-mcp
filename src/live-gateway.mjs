@@ -1907,6 +1907,8 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
     zapi_diagnostics_enabled:Boolean(zapiDiag),
     mcp_ui_apps_enabled:Boolean(cfg.internalReadToken&&cfg.operatorFullCrm&&cfg.uiAppsEnabled),
     printserver_enabled:Boolean(printCfg.enabled),
+    // No filename, directory, or customer PII in health responses.
+    meta_audience_retention_janitor_enabled:Boolean(audienceJanitor),
     telemetry_summary:{
      calls_total:snap.calls_total,
      error_rate:snap.error_rate,
