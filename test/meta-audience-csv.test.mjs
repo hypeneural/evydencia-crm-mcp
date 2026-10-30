@@ -174,3 +174,18 @@ test('100 phone rows from only 50 people do NOT satisfy Meta audience readiness'
   assert.equal(result.counts.eligible_people,50);
   assert.throws(()=>assertMetaAudienceUploadReady(result),/NOT_READY/);
 });
+
+
+test('uncertain buyer is quarantined individually, unrelated verified contact remains exportable',()=>{
+ const group=[
+  row({source_id:'customer-uncertain',phone:'48999990111',email:'uncertain@example.com',
+   purchase_check_status:'unavailable',identity_status:'ambiguous'}),
+  row({source_id:'customer-clear',phone:'48999990222',email:'clear@example.com'}),
+ ];
+ const result=build(group);
+ assert.equal(result.counts.excluded_ambiguous_or_unknown,1);
+ assert.equal(result.counts.eligible_people,1);
+ assert.equal(result.counts.export_rows,1);
+ assert.doesNotMatch(result.csv,/uncertain@example\.com|5548999990111/);
+ assert.match(result.csv,/clear@example\.com,5548999990222/);
+});
