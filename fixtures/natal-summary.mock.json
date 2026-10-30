@@ -1,0 +1,29 @@
+{
+  "schema_version": "mock-v1",
+  "reference_year": 2026,
+  "as_of": "2026-10-24",
+  "currency": "BRL",
+  "sales": {
+    "valid_orders": 137,
+    "customers": 132,
+    "sessions_sold": 137,
+    "gross_cents": 12845000,
+    "received_cents": 10378000,
+    "pending_cents": 2467000
+  },
+  "packages": [
+    {
+      "package": "Ho Ho Ho",
+      "sessions": 35
+    },
+    {
+      "package": "Então é Natal",
+      "sessions": 72
+    },
+    {
+      "package": "Boas Festas",
+      "sessions": 30
+    }
+  ],
+  "warning": "FICTIONAL DATA — cenário sintético para teste de conversa, não é estatística do Evydência CRM."
+}

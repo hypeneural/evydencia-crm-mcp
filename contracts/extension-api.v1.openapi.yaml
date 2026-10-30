@@ -1,0 +1,157 @@
+openapi: 3.1.0
+info:
+  title: Evydência CRM — Extension API (contrato mínimo auditado)
+  version: '1.0'
+  description: >-
+    Referência documental do Laravel, não gerador automático de ferramentas MCP.
+    Fonte: hypeneural/evydencia-crm @ 995101b34d5587d5523d885e28c3070337157f6a.
+servers:
+  - url: https://crm.example.com
+security:
+  - sanctumBearer: []
+paths:
+  /api/v1/extension/bootstrap:
+    get:
+      operationId: extensionBootstrap
+      summary: Identidade do operador e capacidades do token
+      x-required-ability: extension:bootstrap
+      responses:
+        '200':
+          description: Contexto do operador, token, features e server
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/v1/extension/customer-context:
+    get:
+      operationId: extensionCustomerContext
+      summary: Contexto resumido de cliente por telefone
+      x-required-ability: extension:customer-read
+      parameters:
+        - $ref: '#/components/parameters/Phone'
+      responses:
+        '200':
+          description: data.lookup, data.customer, data.history, data.current_order, data.natal_2026, data.capabilities
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/v1/extension/customer-360:
+    get:
+      operationId: extensionCustomer360
+      summary: Histórico paginado de pedidos, com PII de participantes na origem (MCP deve omitir)
+      x-required-ability: extension:customer-read
+      parameters:
+        - $ref: '#/components/parameters/Phone'
+        - in: query
+          name: page
+          schema: {type: integer, minimum: 1, maximum: 10000, default: 1}
+        - in: query
+          name: per_page
+          schema: {type: integer, minimum: 1, maximum: 20, default: 20}
+      responses:
+        '200':
+          description: data.orders, data.kpis, data.history, data.natal_2026
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/v1/extension/proposals/preview:
+    post:
+      operationId: extensionProposalPreview
+      summary: Prévia de proposta; pode sondar worker, mas não agenda destinatário
+      x-required-ability: extension:proposal-read
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone: {type: string, maxLength: 30}
+                name: {type: [string, 'null'], maxLength: 80}
+      responses:
+        '200':
+          description: data.ready, data.delivery_scope, data.selection, data.message_preview, data.existing_proposal
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/v1/extension/proposals/schedule:
+    post:
+      operationId: extensionProposalSchedule
+      summary: AÇÃO REAL DE AGENDAMENTO. Documentada, NÃO exposta pelo MCP.
+      x-required-ability: extension:proposal-write
+      x-mcp-exposed: false
+      parameters:
+        - in: header
+          name: X-Idempotency-Key
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id, phone, name]
+              properties:
+                request_id: {type: string, format: uuid}
+                phone: {type: string}
+                name: {type: [string, 'null']}
+                resend_mode: {type: string, enum: [normal, send_again, abort_and_resend], default: normal}
+      responses:
+        '201':
+          description: Agendamento criado (NÃO significa entregue)
+        '200':
+          description: Replay idempotente de agendamento anterior
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    sanctumBearer:
+      type: http
+      scheme: bearer
+  parameters:
+    Phone:
+      in: query
+      name: phone
+      required: true
+      schema: {type: string, maxLength: 30}
+  responses:
+    Error:
+      description: Erro com envelope Extension API e código estável
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [schema_version, error]
+            properties:
+              schema_version: {type: string}
+              request_id: {type: string}
+              error:
+                type: object
+                required: [code, message, retryable]
+                properties:
+                  code: {type: string}
+                  message: {type: string}
+                  retryable: {type: boolean}

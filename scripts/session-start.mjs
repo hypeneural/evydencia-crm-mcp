@@ -1,0 +1,2 @@
+// Contexto de abertura para reduzir inferências não verificadas.
+console.log(JSON.stringify({injectSteps:[{systemMessage:{systemMessage:'Workspace Evydência CRM MCP. Leia AGENTS.md e docs/CAPABILITY_MATRIX.md; utilize somente mocks sintéticos até homologação. Nunca editar o Laravel, usar Z-API direta ou habilitar envio real. Execute node scripts/doctor.mjs e npm run validate:local antes de alegar GO_LOCAL.'}}]}));

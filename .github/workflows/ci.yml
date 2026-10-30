@@ -1,0 +1,60 @@
+name: Validate MCP
+on:
+  push:
+    branches: [main, 'integration/live-35tools-gameplay-reconciled-*']
+  pull_request:
+    branches: [main, 'release/live-35tools-gameplay-printserver']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Reproducible install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          $bad = @()
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) { $bad += $_.Name }
+          }
+          if ($bad.Count -gt 0) { throw "PowerShell syntax error: $($bad -join ', ')" }
+      - name: Validate stand-alone PHP exporter (no CRM startup)
+        run: |
+          command -v php
+          php -l tools/export-natal-digest.php
+          php -l scripts/crm-label-render-bridge.php
+          php -l scripts/crm-label-synthetic-fixture.php
+          php tools/export-natal-digest.php --help
+          # Guard must reject a missing CRM root and never create a JSON output.
+          if php tools/export-natal-digest.php --crm-root=/definitely-no-crm --output="$RUNNER_TEMP/digest.json" > "$RUNNER_TEMP/export-out.log" 2>&1; then
+            echo "Exporter unexpectedly accepted nonexistent CRM"; exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/digest.json"
+          mkdir -p "$RUNNER_TEMP/fake-crm/bootstrap" "$RUNNER_TEMP/fake-crm/vendor"
+          touch "$RUNNER_TEMP/fake-crm/bootstrap/app.php" "$RUNNER_TEMP/fake-crm/vendor/autoload.php"
+          if php tools/export-natal-digest.php --crm-root="$RUNNER_TEMP/fake-crm" --output="$PWD/unsafe-digest.json" > "$RUNNER_TEMP/export-out.log" 2>&1; then
+            echo "Exporter unexpectedly allowed output inside Git"; exit 1
+          fi
+          test ! -e "$PWD/unsafe-digest.json"
+      - name: Offline real-API JSON schema and local-secret exclusion
+        run: |
+          node scripts/live-api-inspect.mjs > "$RUNNER_TEMP/crm-shape-offline.json"
+          grep -q 'CRM_JSON_STRUCTURE_PASS' "$RUNNER_TEMP/crm-shape-offline.json"
+          git check-ignore -q .env.live.local
+          test ! -e .env.live.local
+      - run: npm run doctor
+      - run: npm run check
+      - run: npm test
+      - run: npm run smoke
+      - run: npm run conversation:smoke
+      - run: npm run startup:smoke
+      - run: test ! -f .env

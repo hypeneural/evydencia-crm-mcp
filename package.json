@@ -1,0 +1,40 @@
+{
+  "name": "evydencia-crm-mcp",
+  "version": "0.12.0",
+  "private": true,
+  "type": "module",
+  "description": "Servidor MCP intermediário privado para API do Evydência CRM",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file=.env scripts/start-mock.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/core.mjs && node --check src/mock.mjs && node --check src/server.mjs && node --check scripts/smoke.mjs && node --check src/capabilities.mjs && node --check src/mock-business.mjs && node --check scripts/antigravity-hook.mjs && node --check scripts/session-start.mjs && node --check scripts/doctor.mjs && node --check scripts/conversation-smoke.mjs && node --check src/mock-safety.mjs && node --check scripts/check-mock-env.mjs && node --check scripts/start-mock.mjs && node --check scripts/startup-smoke.mjs && node --check src/mock-orders.mjs && node --check src/natal-digest-snapshot.mjs && node --check src/order-readiness.mjs && node --check scripts/check-private-snapshot.mjs && node --check src/legacy-historical.mjs && node --check scripts/import-legacy-history.mjs && node --check src/live-api-audit.mjs && node --check scripts/live-api-inspect.mjs && node --check src/chart-ready.mjs && node --check src/operational-summary.mjs && node --check src/live-contracts.mjs && node --check scripts/verify-live-read.mjs && node --check src/analytics-visual.mjs && node --check src/live-abilities.mjs && node --check src/legacy-api-read.mjs && node --check src/mcp-ui-cards.mjs && node --check scripts/verify-legacy-get.mjs && node --check src/oauth-gateway.mjs && node --check src/zapi-mcp-auth.mjs && node --check src/zapi-instance-diagnostics.mjs && node --check src/zapi-mcp-client.mjs && node --check src/zapi-mcp-tools.mjs && node --check scripts/verify-printserver-smoke.mjs && node --check src/crm-label-render.mjs && node --check src/malotes-ready-client.mjs && node --check src/printserver-client.mjs && node --check scripts/antigravity/verify-private-gameplay-reader.mjs && node --check src/live-gateway.mjs && node --check src/gameplay-family-inventory.mjs && node --check test/gameplay-family-inventory.test.mjs && node --check scripts/start-gateway.mjs && node --check scripts/bench-gateway.mjs && node --check test/forensic-crm-audit.test.mjs && node --check test/zapi-mcp-bridge.test.mjs && node --check test/zapi-instance-diagnostics.test.mjs && node --check test/mcp-ui-cards.test.mjs && node --check scripts/antigravity/audit-gameplay-reader-compose.mjs && node --check scripts/antigravity/check-stackctl-reader-readonly.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "conversation:smoke": "node scripts/conversation-smoke.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "validate:local": "npm run doctor && npm run check && npm test && npm run smoke && npm run conversation:smoke && npm run startup:smoke && npm run vps:preflight",
+    "env:check": "node scripts/check-mock-env.mjs --require",
+    "startup:smoke": "node scripts/startup-smoke.mjs",
+    "snapshot:inspect": "node scripts/check-private-snapshot.mjs",
+    "history:import": "node scripts/import-legacy-history.mjs",
+    "crm:json:inspect": "node scripts/live-api-inspect.mjs",
+    "live:read:check": "node scripts/verify-live-read.mjs",
+    "legacy:get:check": "node scripts/verify-legacy-get.mjs",
+    "vps:preflight": "node scripts/verify-vps-deployment.mjs",
+    "gateway:start": "node scripts/start-gateway.mjs",
+    "gateway:test": "node --test test/live-gateway.test.mjs",
+    "gameplay:sidecar:verify": "node scripts/antigravity/verify-private-gameplay-reader.mjs",
+    "gateway:bench": "node scripts/bench-gateway.mjs",
+    "printserver:smoke:read": "node scripts/verify-printserver-smoke.mjs",
+    "crm:label:php:lint": "php -l scripts/crm-label-render-bridge.php",
+    "gameplay:compose:audit": "node scripts/antigravity/audit-gameplay-reader-compose.mjs",
+    "gameplay:stackctl:inspect": "node scripts/antigravity/check-stackctl-reader-readonly.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "^4.0.0"
+  }
+}

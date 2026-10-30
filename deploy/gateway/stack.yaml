@@ -1,0 +1,23 @@
+schema_version: "1"
+name: evydencia-crm-mcp-gateway
+criticality: standard
+ram_budget_mb: 256
+cpu_budget_cores: 0.5
+deployment:
+  tool: compose
+  file: compose.yaml
+  serial: true
+  lock_file: .deploy.lock
+network:
+  edge: true
+  egress_only: false
+exposure:
+  type: reverse_proxy
+  hostname: mcp.etijucas.com.br
+health:
+  type: http
+  internal: http://evydencia-crm-mcp-gateway:8090/healthz
+data: []
+secrets:
+  required:
+    - /srv/secrets/evydencia-crm-mcp/gateway.env

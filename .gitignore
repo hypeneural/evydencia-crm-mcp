@@ -1,0 +1,20 @@
+node_modules/
+.env
+.env.*
+!.env.example
+coverage/
+dist/
+*.log
+.DS_Store
+
+# Nunca versionar dados comerciais exportados do CRM
+/private/
+/snapshots/
+.private_exports/
+*.csv
+*.live.json
+natal-2026-digest*.json
+
+# Dados agregados históricos privados (não versionar em repositório público)
+legacy-history-*.json
+natal-history-archive*.json

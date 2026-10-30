@@ -1,0 +1,16 @@
+# Additive block for /srv/platform/stacks/caddy/Caddyfile. Requires DNS A record -> VPS
+# and an approved window. Validate first, then reload (not restart):
+#   docker exec <caddy> caddy validate --config /etc/caddy/Caddyfile
+#   docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile
+mcp-crm.etijucas.com.br {
+    request_body {
+        max_size 256KB
+    }
+    reverse_proxy evydencia-crm-mcp-gateway:8090 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        flush_interval -1
+    }
+}

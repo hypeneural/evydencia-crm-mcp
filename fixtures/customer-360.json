@@ -1,0 +1,94 @@
+{
+  "data": {
+    "lookup": {
+      "status": "matched",
+      "match_count": 1
+    },
+    "customer": {
+      "uuid": "11111111-1111-4111-8111-111111111111",
+      "display_name": "Cliente Fictícia",
+      "first_name": "Cliente",
+      "name": "Cliente Fictícia",
+      "whatsapp_e164": "+5548999990001"
+    },
+    "kpis": {
+      "lifecycle_stage": "recurring",
+      "orders_count": 2,
+      "completed_sessions_count": 1,
+      "lifetime_value": 750,
+      "average_ticket": 375,
+      "years_attended": [
+        2025
+      ]
+    },
+    "natal_2026": {
+      "purchased": false,
+      "mode": "sales",
+      "recommended_action": "SEND_VIP_PROPOSAL",
+      "loyalty_level": "LOYAL_CHRISTMAS",
+      "years_attended": [
+        2025
+      ],
+      "active_order_uuid": "22222222-2222-4222-8222-222222222222"
+    },
+    "orders": [
+      {
+        "uuid": "22222222-2222-4222-8222-222222222222",
+        "package_name": "Natal MOCK",
+        "status_label": "Sessão Agendada",
+        "total_amount": 450,
+        "balance_pending": 150,
+        "session_date": "2026-11-15T10:00:00-03:00",
+        "payment_status": "partial",
+        "participants": [
+          {
+            "name": "PARTICIPANTE-FICTICIO-NAO-EXIBIR",
+            "birth": "2018-01-01",
+            "relationship": {
+              "label": "Filho"
+            }
+          }
+        ],
+        "campaign_key": "natal_2026",
+        "title": "Natal MOCK",
+        "status": "session_schedule",
+        "created_at": "2026-10-20T10:00:00-03:00"
+      },
+      {
+        "uuid": "44444444-4444-4444-8444-444444444444",
+        "package_name": "Natal anterior MOCK",
+        "status_label": "Pedido Concluído",
+        "total_amount": 300,
+        "balance_pending": 0,
+        "session_date": "2025-11-20T10:00:00-03:00",
+        "payment_status": "paid",
+        "participants": [],
+        "campaign_key": "natal_2025",
+        "title": "Natal anterior MOCK",
+        "status": "order_completed",
+        "created_at": "2025-10-20T10:00:00-03:00"
+      }
+    ],
+    "history": {
+      "page": 1,
+      "per_page": 5,
+      "total": 2,
+      "has_more": false
+    },
+    "current_order": {
+      "uuid": "22222222-2222-4222-8222-222222222222",
+      "package_name": "Natal MOCK",
+      "session_at": "2026-11-15T10:00:00-03:00",
+      "created_at": "2026-10-20T10:00:00-03:00",
+      "balance_pending": 150,
+      "participants_count": 1,
+      "gallery_available": false,
+      "status": {
+        "code": "session_schedule",
+        "label": "Sessão Agendada",
+        "stage": "scheduled"
+      }
+    }
+  },
+  "schema_version": "1.0"
+}

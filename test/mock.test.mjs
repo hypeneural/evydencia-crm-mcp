@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mockCrmClient, mockScenarios } from '../src/mock.mjs';
+const crm=mockCrmClient();
+test('cenários declarados e marcados como fictícios',()=>{const s=mockScenarios();assert.equal(s.mock,true);assert.equal(s.scenarios.length,4)});
+test('mock não precisa de token e retorna cliente sem dados de participantes',async()=>{const r=await crm.customer('48999990001');assert.equal(r.mock,true);assert.equal(r.customer.first_name,'Cliente');assert.equal(r.natal_2026.purchased,false)});
+test('histórico mock remove PII de crianças e mantém métricas',async()=>{const r=await crm.history('48999990001');assert.equal(r.kpis.orders_count,2);assert.equal(r.orders[0].participants_count,1);assert.ok(!JSON.stringify(r).includes('PARTICIPANTE-FICTICIO-NAO-EXIBIR'));assert.ok(!JSON.stringify(r).includes('2018-01-01'))});
+test('não encontrado e ambíguo não retornam cliente',async()=>{assert.equal((await crm.customer('48999990002')).customer,null);assert.equal((await crm.customer('48999990003')).lookup.status,'ambiguous')});
+test('regra ouro e ambiguidade bloqueiam prévia mock',async()=>{await assert.rejects(()=>crm.preview('48999990003'),/crm_http_409/);await assert.rejects(()=>crm.preview('48999990004'),/crm_http_403/)});
+test('prévia é apenas simulação e não agenda',async()=>{const p=await crm.preview('48999990001','Nome Fictício');assert.equal(p.mock,true);assert.equal(p.scheduled,false);assert.match(p.message_preview,/FICTÍCIA/);assert.equal(p.delivery_scope,'initial_whatsapp_only')});
+test('disponibilidade mock é explicitamente sintética',async()=>{const r=await crm.availability('natal','ho-ho-ho','2026-10-25','2026-10-26');assert.equal(r.mock,true);assert.equal(r.calendar.checked,false);assert.match(r.warning,/sintéticos/)});
+test('mock rejeita entradas inválidas',async()=>{await assert.rejects(()=>crm.customer('123'),/invalid_mobile/);await assert.rejects(()=>crm.availability('natal','ho-ho-ho','2026-10-25','2026-12-25'),/invalid_date_range/)});

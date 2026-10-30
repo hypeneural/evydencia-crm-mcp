@@ -1,0 +1,31 @@
+{
+  "data": {
+    "slug": "natal",
+    "name": "Campanha de Natal — EXEMPLO FICTÍCIO",
+    "period": {
+      "startsOn": "2026-10-01",
+      "endsOn": "2026-12-24",
+      "timezone": "America/Sao_Paulo"
+    },
+    "products": [
+      {
+        "slug": "ho-ho-ho",
+        "code": "HOHOHO",
+        "name": "Pacote Ho-Ho-Ho — MOCK",
+        "durationMinutes": 15,
+        "bufferMinutes": 15
+      },
+      {
+        "slug": "natal-mini",
+        "code": "MINI",
+        "name": "Natal Mini — MOCK",
+        "durationMinutes": 30,
+        "bufferMinutes": 10
+      }
+    ]
+  },
+  "meta": {
+    "apiVersion": "1.0.0",
+    "rulesVersion": 12
+  }
+}
