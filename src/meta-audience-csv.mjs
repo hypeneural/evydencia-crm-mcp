@@ -212,6 +212,10 @@ export function assertMetaAudienceUploadReady(result,{minRows=100}={}) {
       || typeof result.csv!=='string' || result.contains_personal_data!==true
       || !Number.isSafeInteger(result.counts?.export_rows)
       || result.counts.export_rows<minRows
+      // 100 numbers can belong to only 50 people; require unique
+      // identified groups as well as distinct telephone rows.
+      || !Number.isSafeInteger(result.counts?.eligible_people)
+      || result.counts.eligible_people<minRows
       || result.csv.split('\r\n')[0]!==HEADER
       || createHash('sha256').update(result.csv).digest('hex')!==result.sha256) {
     throw Error('META_CSV_NOT_READY_FOR_UPLOAD');
