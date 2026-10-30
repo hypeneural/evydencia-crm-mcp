@@ -1,8 +1,9 @@
 // Private Meta Audience CSV retention — only files minted by this feature.
 // Never emit filenames, full paths, file contents, phone, email or customer info.
 // Used on every export, and suitable for local/operator scheduled janitor.
-import {lstat,readdir,unlink} from 'node:fs/promises';
-import {isAbsolute,join} from 'node:path';
+import {lstat,readdir,unlink,realpath} from 'node:fs/promises';
+import {isAbsolute,join,resolve,dirname,relative} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 const FILE_RE=/^meta-audience-natal2026-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.csv$/i;
 const HOUR_MS=60*60*1000;
@@ -19,6 +20,17 @@ export async function purgeExpiredAudienceExports(directory,{nowMs=Date.now(),tt
     throw Error('crm_meta_audience_private_directory_insecure');
   }
   if(typeof dryRun!=='boolean')throw Error('crm_meta_audience_invalid_retention_policy');
+  // The gateway export has this guard too. The janitor runs at startup,
+  // independently of export, so it must NEVER delete files in the checkout.
+  // realpath also detects intermediate directory symlink aliases.
+  const [privateRoot,repoRoot]=await Promise.all([
+    realpath(directory),
+    realpath(resolve(dirname(fileURLToPath(import.meta.url)),'..')),
+  ]);
+  const rel=relative(repoRoot,privateRoot);
+  if(rel===''||(!rel.startsWith('..')&&!isAbsolute(rel))){
+    throw Error('crm_meta_audience_private_directory_inside_checkout');
+  }
   let inspected=0,expired=0,deleted=0;
   const entries=await readdir(directory,{withFileTypes:true});
   for(const entry of entries){
