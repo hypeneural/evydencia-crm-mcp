@@ -26,17 +26,23 @@ if ($targetYear !== 2026) {
     emitForensicJson(['error' => 'invalid_meta_audience_year'], $forensicStartedMs);
 }
 
-// One fixed customer-reactivation purpose and the existing operator OAuth
-// confirmation replace the former extra environment attestation. This is an
-// operational gate, NOT a determination of consent or legal compliance.
-// Active marketing opt-outs remain mandatory and are checked per identity.
-$audiencePurpose = (string) ($payload['legal_basis_policy'] ?? 'legitimate_interest_customer_reactivation_with_optout_check');
-$legalBasisVerified = $audiencePurpose === 'legitimate_interest_customer_reactivation_with_optout_check';
+$legalBasisPolicy = (string) ($payload['legal_basis_policy'] ?? 'legitimate_interest_customer_reactivation_with_optout_check');
+$legalBasisVerified = in_array($legalBasisPolicy, [
+    'legitimate_interest_customer_reactivation_with_optout_check',
+    'explicit_marketing_consent_verified',
+], true)
+    && getenv('EVYD_META_AUDIENCE_LGPD_APPROVED') === '1'
+    && preg_match('/^[A-Za-z0-9_.:-]{8,120}$/', (string) getenv('EVYD_META_AUDIENCE_LGPD_POLICY_REF')) === 1;
+
+// Validate that an accountable operator approved use of customer information
+// for Meta audience matching. The on-server approval is configured once;
+// it does not require new paperwork per CSV export.
 if (!$legalBasisVerified) {
     emitForensicJson([
         'source' => 'CRM_META_AUDIENCE_READ_ONLY',
         'available' => false,
-        'reason' => 'unsupported_audience_purpose',
+        'reason' => 'legal_basis_not_verified',
+        'export_enabled' => false,
         'contains_personal_data' => false,
     ], $forensicStartedMs);
 }
