@@ -91,6 +91,11 @@ export function buildMetaAudienceCsv({records,coverage}={}) {
     input_missing_phone:0, input_invalid_phone:0,
     duplicate_identity_rows:0, duplicate_phone_rows_collapsed:0,
     excluded_2026_buyer:0, excluded_suppressed:0,
+    // Overlap counters are diagnostic: the exclusion precedence below means
+    // excluded_suppressed may be zero even when suppressed buyers exist.
+    identity_groups_with_buyer:0,
+    identity_groups_with_suppression:0,
+    identity_groups_buyer_and_suppressed:0,
     excluded_no_marketing_permission:0, excluded_ambiguous_or_unknown:0,
     excluded_conflicting_customer_ids:0, excluded_no_valid_phone:0,
     dropped_phone_less_rows_in_eligible_groups:0,
@@ -166,8 +171,15 @@ export function buildMetaAudienceCsv({records,coverage}={}) {
   const exportRows=[];
   for(const entries of groups.values()) {
     counts.duplicate_identity_rows+=entries.length-1;
-    if(entries.some(r=>r.bought_2026)){counts.excluded_2026_buyer++;continue;}
-    if(entries.some(r=>r.suppressed)){counts.excluded_suppressed++;continue;}
+    const anyBuyer=entries.some(r=>r.bought_2026);
+    const anySuppression=entries.some(r=>r.suppressed);
+    if(anyBuyer)counts.identity_groups_with_buyer++;
+    if(anySuppression)counts.identity_groups_with_suppression++;
+    if(anyBuyer&&anySuppression)counts.identity_groups_buyer_and_suppressed++;
+    // Exclusion decisions remain unchanged; overlap counters are additional
+    // information so a zero excluded_suppressed does NOT mean zero opt-outs.
+    if(anyBuyer){counts.excluded_2026_buyer++;continue;}
+    if(anySuppression){counts.excluded_suppressed++;continue;}
     if(entries.some(r=>!r.marketing_allowed)){counts.excluded_no_marketing_permission++;continue;}
     if(entries.some(r=>r.identity_status!=='verified')){counts.excluded_ambiguous_or_unknown++;continue;}
     const ids=new Set(entries.filter(r=>r.source==='customer').map(r=>r.source_id));
