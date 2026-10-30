@@ -288,7 +288,8 @@ try {
         if ($phone2 !== null && !in_array($phone2, $phones, true)) $phones[] = $phone2;
 
         $isBuyer = isset($buyerCustomerIds[$cId]);
-        $purchaseStatus = isset($ambiguousCustomerIds[$cId]) ? 'unavailable' : 'verified';
+        $purchaseAmbiguous = isset($ambiguousCustomerIds[$cId]);
+        $purchaseStatus = $purchaseAmbiguous ? 'unavailable' : 'verified';
 
         // The domain evaluator handles channel, class, season/global and
         // customer_id rules; do not classify every active suppression equally.
@@ -308,7 +309,7 @@ try {
             'suppression_check_status' => 'verified',
             'marketing_allowed' => $legalBasisVerified && !$customerSuppressed,
             'marketing_permission_status' => $legalBasisVerified ? 'verified' : 'unavailable',
-            'identity_status' => 'verified',
+            'identity_status' => $purchaseAmbiguous ? 'ambiguous' : 'verified',
         ];
 
         if (empty($phones)) {
@@ -330,6 +331,11 @@ try {
     $scheduledRecordsCount = 0;
     if (!$flow) throw new \RuntimeException('natal_2026_proposal_flow_unavailable');
     if ($flow) {
+        $campaignIds = array_values(array_filter(array_unique([
+            (int) $flow->with_name_campaign_id,
+            (int) $flow->without_name_campaign_id,
+        ])));
+        if (!$campaignIds) throw new \RuntimeException('natal_2026_flow_has_no_campaign_ids');
         // Only a successfully persisted eligible proposal may enter the
         // candidate list. A failed/aborted/suppressed/duplicate dispatch is
         // NOT proof of a reachable recipient (nor proof of delivery).
@@ -339,8 +345,11 @@ try {
             ->where('created_at', '<', '2027-01-01 00:00:00')
             ->where('status', 'scheduled')
             ->whereIn('eligibility_status', ['allowed', 'eligible'])
+            ->whereIn('selected_campaign_id', $campaignIds)
             ->whereNull('duplicate_of_id')
-            ->get(['id', 'phone_e164', 'resolved_customer_id', 'campaign_scheduled_contact_id']);
+            ->get(['id', 'phone_e164', 'resolved_customer_id',
+                   'matched_customer_count','customer_resolution_status',
+                   'campaign_scheduled_contact_id']);
 
         foreach ($dispatches as $d) {
             $phone = evyNormalizePhoneE164($d->phone_e164);
@@ -348,6 +357,11 @@ try {
             if ($resCustId !== null && !isset($knownCustomerIds[$resCustId]))
                 throw new \RuntimeException('proposal_resolved_customer_missing');
             $isBuyer = ($resCustId !== null && isset($buyerCustomerIds[$resCustId]));
+            $resolvedCustomerAmbiguous = $resCustId !== null
+                && isset($ambiguousCustomerIds[$resCustId]);
+            $dispatchIdentityAmbiguous = $resolvedCustomerAmbiguous
+                || (int) $d->matched_customer_count > 1
+                || str_contains(strtolower((string) $d->customer_resolution_status), 'ambig');
 
             $dispatchSuppressed = $isSuppressed($phone, $resCustId);
 
@@ -358,26 +372,19 @@ try {
                 'email' => null,
                 'name' => '',
                 'bought_2026' => $isBuyer,
-                'purchase_check_status' => 'verified',
+                'purchase_check_status' => $resolvedCustomerAmbiguous ? 'unavailable' : 'verified',
                 'suppressed' => $dispatchSuppressed,
                 'suppression_check_status' => 'verified',
                 'marketing_allowed' => $legalBasisVerified && !$dispatchSuppressed,
                 'marketing_permission_status' => $legalBasisVerified ? 'verified' : 'unavailable',
-                'identity_status' => 'verified',
+                'identity_status' => $dispatchIdentityAmbiguous ? 'ambiguous' : 'verified',
             ];
             $proposalRecordsCount++;
             $dispatchRecordsCount++;
         }
 
-        // Also query verified legacy campaign_scheduled_contacts for Natal 2026
-        $campaignIds = array_values(array_filter(array_unique([
-            (int) $flow->with_name_campaign_id,
-            (int) $flow->without_name_campaign_id,
-        ])));
-
-        // Both campaign ID and season scope must agree; a scope-only OR
-        // would accidentally import unrelated marketing campaign recipients.
-        if (!$campaignIds) throw new \RuntimeException('natal_2026_flow_has_no_campaign_ids');
+        // Only audit legacy scheduled-only contacts; not proof of a quote request.
+        // Campaign ID and season scope must agree; no OR ambiguity.
         // Legacy scheduled contacts may be unsolicited, not sent, or merely
         // reserved. They are an audit metric, NOT automatically quote requests.
         // Every eligible proposal is already represented by a qualified
