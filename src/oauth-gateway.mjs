@@ -140,6 +140,10 @@ export function gatewayConfig(env){
   metaAudienceEnabled:env.EVYD_META_AUDIENCE_ENABLED==='1'||env.EVYD_AUDIENCE_EXPORT_ENABLED==='1',
   audienceExportEnabled:env.EVYD_AUDIENCE_EXPORT_ENABLED!=='0',
   audienceAllowedOperators,
+  // Always use the explicit environment passed to gatewayConfig (also in tests).
+  // No implicit path in the repository for files containing customer contacts.
+  audiencePrivateCsvDir:typeof env.META_PRIVATE_CSV_DIR==='string'&&env.META_PRIVATE_CSV_DIR.trim()
+    ?env.META_PRIVATE_CSV_DIR.trim():null,
   gameplayReadSettings,gameplayReadConfigError,
   uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
