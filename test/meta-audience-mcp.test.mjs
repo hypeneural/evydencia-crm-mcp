@@ -258,14 +258,12 @@ test('Meta Audience: crm.read alone can request preview, but export is blocked w
   });
   await client.connect(transport);
 
-  // Export must fail closed with insufficient_operator_export_scope
-  const res = await client.callTool({
+  // Per-tool SDK scopeChallenge must issue OAuth 403 before handler,
+  // allowing the MCP client to perform scope step-up.
+  await assert.rejects(async()=>client.callTool({
     name: 'crm_meta_publico_natal_exportar',
-    arguments: {confirmado_pelo_operador: true},
-  });
-  assert.equal(res.isError, true);
-  const data = JSON.parse(res.content[0].text);
-  assert.equal(data.error, 'insufficient_operator_export_scope');
+    arguments: {confirmado_pelo_operador: true,snapshot_id:'snapshot-invalid-2026'},
+  }),err=>/403|insufficient.scope|Audience export scope/i.test(String(err)), 'expected HTTP OAuth scope challenge');
 
   await client.close();
 });
