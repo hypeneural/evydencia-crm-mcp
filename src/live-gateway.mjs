@@ -60,9 +60,29 @@ const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorl
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
 // A physical print is an externally visible, potentially irreversible action in a private device fleet.
 const PRINT_WRITE={readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false};
-const SAFE_ERR=/^(malotes_[a-z0-9_]+|gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|crm_meta_audience_[a-z0-9_]+|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
+const SAFE_ERR=/^(malotes_[a-z0-9_]+|gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|crm_meta_audience_[a-z0-9_]+|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable|EXPORT_BLOCKED_[A-Z0-9_]+|META_CSV_[A-Z0-9_]+)$/;
 
 function classifyToolError(code){
+ if(code==='crm_meta_audience_snapshot_changed_review_again'){
+  return {error_category:'CONFLICT',
+   hint:'A base mudou após a prévia. Solicite uma nova prévia e confirme novamente; nenhum CSV antigo foi liberado.'};
+ }
+ if(code==='crm_meta_audience_snapshot_missing_or_expired'){
+  return {error_category:'CONFLICT',
+   hint:'A prévia expirou ou pertence a outra autorização. Gere nova prévia antes da exportação.'};
+ }
+ if(code==='crm_meta_audience_legal_basis_not_verified'){
+  return {error_category:'BLOCKED',
+   hint:'A política jurídica e de proteção de dados ainda não foi aprovada no servidor. Nenhum contato foi exportado.'};
+ }
+ if(code==='crm_meta_audience_meta_audience_suppression_hash_mismatch'){
+  return {error_category:'BLOCKED',
+   hint:'A chave HMAC instalada não confere com registros da blacklist. Corrigir configuração do CRM antes de exportar.'};
+ }
+ if(code.startsWith('EXPORT_BLOCKED_')||code.startsWith('META_CSV_')){
+  return {error_category:'DATA_QUALITY',
+   hint:'A cobertura, identidade ou formato do público não foi validado. Consulte a prévia e a auditoria local; não envie à Meta.'};
+ }
  if(code==='crm_public_package_or_campaign_not_found'){
   return {
    error_category:'NOT_FOUND',
