@@ -79,3 +79,12 @@ Leia docs/META_AUDIENCE_P25_3_FORENSIC_AUDIT_20261029.md e atualize SOMENTE um r
 - parecer objetivo: LOCAL_QA_GO ou LOCAL_QA_NO_GO; LIVE_EXPORT_NO_GO até aprovação explícita do gestor.
 
 Não executar alterações em servidor, banco de produção, campanhas ou públicos. Gate2/publicação Meta continua somente com aprovação por campanha e orçamento.
+
+
+## Addendum P25.3.1 — proteção e UX já comitadas
+
+- Não reimplementar; verificar o HEAD mais novo antes de executar. O ChatGPT introduziu quarentena por identidade: purchase_check_status unavailable é tolerado pelo transformador SOMENTE se identity_status ambiguous/unknown, que exclui o grupo; suppressions/marketing permission unavailable CONTINUAM bloqueando todo o arquivo. Verificar que comprador/lead ambíguo nunca aparece no CSV.
+- Testar dispatch de proposta com resolved_customer_id apontando para comprador com compra ambígua; com matched_customer_count > 1; com campaign_id divergente; com status aborted; com eligibility_status suppressed. Todos fora da lista, mas sem impedir outros clientes elegíveis.
+- Checar que 100 linhas com apenas 50 clientes distintos não liberam o gate de upload.
+- Conferir na prévia source_quality e next_action em português; na exportação download_available_in_chat=false. Não confundir status arquivo privado com entrega ao gestor.
+- Não tomar o número histórico 342/342 como contagem esperada: os testes cresceram nesta branch. Registrar total real de cada suite e o SHA em que rodou.
