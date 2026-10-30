@@ -68,6 +68,11 @@ try {
     foreach ([
         'customers' => [['whatsapp_e164'], ['phone_e164']],
         'orders' => [['customer_id'], ['created_at']],
+        // The P25 reader resolves MAX(status.id) per order and fetches
+        // positive installments by payment_at. Index absence is a WARNING
+        // for DBA review, never permission to alter schema during this probe.
+        'orders_status' => [['order_id']],
+        'orders_installments' => [['payment_at'], ['order_id']],
         'proposal_dispatches' => [['proposal_flow_id','created_at'], ['phone_lookup_hash']],
         'communication_suppressions' => [['phone_lookup_hash']],
         'campaign_scheduled_contacts' => [['campaign_scheduled_id']],
