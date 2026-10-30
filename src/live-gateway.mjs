@@ -915,7 +915,15 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   registeredNames.add(name);
   const {requiredScopes=[GATEWAY_SCOPE],_meta:extraMeta,...restExtra}=extraConfig||{};
   const mergedMeta={...(extraMeta||{}),securitySchemes:[{type:'oauth2',scopes:[...requiredScopes]}]};
-  m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,_meta:mergedMeta},safe(name,fn));
+  // MCP SDK 2.x scopeChallenge enforces per-tool HTTP 403 insufficient_scope
+  // before the callback; the handler also checks permissions defensively.
+  const exportScopeChallenge=requiredScopes.includes(SCOPE_AUDIENCE_EXPORT)
+   ?({authInfo})=>requiredScopes.every(scope=>authInfo?.scopes?.includes(scope))
+      ?undefined:{scopes:requiredScopes,errorDescription:'Audience export scope required'}
+   :undefined;
+  m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,
+    ...(exportScopeChallenge?{scopeChallenge:exportScopeChallenge}:{}),
+    _meta:mergedMeta},safe(name,fn));
  };
 
  reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({verificar_gameplay:z.boolean().default(false)}),OUT_CAPACIDADES,async({verificar_gameplay})=>({...manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
