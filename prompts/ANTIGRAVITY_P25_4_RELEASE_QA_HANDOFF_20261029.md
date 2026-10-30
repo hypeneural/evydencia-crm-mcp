@@ -67,3 +67,8 @@ Se todos os testes locais passarem, atualizar a PR #23 com um único recibo, sem
 - Não publicar, habilitar, gastar Meta Ads, enviar mensagens, subir CSV, tocar CRM/DB ou GitHub Actions.
 
 **TERMINE AQUI:** só homologação local e plano de canário OFF. Deploy e alterações de variáveis de ambiente LIVE são ações separadas sob autorização formal do gestor.
+
+
+## Adendo de auditoria de diretório (P25.4.1)
+
+Confirmar o novo teste MCP de bloqueio de arquivo dentro do checkout (inclusive symlink de diretório); pasta de teste fica em tmpdir e é removida ao final. O preflight de release só considera pronto diretório absoluto, restrito 0700, FORA do Git checkout. Não criar arquivo real de clientes durante a validação. Execução nativa do HEAD atual continua obrigatória.
