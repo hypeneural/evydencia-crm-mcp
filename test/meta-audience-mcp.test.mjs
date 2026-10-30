@@ -281,7 +281,7 @@ test('Meta Audience: export requires explicit confirmado_pelo_operador: true', a
 
   const res = await client.callTool({
     name: 'crm_meta_publico_natal_exportar',
-    arguments: {confirmado_pelo_operador: false},
+    arguments: {confirmado_pelo_operador: false, snapshot_id: 'snapshot-dummy-12345678'},
   });
   assert.equal(res.isError, true);
   const data = JSON.parse(res.content[0].text);
