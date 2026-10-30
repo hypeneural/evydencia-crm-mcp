@@ -96,3 +96,13 @@ test('P25.4: large Meta bridge is isolated from unrelated forensic readers',asyn
  assert.match(code,/payload\?\.action==='meta\.audience\.read'/);
  assert.match(code,/audience\?MAX_META_AUDIENCE_STDOUT_BYTES:MAX_BRIDGE_STDOUT_BYTES/);
 });
+
+
+test('P25.4: SQL keeps buyer status joins bounded and selects only latest operational status',async()=>{
+ const s=await source('scripts/crm-meta-audience-read.php');
+ assert.match(s,/array_chunk\(\$missingOrderIds, 1000\)/);
+ assert.match(s,/array_chunk\(array_keys\(\$allCandidateOrderIds\), 1000\)/);
+ assert.match(s,/MAX\(id\) AS id/);
+ assert.match(s,/->joinSub\(\$latestIds, 'latest'/);
+ assert.doesNotMatch(s,/->orderBy\('id', 'asc'\)\s*->get\(\['id', 'order_id', 'status'\]\)/);
+});
