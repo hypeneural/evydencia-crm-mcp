@@ -20,10 +20,12 @@ import {paginatePublishedFamilies} from './gameplay-family-inventory.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,SCOPE_AUDIENCE_EXPORT,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {buildMetaAudienceCsv,assertMetaAudienceUploadReady} from './meta-audience-csv.mjs';
+import {metadataOnlyMetaAudienceSnapshot,metaAudienceSnapshotUnchanged} from './meta-audience-snapshot.mjs';
+import {persistMetaAudienceCsv} from './meta-audience-private-write.mjs';
 import {validateMetaCustomerListCsv} from './meta-audience-csv-validator.mjs';
 import {purgeExpiredAudienceExports} from './meta-audience-private-files.mjs';
 import {startMetaAudienceJanitor} from './meta-audience-janitor.mjs';
-import {mkdir,open,unlink,realpath} from 'node:fs/promises';
+import {mkdir,unlink,realpath} from 'node:fs/promises';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {readyForPickupClient} from './malotes-ready-client.mjs';
@@ -59,6 +61,9 @@ export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GA
 export {ZAPI_INSTANCE_TOOL_NAMES};
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
+// Local private CSV creation is a sensitive write, not a read-only or
+// repeat-safe operation. MCP annotations are advisory, OAuth remains enforced.
+const PRIVATE_AUDIENCE_EXPORT={readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:false};
 // A physical print is an externally visible, potentially irreversible action in a private device fleet.
 const PRINT_WRITE={readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false};
 const SAFE_ERR=/^(malotes_[a-z0-9_]+|gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|crm_meta_audience_[a-z0-9_]+|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable|EXPORT_BLOCKED_[A-Z0-9_]+|META_CSV_[A-Z0-9_]+)$/;
@@ -1593,7 +1598,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       metaAudienceCache.delete(metaAudienceCache.keys().next().value);
      }
      const key=cacheKey(result.snapshot_id);
-     const item={operatorKey,result,coverage:raw.coverage,
+     // Cache only aggregate metadata and the SHA; never keep the entire
+     // generated customer CSV in memory while awaiting operator confirmation.
+     const item={operatorKey,result:metadataOnlyMetaAudienceSnapshot(result),coverage:raw.coverage,
        queryTelemetry:raw.audience_query_telemetry||null,
        createdAt:nowMs,expiresAt:nowMs+CACHE_TTL_MS};
      metaAudienceCache.set(key,item);
@@ -1629,7 +1636,12 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      if(freshRaw?.available===false||!Array.isArray(freshRaw?.records))
        throw Error('crm_meta_audience_source_unavailable');
      const freshResult=buildMetaAudienceCsv({records:freshRaw.records,coverage:freshRaw.coverage});
-     if(freshResult.sha256!==result.sha256){
+     // A buyer/opt-out can change the PREVIEW counts even if the exported
+     // rows remain identical. Demand fresh approval for that audit change.
+     if(!metaAudienceSnapshotUnchanged(result,freshResult,{
+       previewSourceCounts:item.coverage.source_counts,
+       liveSourceCounts:freshRaw.coverage?.source_counts,
+     })){
       metaAudienceCache.delete(key);
       throw Error('crm_meta_audience_snapshot_changed_review_again');
      }
@@ -1652,9 +1664,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      const exportId=randomUUID();
      const filePath=resolve(PRIVATE_EXPORTS_DIR,`meta-audience-natal2026-${exportId}.csv`);
      // Fail if an unexpected file already exists; never overwrite past exports.
-     const fd=await open(filePath,'wx',0o600);
-     try {await fd.writeFile(freshResult.csv,{encoding:'utf8'});}
-     finally {await fd.close();}
+     // Helper removes partially written CSV on disk/fsync errors and never
+     // unlinks preexisting files when exclusive creation fails.
+     await persistMetaAudienceCsv(filePath,freshResult.csv);
      metaAudienceCache.delete(key); // release all CSV PII from snapshot cache
      // Short-lived best-effort cleanup, plus operator maintenance on restart.
      const cleanup=setTimeout(()=>{unlink(filePath).catch(()=>{});},3600*1000);
@@ -1678,7 +1690,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       contains_personal_data:true,
       counts:result.counts
      };
-    },WRITE_IDEMPOTENT,{requiredScopes:[GATEWAY_SCOPE,SCOPE_AUDIENCE_EXPORT]});
+    },PRIVATE_AUDIENCE_EXPORT,{requiredScopes:[GATEWAY_SCOPE,SCOPE_AUDIENCE_EXPORT]});
   }
 
    reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
