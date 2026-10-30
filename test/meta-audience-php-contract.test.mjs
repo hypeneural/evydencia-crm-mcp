@@ -56,7 +56,8 @@ test('P0: MCP export never silently regenerates missing preview or exposes serve
 
 test('P0: OAuth dedicated audience permission is default deny',async()=>{
  const s=await source('src/oauth-gateway.mjs');
- assert.match(s,/audienceExportEnabled:env\.EVYD_AUDIENCE_EXPORT_ENABLED==='1'/);
+ assert.match(s,/metaAudienceEnabled:env\.EVYD_META_AUDIENCE_ENABLED==='1'/);
+ assert.match(s,/audienceExportEnabled:env\.EVYD_META_AUDIENCE_ENABLED==='1'&&env\.EVYD_AUDIENCE_EXPORT_ENABLED==='1'/);
  assert.doesNotMatch(s,/EVYD_AUDIENCE_ALLOWED_OPERATORS\|\|env\.EVYD_ALLOWED_OPERATOR_IDS/);
  assert.match(s,/SCOPE_AUDIENCE_EXPORT/);
 });
