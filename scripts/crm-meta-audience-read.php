@@ -86,6 +86,13 @@ function evyNormalizePhoneE164(?string $raw): ?string
 
 // Disable query log to prevent memory exhaustion with large datasets.
 \Illuminate\Support\Facades\DB::disableQueryLog();
+// Retain only aggregate performance counters. Never store SQL text/bindings in
+// Laravel's query log, which may otherwise contain customer PII in memory.
+$metaSql = (object) ['count' => 0, 'ms' => 0.0];
+\Illuminate\Support\Facades\DB::listen(static function ($event) use ($metaSql): void {
+    $metaSql->count++;
+    $metaSql->ms += (float) ($event->time ?? 0);
+});
 
 $snapshotId = 'snapshot-' . gmdate('YmdHis') . '-' . bin2hex(random_bytes(4));
 $asOf = \Carbon\CarbonImmutable::now('America/Sao_Paulo')->toIso8601String();
@@ -408,6 +415,11 @@ try {
         ],
         'origin_quality' => [
             'unique_customers' => $uniqueCustomerCount,
+            'candidate_orders_created_2026' => count($orders2026),
+            'installments_paid_in_2026' => count($paidInstallments2026),
+            'suppression_rules_examined' => count($suppressionRows),
+            'buyer_customer_ids' => count($buyerCustomerIds),
+            'ambiguous_customer_ids' => count($ambiguousCustomerIds),
             'proposal_dispatch_rows' => $dispatchRecordsCount,
             'scheduled_only_not_exported' => $scheduledRecordsCount,
             'dispatch_scheduled_does_not_prove_delivered' => true,
@@ -421,6 +433,35 @@ try {
         'as_of' => $asOf,
         'coverage' => $coverage,
         'records' => $records,
+        'audience_query_telemetry' => [
+            'sql_count' => $metaSql->count,
+            'sql_ms' => round($metaSql->ms, 2),
+        ],
+    ];
+
+} catch (\Throwable $error) {
+    // Never serialize exception messages, SQL, parameters or PII. Preserve a
+    // small, actionable code for the authenticated operator and audit log.
+    $known = [
+        'meta_audience_suppression_hash_mismatch',
+        'paid_2026_orders_missing_referential_integrity',
+        'order_without_customer_relation',
+        'proposal_resolved_customer_missing',
+        'natal_2026_proposal_flow_unavailable',
+        'natal_2026_flow_has_no_campaign_ids',
+    ];
+    $reason = in_array($error->getMessage(), $known, true)
+        ? $error->getMessage() : 'meta_audience_source_unavailable';
+    $response = [
+        'source' => 'CRM_META_AUDIENCE_READ_ONLY',
+        'available' => false,
+        'reason' => $reason,
+        'contains_personal_data' => false,
+        'export_enabled' => false,
+        'audience_query_telemetry' => [
+            'sql_count' => $metaSql->count,
+            'sql_ms' => round($metaSql->ms, 2),
+        ],
     ];
 
 } finally {
