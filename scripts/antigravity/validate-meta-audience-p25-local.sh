@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
-# P25.2 ONLY: local, synthetic and static validation; no deploy, database, Meta or network writes.
+# P25.3 — exactly one LOCAL synthetic/static validation pass.
+# No CRM writes, no Meta Ads, no GitHub Actions, no deploy, no remote DB calls.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-echo "P25.2 LOCAL READ-ONLY VALIDATION"
-git rev-parse --show-toplevel
-git rev-parse --short HEAD
-git status --short
+printf '%s\n' "META P25.3 local audit only — no real contacts"
+printf 'git HEAD: '; git rev-parse HEAD
+printf 'working tree: '; git status --porcelain
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo 'BLOCKED: uncommitted changes; validate a committed reproducible HEAD' >&2
+  exit 2
+fi
+if ! git merge-base --is-ancestor 01aec393f349703cd3179dd7897141a984ccf400 HEAD; then
+  echo 'BLOCKED: expected Antigravity handoff commit not in ancestry' >&2
+  exit 2
+fi
+node --version
+php -v | head -n 1
 node --check src/meta-audience-csv.mjs
 node --check src/meta-audience-csv-validator.mjs
 node --check src/meta-audience-private-files.mjs
@@ -13,9 +23,12 @@ node --check src/live-gateway.mjs
 node --check src/oauth-gateway.mjs
 node --check src/legacy-api-read.mjs
 node --test test/meta-audience-csv.test.mjs test/meta-audience-mcp.test.mjs test/meta-audience-private-files.test.mjs test/meta-audience-php-contract.test.mjs
+php -l scripts/crm-meta-audience-purchase-classifier.php
 php -l scripts/crm-meta-audience-read.php
 php -l scripts/crm-meta-audience-preflight-read.php
 php -l scripts/crm-forensic-bridge.php
+php -l test/meta-audience-purchase-classifier.php
+php test/meta-audience-purchase-classifier.php
 npm run check
 npm test
-echo "P25.2 LOCAL JS/PHP GATES COMPLETED — MYSQL/LIVE AND DELIVERY STILL NOT PROVEN"
+printf '%s\n' 'P25.3 LOCAL QA PASS — MySQL real, legal approval, Meta upload and download transport remain unverified'
