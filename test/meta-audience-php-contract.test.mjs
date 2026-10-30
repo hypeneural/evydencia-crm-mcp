@@ -118,3 +118,12 @@ test('P25.7: origin telemetry distinguishes unique customers, source rows and su
  assert.match(s,/'suppression_scope'\s*=>\s*'whatsapp_or_all_marketing_global_or_natal2026'/);
  assert.match(s,/'buyer_customer_ids'\s*=>\s*count\(\$buyerCustomerIds\)/);
 });
+
+
+test('P25.7: read-only schema preflight inspects new status/installment access-path indexes',async()=>{
+ const s=await source('scripts/crm-meta-audience-preflight-read.php');
+ assert.match(s,/'orders_status'\s*=>\s*\[\['order_id'\]\]/);
+ assert.match(s,/'orders_installments'\s*=>\s*\[\['payment_at'\],\s*\['order_id'\]\]/);
+ assert.match(s,/'index_checks'\s*=>\s*\$indexChecks/);
+ assert.doesNotMatch(s,/Schema::table\(/);
+});
