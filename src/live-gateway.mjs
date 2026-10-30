@@ -1513,31 +1513,53 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
    const PRIVATE_EXPORTS_DIR=cfg.audiencePrivateCsvDir;
    const operatorKey=String(ex.operatorId)+':'+String(ex.upstreamGrantHash||'');
    const cacheKey=id=>operatorKey+':'+id;
+   const CACHE_TTL_MS=5*60*1000;
+   const MAX_AUDIENCE_SNAPSHOTS=12;
+   const previewPayload=(item)=>({
+      source:'CRM_META_AUDIENCE_PREVIEW',
+      target_year:2026,
+      snapshot_id:item.result.snapshot_id,
+      as_of:item.result.as_of,
+      purchase_rule:item.result.purchase_rule,
+      coverage:item.coverage,
+      source_counts:item.coverage.source_counts,
+      counts:item.result.counts,
+      ready_for_export:item.result.counts.export_rows>=100,
+   });
 
    reg('crm_meta_publico_natal_previa','Prévia analítica do público Meta Ads Natal 2026 (sem PII)',
     'Consulta clientes do CRM e propostas Natal 2026, excluindo compradores de 2026 de qualquer produto, supressões e opt-outs. Retorna SOMENTE contadores agregados, integridade e cobertura, sem nenhum dado pessoal.',
     z.object({forcar_atualizacao:z.boolean().default(false)}),
     OUT_META_AUDIENCE_PREVIEW,async({forcar_atualizacao})=>{
+     const nowMs=Date.now();
+     // A repeated click within 45 s uses the same labeled as_of; the export
+     // ALWAYS reads a fresh CRM snapshot before writing the CSV.
+     if(!forcar_atualizacao){
+      for(const item of metaAudienceCache.values()){
+       if(item.operatorKey===operatorKey && item.expiresAt>nowMs
+          && nowMs-item.createdAt<45_000) return previewPayload(item);
+      }
+     }
      const raw=await direct.metaAudienceRead({fresh:true});
      if(raw?.available===false)throw Error('crm_meta_audience_'+(raw.reason==='legal_basis_not_verified'?'legal_basis_not_verified':'source_unavailable'));
      if(!Array.isArray(raw?.records)||!raw?.coverage?.snapshot_id)throw Error('crm_meta_audience_incomplete_source');
      const result=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
-     // No stale snapshots and at most one in-memory CSV per operator.
+     // At most 12 snapshots and one per operator; never retain stale PII.
      for(const [key,item] of metaAudienceCache){
-      if(item.expiresAt<Date.now()||item.operatorKey===operatorKey)metaAudienceCache.delete(key);
+      if(item.expiresAt<=nowMs||item.operatorKey===operatorKey)metaAudienceCache.delete(key);
      }
-     metaAudienceCache.set(cacheKey(result.snapshot_id),{operatorKey,result,expiresAt:Date.now()+5*60*1000});
-     return {
-      source:'CRM_META_AUDIENCE_PREVIEW',
-      target_year:2026,
-      snapshot_id:raw.coverage.snapshot_id,
-      as_of:raw.coverage.as_of,
-      purchase_rule:raw.coverage.purchase_rule,
-      coverage:raw.coverage,
-      source_counts:raw.coverage.source_counts,
-      counts:result.counts,
-      ready_for_export:result.counts.export_rows>=100
-     };
+     while(metaAudienceCache.size>=MAX_AUDIENCE_SNAPSHOTS){
+      metaAudienceCache.delete(metaAudienceCache.keys().next().value);
+     }
+     const key=cacheKey(result.snapshot_id);
+     const item={operatorKey,result,coverage:raw.coverage,
+       createdAt:nowMs,expiresAt:nowMs+CACHE_TTL_MS};
+     metaAudienceCache.set(key,item);
+     const cleanup=setTimeout(()=>{
+       if(metaAudienceCache.get(key)===item)metaAudienceCache.delete(key);
+     },CACHE_TTL_MS+1000);
+     cleanup.unref?.();
+     return previewPayload(item);
     },READ,{requiredScopes:[GATEWAY_SCOPE]});
 
    reg('crm_meta_publico_natal_exportar','Exportar público Meta Ads Natal 2026 em CSV privado',
