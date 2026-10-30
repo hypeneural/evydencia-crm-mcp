@@ -6,8 +6,8 @@
 import {McpServer,createMcpHandler,fromJsonSchema,requireBearerAuth,getOAuthProtectedResourceMetadataUrl,oauthMetadataResponse,validateHostHeader} from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import {execFileSync} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
-import {dirname,resolve} from 'node:path';
+import {randomUUID,randomBytes} from 'node:crypto';
+import {dirname,resolve,isAbsolute} from 'node:path';
 import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
@@ -21,7 +21,7 @@ import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJ
 import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,SCOPE_AUDIENCE_EXPORT,supportedGatewayScopes} from './oauth-gateway.mjs';
 import {buildMetaAudienceCsv,assertMetaAudienceUploadReady} from './meta-audience-csv.mjs';
 import {validateMetaCustomerListCsv} from './meta-audience-csv-validator.mjs';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,open,lstat,unlink} from 'node:fs/promises';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {readyForPickupClient} from './malotes-ready-client.mjs';
@@ -59,7 +59,7 @@ const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorl
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
 // A physical print is an externally visible, potentially irreversible action in a private device fleet.
 const PRINT_WRITE={readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false};
-const SAFE_ERR=/^(malotes_[a-z0-9_]+|gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
+const SAFE_ERR=/^(malotes_[a-z0-9_]+|gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|crm_meta_audience_[a-z0-9_]+|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
 
 function classifyToolError(code){
  if(code==='crm_public_package_or_campaign_not_found'){
@@ -412,7 +412,8 @@ const OUT_META_AUDIENCE_EXPORT=z.looseObject({
  unique_phones:z.number().int().nonnegative(),
  rows_with_email:z.number().int().nonnegative(),
  sha256:z.string(),
- arquivo_privado_path:z.string(),
+ arquivo_id:z.string(),
+ delivery_status:z.literal('private_gateway_storage_only'),
  expira_em:z.string(),
  contains_personal_data:z.literal(true),
  counts:z.record(z.any()).optional()
@@ -758,7 +759,7 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
 export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_GAMEPLAY_LINKS,OUT_GAMEPLAY_AUDIT,OUT_GAMEPLAY_AVAILABLE,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_PROPOSAL_HISTORY,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
-async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv,legacyReader=null}){
+async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv,legacyReader=null,audienceSnapshots=null}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
  const grantedScopes=new Set(Array.isArray(auth?.scopes)&&auth.scopes.length?auth.scopes:[GATEWAY_SCOPE]);
@@ -1497,16 +1498,26 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      return await direct.proposalHistoryBatch({telefones,historico_limite});
     });
    if(cfg.metaAudienceEnabled&&direct){
-   const metaAudienceCache=new Map();
-   const PRIVATE_EXPORTS_DIR=process.env.META_PRIVATE_CSV_DIR||resolve(process.cwd(),'.private_exports');
+   // createGateway owns the shared, operator-bound cache so separate MCP calls
+   // can preview then export the SAME snapshot. Never store duplicate raw rows.
+   const metaAudienceCache=audienceSnapshots;
+   const PRIVATE_EXPORTS_DIR=cfg.audiencePrivateCsvDir;
+   const operatorKey=String(ex.operatorId)+':'+String(ex.upstreamGrantHash||'');
+   const cacheKey=id=>operatorKey+':'+id;
 
    reg('crm_meta_publico_natal_previa','Prévia analítica do público Meta Ads Natal 2026 (sem PII)',
     'Consulta clientes do CRM e propostas Natal 2026, excluindo compradores de 2026 de qualquer produto, supressões e opt-outs. Retorna SOMENTE contadores agregados, integridade e cobertura, sem nenhum dado pessoal.',
     z.object({forcar_atualizacao:z.boolean().default(false)}),
     OUT_META_AUDIENCE_PREVIEW,async({forcar_atualizacao})=>{
-     const raw=await direct.metaAudienceRead({fresh:Boolean(forcar_atualizacao)});
+     const raw=await direct.metaAudienceRead({fresh:true});
+     if(raw?.available===false)throw Error('crm_meta_audience_'+(raw.reason==='legal_basis_not_verified'?'legal_basis_not_verified':'source_unavailable'));
+     if(!Array.isArray(raw?.records)||!raw?.coverage?.snapshot_id)throw Error('crm_meta_audience_incomplete_source');
      const result=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
-     metaAudienceCache.set(raw.coverage.snapshot_id,{raw,result,expiresAt:Date.now()+15*60*1000});
+     // No stale snapshots and at most one in-memory CSV per operator.
+     for(const [key,item] of metaAudienceCache){
+      if(item.expiresAt<Date.now()||item.operatorKey===operatorKey)metaAudienceCache.delete(key);
+     }
+     metaAudienceCache.set(cacheKey(result.snapshot_id),{operatorKey,result,expiresAt:Date.now()+5*60*1000});
      return {
       source:'CRM_META_AUDIENCE_PREVIEW',
       target_year:2026,
@@ -1522,17 +1533,20 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
 
    reg('crm_meta_publico_natal_exportar','Exportar público Meta Ads Natal 2026 em CSV privado',
     'Gera o CSV manual para upload na interface do Meta Ads sob escopo dedicado crm.audience.export e confirmação explícita do operador. Salva arquivo em disco privado (0600) e retorna apenas metadados e SHA-256, sem PII no chat.',
-    z.object({confirmado_pelo_operador:z.boolean(),snapshot_id:z.string().optional()}),
+    z.object({confirmado_pelo_operador:z.boolean(),snapshot_id:z.string().min(16).max(100)}),
     OUT_META_AUDIENCE_EXPORT,async({confirmado_pelo_operador,snapshot_id})=>{
      if(!grantedScopes.has(SCOPE_AUDIENCE_EXPORT)||!ex.canExportAudience)throw Error('insufficient_operator_export_scope');
      if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
 
-     let item=snapshot_id?metaAudienceCache.get(snapshot_id):null;
-     if(!item||item.expiresAt<Date.now()){
-      const raw=await direct.metaAudienceRead({fresh:true});
-      const result=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
-      item={raw,result,expiresAt:Date.now()+15*60*1000};
-      metaAudienceCache.set(raw.coverage.snapshot_id,item);
+     if(!snapshot_id)throw Error('crm_meta_audience_preview_required');
+     const key=cacheKey(snapshot_id);
+     const item=metaAudienceCache.get(key);
+     if(!item||item.operatorKey!==operatorKey||item.expiresAt<Date.now()){
+      metaAudienceCache.delete(key);
+      throw Error('crm_meta_audience_snapshot_missing_or_expired');
+     }
+     if(!PRIVATE_EXPORTS_DIR||!isAbsolute(PRIVATE_EXPORTS_DIR)){
+      throw Error('crm_meta_audience_private_directory_unconfigured');
      }
 
      const {result}=item;
@@ -1540,8 +1554,21 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      const validated=validateMetaCustomerListCsv(result.csv,{minRows:100});
 
      await mkdir(PRIVATE_EXPORTS_DIR,{recursive:true,mode:0o700});
-     const filePath=resolve(PRIVATE_EXPORTS_DIR,`meta-audience-natal2026-${result.snapshot_id}.csv`);
-     await writeFile(filePath,result.csv,{mode:0o600,encoding:'utf8'});
+     const directoryInfo=await lstat(PRIVATE_EXPORTS_DIR);
+     if(!directoryInfo.isDirectory()||directoryInfo.isSymbolicLink()
+        ||(directoryInfo.mode&0o077)!==0){
+      throw Error('crm_meta_audience_private_directory_insecure');
+     }
+     const exportId=randomUUID();
+     const filePath=resolve(PRIVATE_EXPORTS_DIR,`meta-audience-natal2026-${exportId}.csv`);
+     // Fail if an unexpected file already exists; never overwrite past exports.
+     const fd=await open(filePath,'wx',0o600);
+     try {await fd.writeFile(result.csv,{encoding:'utf8'});}
+     finally {await fd.close();}
+     metaAudienceCache.delete(key); // release all CSV PII from snapshot cache
+     // Short-lived best-effort cleanup, plus operator maintenance on restart.
+     const cleanup=setTimeout(()=>{unlink(filePath).catch(()=>{});},3600*1000);
+     cleanup.unref?.();
 
      return {
       source:'CRM_META_AUDIENCE_EXPORT',
@@ -1552,7 +1579,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       unique_phones:validated.unique_phones,
       rows_with_email:validated.rows_with_email,
       sha256:validated.sha256,
-      arquivo_privado_path:filePath,
+      arquivo_id:exportId,
+      delivery_status:'private_gateway_storage_only',
+      // A filesystem path is NOT a downloadable URL in ChatGPT.
       expira_em:new Date(Date.now()+3600*1000).toISOString(),
       contains_personal_data:true,
       counts:result.counts
@@ -1731,6 +1760,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  const perf=createGatewayPerfTracker();
  const operators=operatorVerifier(cfg,{fetchFn,now});
  const oauth=createOAuthServer(cfg,{operators,now,log});
+ const audienceSnapshots=new Map();
  let mcp,zapi=null;
  const zapiDiag=cfg.zapiDiagEnabled?createZapiInstanceDiagnostics(cfg,{
   fetchFn,
@@ -1755,7 +1785,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  const resourceUrl=new URL(cfg.resource);
  const resourceMetadataUrl=getOAuthProtectedResourceMetadataUrl(resourceUrl);
  const gate=requireBearerAuth({verifier:oauth.verifier,requiredScopes:[GATEWAY_SCOPE],resourceMetadataUrl,expectedResource:resourceUrl});
- mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env,legacyReader}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
+ mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env,legacyReader,audienceSnapshots}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:supportedGatewayScopes(cfg),resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
