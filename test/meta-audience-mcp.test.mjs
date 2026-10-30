@@ -6,6 +6,7 @@ import {createServer} from 'node:http';
 import {randomBytes, createHash} from 'node:crypto';
 import {rm, readFile, readdir, stat} from 'node:fs/promises';
 import {resolve} from 'node:path';
+import {tmpdir} from 'node:os';
 import {Client, StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
 import {createGateway} from '../src/live-gateway.mjs';
 import {GATEWAY_SCOPE, SCOPE_AUDIENCE_EXPORT} from '../src/oauth-gateway.mjs';
@@ -15,7 +16,7 @@ import {buildMetaAudienceCsv, assertMetaAudienceUploadReady} from '../src/meta-a
 const KEY = randomBytes(32).toString('base64');
 const REDIR = 'https://chatgpt.com/connector_platform_oauth_redirect';
 const INTERNAL_TOK = 'fake-internal-crm-read-token-000001';
-const TEST_DIR = resolve(process.cwd(), '.test_private_exports_' + Date.now());
+const TEST_DIR = resolve(tmpdir(), 'evyd-meta-audience-synthetic-' + process.pid + '-' + Date.now());
 
 let crm, crmUrl;
 const R = ['extension:bootstrap', 'extension:customer-read'];
