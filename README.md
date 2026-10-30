@@ -1,5 +1,8 @@
 # Evydência CRM MCP (`v0.12.0`)
 
+> **Meta Audience Natal 2026:** MCP LIVE P25.8 (`2f7755d`, 41 ferramentas); a PR #23 contém P25.9 ainda **não publicada**. Leia o [manual operacional atual](docs/META_AUDIENCE_P25_9_MANUAL_OPERACIONAL_20261030.md) para prévia, exportação privada, CSV, testes e handoff local. A descrição Gameplay abaixo é histórica e não substitui o inventário LIVE de `crm_capacidades`.
+
+
 > **MCP × Gameplay — Etapa de integração controlada (27/10/2026)**
 > Comece por [Arquitetura e gates](docs/START_HERE_MCP_GAMEPLAY_20261027.md), leia a [auditoria forense Etapa 3](docs/AUDITORIA_FORENSE_ETAPA3_MCP_GAMEPLAY_20261027.md) e execute o [prompt local atualizado](docs/PROMPT_ANTIGRAVITY_ETAPA3_MCP_GAMEPLAY_20261027.md). A branch `integration/live-35tools-gameplay-reconciled-20261027` preserva a release PrintServer/Z-API, mas não está implantada nem habilita links/fotos reais. A consulta privada ao Gameplay é somente leitura e continua dependente de validação na VPS.
 
