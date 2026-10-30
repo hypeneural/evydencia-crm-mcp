@@ -283,10 +283,10 @@ try {
     if ($purchaseRule === 'NO_VALID_NATAL_2026_PURCHASE') {
         $natalSlug = (string) config('natal.product_slug', 'natal');
         if ($natalSlug === '' || strlen($natalSlug) > 60 || !preg_match('/^[a-z0-9_-]+$/', $natalSlug)) {
-            throw new \\RuntimeException('meta_audience_invalid_natal_slug');
+            throw new \RuntimeException('meta_audience_invalid_natal_slug');
         }
-        $asOfNatal = \\Carbon\\CarbonImmutable::parse($asOf, 'America/Sao_Paulo');
-        $canonicalNatalIds = app(\\App\\Services\\Reports\\NatalValidOrdersQuery::class)
+        $asOfNatal = \Carbon\CarbonImmutable::parse($asOf, 'America/Sao_Paulo');
+        $canonicalNatalIds = app(\App\Services\Reports\NatalValidOrdersQuery::class)
             ->getValidCustomerIds($asOfNatal, 2026, $natalSlug);
         $canonicalNatalBuyers = array_fill_keys($canonicalNatalIds, true);
         // Additional conservative financial cross-check: any paid Natal order
@@ -304,7 +304,7 @@ try {
         foreach ($natalOrders as $no) {
             $id = (int) $no->id;
             $custId = (int) $no->customer_id;
-            if ($custId <= 0) throw new \\RuntimeException('order_without_customer_relation');
+            if ($custId <= 0) throw new \RuntimeException('order_without_customer_relation');
             $facts = [['status' => $latestStatusByOrder[$id] ?? null,
                 'has_status' => isset($ordersWithStatus[$id]),
                 'created_2026' => true,
