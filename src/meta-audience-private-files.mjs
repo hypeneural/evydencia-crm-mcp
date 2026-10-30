@@ -30,7 +30,14 @@ export async function purgeExpiredAudienceExports(directory,{nowMs=Date.now(),tt
     if(!st||!st.isFile()||st.isSymbolicLink())continue;
     if(nowMs-st.mtimeMs<ttlMs)continue;
     expired++;
-    if(!dryRun){await unlink(child);deleted++;}
+    if(!dryRun){
+      try{await unlink(child);deleted++;}
+      catch(err){
+        // A periodic sweep and a pre-export sweep may race safely.
+        // The other worker already removed this exact owned file.
+        if(err?.code!=='ENOENT')throw err;
+      }
+    }
   }
   return {inspected,expired,deleted,dry_run:dryRun,contains_personal_data:false};
 }
