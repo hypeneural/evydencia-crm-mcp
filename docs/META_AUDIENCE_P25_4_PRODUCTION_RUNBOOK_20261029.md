@@ -106,3 +106,8 @@ Rollback funcional: desligar primeiro EVYD_AUDIENCE_EXPORT_ENABLED=0, depois mas
 CSV de clientes NUNCA pode ficar dentro do diretório do checkout Git, mesmo ignorado por .gitignore. O gateway valida caminhos canônicos com realpath/relative depois de criar o diretório e antes de qualquer escrita; symlinks intermediários não permitem desviar o bloqueio. Os testes MCP usam diretório sintético em tmpdir, e um teste adicional confirma rejeição de tentativa de export para diretório dentro do checkout. O preflight operacional também marca diretórios dentro do checkout como NOT_READY.
 
 O plano de recuperação do arquivo via SFTP/SSH é uma opção administrativa temporária para o operador com acesso legítimo; NÃO constitui download diretamente no ChatGPT. Não criar URLs públicas nem publicar caminhos reais.
+
+
+## P25.4.2 — Consultas grandes de pedidos (performance)
+
+Foi encontrada uma consulta que carregava TODOS os registros históricos de orders_status para o universo completo de pedidos, embora a decisão comercial só precise do status operacional mais recente. O leitor agora pagina IDs dos pedidos em lotes de 1.000, usa MAX(id) AS id com joinSub para recuperar só o último status por pedido, alinhado com CurrentOrderStatusResolver do CRM Laravel. Pedidos antigos pagos em 2026 também são recuperados em lotes de 1.000, com check de integridade total. Nenhuma atualização/DDL. No staging, comparar 100% dos status selecionados contra a consulta de referência Laravel e observar EXPLAIN/tempo/memória antes de habilitar a funcionalidade em produção. Teste estático de regressão versionado.
