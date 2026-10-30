@@ -99,3 +99,10 @@ Rollback funcional: desligar primeiro EVYD_AUDIENCE_EXPORT_ENABLED=0, depois mas
 - LEGAL_APPROVAL: pendente.
 - CHATGPT_DOWNLOAD: pendente; arquivo_id não é link.
 - LIVE_EXPORT e META_UPLOAD: NO-GO sem autorização específica, mesmo que código passe nos testes.
+
+
+## Reforço de armazenamento P25.4.1
+
+CSV de clientes NUNCA pode ficar dentro do diretório do checkout Git, mesmo ignorado por .gitignore. O gateway valida caminhos canônicos com realpath/relative depois de criar o diretório e antes de qualquer escrita; symlinks intermediários não permitem desviar o bloqueio. Os testes MCP usam diretório sintético em tmpdir, e um teste adicional confirma rejeição de tentativa de export para diretório dentro do checkout. O preflight operacional também marca diretórios dentro do checkout como NOT_READY.
+
+O plano de recuperação do arquivo via SFTP/SSH é uma opção administrativa temporária para o operador com acesso legítimo; NÃO constitui download diretamente no ChatGPT. Não criar URLs públicas nem publicar caminhos reais.
