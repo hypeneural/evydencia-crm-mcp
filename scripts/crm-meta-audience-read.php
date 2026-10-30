@@ -432,10 +432,16 @@ try {
             'proposals' => $proposalRecordsCount,
         ],
         'origin_quality' => [
+            // Distinguish customer persons from rows emitted: each customer
+            // with 2 verified phones produces 2 source rows; missing phones
+            // still produce a linked identity row (but never an output phone).
             'unique_customers' => $uniqueCustomerCount,
+            'customer_source_rows' => $customerRecordsCount,
+            'proposal_source_rows' => $proposalRecordsCount,
             'candidate_orders_created_2026' => count($orders2026),
             'installments_paid_in_2026' => count($paidInstallments2026),
             'suppression_rules_examined' => count($suppressionRows),
+            'suppression_scope' => 'whatsapp_or_all_marketing_global_or_natal2026',
             'buyer_customer_ids' => count($buyerCustomerIds),
             'ambiguous_customer_ids' => count($ambiguousCustomerIds),
             'proposal_dispatch_rows' => $dispatchRecordsCount,
