@@ -24,7 +24,7 @@ node --check src/oauth-gateway.mjs
 node --check src/legacy-api-read.mjs
 node --check scripts/antigravity/purge-meta-audience-private.mjs
 node --check scripts/antigravity/meta-audience-release-preflight.mjs
-node --test test/meta-audience-csv.test.mjs test/meta-audience-mcp.test.mjs test/meta-audience-private-files.test.mjs test/meta-audience-php-contract.test.mjs
+node --test test/meta-audience-csv.test.mjs test/meta-audience-mcp.test.mjs test/meta-audience-private-files.test.mjs test/meta-audience-php-contract.test.mjs test/meta-audience-release-preflight.test.mjs
 php -l scripts/crm-meta-audience-purchase-classifier.php
 php -l scripts/crm-meta-audience-read.php
 php -l scripts/crm-meta-audience-preflight-read.php
