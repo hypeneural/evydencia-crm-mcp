@@ -184,10 +184,17 @@ export function buildMetaAudienceCsv({records,coverage}={}) {
     for(const r of valid) {
       const previous=phones.get(r.phone);
       const score=x=>(x.email?4:0)+(x.source==='customer'?2:0)+(x.name?1:0);
+      // Stable tie-break: the same snapshot MUST hash identically if SQL
+      // returns tied source rows in another order on revalidation.
+      // Keep the email on the row where its phone was actually observed.
+      const tieKey=x=>[x.email||'',x.name||'',x.source,x.source_id].join('\u0000');
       if(!previous) phones.set(r.phone,r);
       else {
         counts.duplicate_phone_rows_collapsed++;
-        if(score(r)>score(previous)) phones.set(r.phone,r);
+        if(score(r)>score(previous)
+            || (score(r)===score(previous)&&tieKey(r)<tieKey(previous))){
+          phones.set(r.phone,r);
+        }
       }
     }
     counts.eligible_people++;
