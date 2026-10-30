@@ -189,3 +189,47 @@ test('uncertain buyer is quarantined individually, unrelated verified contact re
  assert.doesNotMatch(result.csv,/uncertain@example\.com|5548999990111/);
  assert.match(result.csv,/clear@example\.com,5548999990222/);
 });
+
+
+test('P25.6: same-phone proposals with tied quality have deterministic CSV regardless of extraction order',()=>{
+ const a=row({source:'proposal_2026',source_id:'dispatch-z',phone:'48999991234',
+   email:'zeta@example.com',name:'Pessoa Exemplo'});
+ const b=row({source:'proposal_2026',source_id:'dispatch-a',phone:'48999991234',
+   email:'alpha@example.com',name:'Pessoa Exemplo'});
+ const c=row({source_id:'customer-independent',phone:'48999991235',email:'unrelated@example.com'});
+ const first=build([a,b,c]);
+ const reverse=build([c,b,a]);
+ assert.equal(first.sha256,reverse.sha256);
+ assert.equal(first.csv,reverse.csv);
+ assert.equal(first.counts.duplicate_phone_rows_collapsed,1);
+ assert.match(first.csv,/alpha@example\.com,5548999991234/);
+ assert.doesNotMatch(first.csv,/zeta@example\.com/);
+});
+test('P25.6: 2331 phone rows may represent exactly 2330 distinct identity groups',()=>{
+ const rows=Array.from({length:2330},(_,i)=>row({
+  source_id:'customer-'+i,
+  phone:'489'+String(10000000+i),
+  email:'mail'+i+'@example.invalid',
+ }));
+ rows.push(row({source_id:'customer-0',phone:'48910002330',email:'mail0@example.invalid'}));
+ const out=build(rows);
+ assert.equal(out.counts.export_rows,2331);
+ assert.equal(out.counts.eligible_people,2330);
+ assert.equal(validateMetaCustomerListCsv(out.csv).unique_phones,2331);
+ assert.equal(assertMetaAudienceUploadReady(out).ready,true);
+});
+test('P25.6: transitive buyer/opt-out exclusion unaffected by permutation of source rows',()=>{
+ const buyer=row({source_id:'customer-buyer',phone:'',email:'buyer@example.com',bought_2026:true});
+ const linked=row({source:'proposal_2026',source_id:'dispatch-link',phone:'48999990191',email:'buyer@example.com'});
+ const optout=row({source:'customer',source_id:'optout',phone:'48999990192',email:'optout@example.com',suppressed:true});
+ const independent=row({source_id:'independent',phone:'48999990193',email:'good@example.com'});
+ const input=[buyer,linked,optout,independent];
+ for(const arranged of [input,[...input].reverse(),[input[2],input[0],input[3],input[1]]]){
+  const out=build(arranged);
+  assert.equal(out.counts.export_rows,1);
+  assert.equal(out.counts.excluded_2026_buyer,1);
+  assert.equal(out.counts.excluded_suppressed,1);
+  assert.match(out.csv,/good@example\.com/);
+  assert.doesNotMatch(out.csv,/buyer@example|optout@example/);
+ }
+});
