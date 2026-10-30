@@ -1,3 +1,5 @@
+> HISTÓRICO P25.2 — este documento registra somente a execução anterior do Antigravity (commit 01aec393). NÃO comprova os hotfixes P25.3 posteriores. Para executar e obter recibo atualizado, consulte docs/META_AUDIENCE_P25_3_FORENSIC_AUDIT_20261029.md e prompts/ANTIGRAVITY_P25_3_LOCAL_VALIDATION_ONLY_20261029.md. PR #23 continua DRAFT / LIVE NO-GO.
+
 # P25.2 — Recibo de Validação Local e Handoff para ChatGPT
 
 Data de referência: 29/10/2026.  
