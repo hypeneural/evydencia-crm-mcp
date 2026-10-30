@@ -30,7 +30,22 @@ $legalBasisPolicy = (string) ($payload['legal_basis_policy'] ?? 'legitimate_inte
 $legalBasisVerified = in_array($legalBasisPolicy, [
     'legitimate_interest_customer_reactivation_with_optout_check',
     'explicit_marketing_consent_verified',
-], true);
+], true)
+    && getenv('EVYD_META_AUDIENCE_LGPD_APPROVED') === '1'
+    && preg_match('/^[A-Za-z0-9_.:-]{8,120}$/', (string) getenv('EVYD_META_AUDIENCE_LGPD_POLICY_REF')) === 1;
+
+// A policy name supplied by a caller is NEVER evidence of consent or lawful
+// basis. Policy approval must be an explicit server-side operator attestation.
+// Return no customers/proposals/phone hashes when approval is not configured.
+if (!$legalBasisVerified) {
+    emitForensicJson([
+        'source' => 'CRM_META_AUDIENCE_READ_ONLY',
+        'available' => false,
+        'reason' => 'legal_basis_not_verified',
+        'export_enabled' => false,
+        'contains_personal_data' => false,
+    ], $forensicStartedMs);
+}
 
 // Helper: Normalize phone to E.164 (+55...) matching src/meta-audience-csv.mjs rules.
 function evyNormalizePhoneE164(?string $raw): ?string
@@ -72,8 +87,15 @@ function evyNormalizePhoneE164(?string $raw): ?string
 $snapshotId = 'snapshot-' . gmdate('YmdHis') . '-' . bin2hex(random_bytes(4));
 $asOf = \Carbon\CarbonImmutable::now('America/Sao_Paulo')->toIso8601String();
 
-// Open single read-only transaction with REPEATABLE READ snapshot.
-\Illuminate\Support\Facades\DB::statement('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+// The forensic bridge permits SELECT and has already set session READ ONLY.
+// It intentionally rejects arbitrary SET commands. Inspect isolation instead
+// of attempting a SET which the SQL write guard would reject.
+$isolation = \Illuminate\Support\Facades\DB::selectOne('SELECT @@transaction_isolation AS isolation');
+if (strtoupper((string) ($isolation->isolation ?? '')) !== 'REPEATABLE-READ') {
+    emitForensicJson(['source'=>'CRM_META_AUDIENCE_READ_ONLY',
+        'available'=>false,'reason'=>'unexpected_transaction_isolation',
+        'export_enabled'=>false,'contains_personal_data'=>false],$forensicStartedMs);
+}
 \Illuminate\Support\Facades\DB::beginTransaction();
 
 try {
@@ -84,27 +106,41 @@ try {
         ->where('slug', (string) config('proposals.natal_flow_slug', 'natal'))
         ->first(['id', 'slug', 'with_name_campaign_id', 'without_name_campaign_id']);
 
-    // 2. Fetch Hash Key for suppression lookups
-    $hashKey = (string) config('proposals.hash_key', '');
-
-    // 3. Active Marketing Suppressions
-    $suppressionRows = $DB::table('communication_suppressions')
-        ->whereNull('revoked_at')
-        ->where(function ($q) {
-            $q->whereNull('starts_at')->orWhere('starts_at', '<=', now());
-        })
-        ->where(function ($q) {
-            $q->whereNull('ends_at')->orWhere('ends_at', '>', now());
-        })
-        ->get(['id', 'phone_lookup_hash', 'channel', 'communication_class', 'scope_type', 'scope_key']);
-
-    $activeSuppressionHashes = [];
-    foreach ($suppressionRows as $sRow) {
-        $hash = (string) $sRow->phone_lookup_hash;
-        if ($hash !== '') {
-            $activeSuppressionHashes[$hash] = true;
-        }
+    // 2/3. Use the CRM's CANONICAL hasher and evaluator (independent
+    // suppression key with application-key fallback). Never use the proposal
+    // hash key directly: they can differ.
+    $hasher = app(\App\Services\CommunicationSuppression\CommunicationSuppressionHasher::class);
+    $suppressionEvaluator = app(\App\Services\CommunicationSuppression\CommunicationSuppressionEvaluator::class);
+    $at = \Carbon\CarbonImmutable::now('America/Sao_Paulo');
+    $suppressionRows = \App\Models\CommunicationSuppression::query()->active($at)
+        ->get(['id','phone_lookup_hash','customer_id','channel',
+               'communication_class','scope_type','scope_key','reason_code',
+               'starts_at','ends_at','revoked_at']);
+    $rulesByHash = [];
+    $rulesByCustomer = [];
+    foreach ($suppressionRows as $rule) {
+        $hash = (string) $rule->phone_lookup_hash;
+        if ($hash !== '') $rulesByHash[$hash][] = $rule;
+        if ($rule->customer_id !== null) $rulesByCustomer[(int)$rule->customer_id][] = $rule;
     }
+    $isSuppressed = static function (?string $phone, ?int $customerId = null)
+        use ($hasher, $suppressionEvaluator, $rulesByHash, $rulesByCustomer, $at): bool {
+        if ($phone === null && $customerId === null) return false;
+        $hash = $phone !== null ? $hasher->hash($phone) : '';
+        $context = \App\Services\CommunicationSuppression\Data\CommunicationContext::create(
+            phoneE164: $phone ?? '+550000000000',
+            phoneLookupHash: $hash,
+            customerId: $customerId,
+            channel: 'whatsapp', communicationClass: 'marketing',
+            scopeType: 'season', scopeKey: 'natal:2026', evaluatedAt: $at
+        );
+        // Treat a documented marketing WhatsApp opt-out as a conservative
+        // exclusion from custom-audience advertising, never the reverse.
+        $matches = array_merge($rulesByHash[$hash] ?? [], $rulesByCustomer[$customerId] ?? []);
+        $decision = $suppressionEvaluator->evaluateRules($matches, $context);
+        if (!is_bool($decision->allowed)) throw new \RuntimeException('suppression_decision_unavailable');
+        return !$decision->allowed;
+    };
 
     // 4. Resolve 2026 Purchases (ANY_VALID_PURCHASE_2026)
     // Orders created in 2026
@@ -126,25 +162,32 @@ try {
     }
 
     $allCandidateOrderIds = [];
+    $orders2026Ids = [];
     $ordersByCustomer = [];
     foreach ($orders2026 as $ord) {
         $oId = (int) $ord->id;
         $cId = (int) $ord->customer_id;
         $allCandidateOrderIds[$oId] = true;
+        $orders2026Ids[$oId] = true;
         $ordersByCustomer[$cId][$oId] = true;
     }
+    // Compute the gap BEFORE adding paid IDs, otherwise it is always empty.
+    // A 2025 order paid in 2026 must still block the customer.
+    $missingOrderIds = array_diff(array_keys($paidOrderIds2026), array_keys($allCandidateOrderIds));
     foreach (array_keys($paidOrderIds2026) as $oId) {
         $allCandidateOrderIds[$oId] = true;
     }
 
-    // If there are paid order IDs from 2025 paid in 2026, get customer_id
-    $missingOrderIds = array_diff(array_keys($paidOrderIds2026), array_keys($allCandidateOrderIds));
+    // Resolve customer IDs of older orders paid in the target year.
     if (!empty($missingOrderIds)) {
         $extraOrders = $DB::table('orders')
             ->whereIn('id', $missingOrderIds)
             ->get(['id', 'customer_id', 'created_at']);
         foreach ($extraOrders as $ord) {
             $ordersByCustomer[(int) $ord->customer_id][(int) $ord->id] = true;
+        }
+        if (count($extraOrders) !== count($missingOrderIds)) {
+            throw new \RuntimeException('paid_2026_orders_missing_referential_integrity');
         }
     }
 
@@ -173,12 +216,11 @@ try {
         'product_retrieve_confirmed' => true,
         'order_completed' => true,
     ];
+    // Match App\Enums\OrderStatus keys, not human-language aliases.
     $reversedStatuses = [
-        'order_canceled' => true,
         'order_aborted' => true,
-        'chargeback' => true,
-        'refunded' => true,
-        'reversed' => true,
+        'payment_chargeback' => true,
+        'payment_refunded' => true,
     ];
 
     // Determine purchase state per customer
@@ -196,12 +238,16 @@ try {
                 continue;
             }
             $st = $latestStatusByOrder[$oId] ?? '';
-            if (isset($validBuyerStatuses[$st])) {
+            if (isset($reversedStatuses[$st])) {
+                // Paid then reversed/chargeback: do not advertise until the
+                // current commercial outcome is reconciled by an operator.
+                if (isset($paidOrderIds2026[$oId])) $hasAmbiguousOrder = true;
+            } elseif (isset($paidOrderIds2026[$oId])) {
                 $hasConfirmedPurchase = true;
-            } elseif (isset($paidOrderIds2026[$oId]) && !isset($reversedStatuses[$st])) {
+            } elseif (isset($validBuyerStatuses[$st]) && isset($allCandidateOrderIds[$oId])
+                && isset($orders2026Ids[$oId])) {
                 $hasConfirmedPurchase = true;
-            } elseif ($st === '' || (!isset($reversedStatuses[$st]) && $st !== 'waiting_payment' && $st !== 'order_created')) {
-                // Out of range or unrecognized operational status => quarantine
+            } elseif (!in_array($st, ['waiting_payment','order_created'], true)) {
                 $hasAmbiguousOrder = true;
             }
         }
@@ -238,16 +284,11 @@ try {
         $isBuyer = isset($buyerCustomerIds[$cId]);
         $purchaseStatus = isset($ambiguousCustomerIds[$cId]) ? 'unavailable' : 'verified';
 
-        // Check suppressions by phone hash
-        $isSuppressed = false;
-        if (strlen($hashKey) >= 32) {
-            foreach ($phones as $p) {
-                $pHash = hash_hmac('sha256', $p, $hashKey);
-                if (isset($activeSuppressionHashes[$pHash])) {
-                    $isSuppressed = true;
-                    break;
-                }
-            }
+        // The domain evaluator handles channel, class, season/global and
+        // customer_id rules; do not classify every active suppression equally.
+        $customerSuppressed = $isSuppressed(null, $cId);
+        foreach ($phones as $p) {
+            if ($isSuppressed($p, $cId)) { $customerSuppressed = true; break; }
         }
 
         $baseRecord = [
@@ -257,9 +298,9 @@ try {
             'email' => $email !== '' ? $email : null,
             'bought_2026' => $isBuyer,
             'purchase_check_status' => $purchaseStatus,
-            'suppressed' => $isSuppressed,
+            'suppressed' => $customerSuppressed,
             'suppression_check_status' => 'verified',
-            'marketing_allowed' => $legalBasisVerified && !$isSuppressed,
+            'marketing_allowed' => $legalBasisVerified && !$customerSuppressed,
             'marketing_permission_status' => $legalBasisVerified ? 'verified' : 'unavailable',
             'identity_status' => 'verified',
         ];
@@ -276,8 +317,10 @@ try {
         }
     }
 
-    // 6. Query Natal 2026 Proposal Contacts & Dispatches
+    // 6. Query Natal 2026 Proposal Contacts & Dispatches.
+    // Missing expected flow is a failure, NOT an empty proposal population.
     $proposalRecordsCount = 0;
+    if (!$flow) throw new \RuntimeException('natal_2026_proposal_flow_unavailable');
     if ($flow) {
         $dispatches = $DB::table('proposal_dispatches')
             ->where('proposal_flow_id', (int) $flow->id)
@@ -290,13 +333,7 @@ try {
             $resCustId = $d->resolved_customer_id !== null ? (int) $d->resolved_customer_id : null;
             $isBuyer = ($resCustId !== null && isset($buyerCustomerIds[$resCustId]));
 
-            $isSuppressed = false;
-            if ($phone !== null && strlen($hashKey) >= 32) {
-                $pHash = hash_hmac('sha256', $phone, $hashKey);
-                if (isset($activeSuppressionHashes[$pHash])) {
-                    $isSuppressed = true;
-                }
-            }
+            $dispatchSuppressed = $isSuppressed($phone, $resCustId);
 
             $records[] = [
                 'source' => 'proposal_2026',
@@ -306,9 +343,9 @@ try {
                 'name' => '',
                 'bought_2026' => $isBuyer,
                 'purchase_check_status' => 'verified',
-                'suppressed' => $isSuppressed,
+                'suppressed' => $dispatchSuppressed,
                 'suppression_check_status' => 'verified',
-                'marketing_allowed' => $legalBasisVerified && !$isSuppressed,
+                'marketing_allowed' => $legalBasisVerified && !$dispatchSuppressed,
                 'marketing_permission_status' => $legalBasisVerified ? 'verified' : 'unavailable',
                 'identity_status' => 'verified',
             ];
@@ -321,25 +358,20 @@ try {
             (int) $flow->without_name_campaign_id,
         ])));
 
+        // Both campaign ID and season scope must agree; a scope-only OR
+        // would accidentally import unrelated marketing campaign recipients.
+        if (!$campaignIds) throw new \RuntimeException('natal_2026_flow_has_no_campaign_ids');
         $scheduledContacts = $DB::table('campaign_scheduled_contacts as cc')
             ->join('campaign_scheduleds as cs', 'cs.id', '=', 'cc.campaign_scheduled_id')
             ->where('cs.created_at', '>=', '2026-01-01 00:00:00')
             ->where('cs.created_at', '<', '2027-01-01 00:00:00')
-            ->where(function ($q) use ($campaignIds) {
-                $q->whereIn('cs.campaign_id', $campaignIds)
-                  ->orWhere('cs.suppression_scope_key', 'natal:2026');
-            })
+            ->whereIn('cs.campaign_id', $campaignIds)
+            ->where('cs.suppression_scope_key', 'natal:2026')
             ->get(['cc.id', 'cc.lead_id', 'cc.whatsapp']);
 
         foreach ($scheduledContacts as $sc) {
             $phone = evyNormalizePhoneE164($sc->whatsapp);
-            $isSuppressed = false;
-            if ($phone !== null && strlen($hashKey) >= 32) {
-                $pHash = hash_hmac('sha256', $phone, $hashKey);
-                if (isset($activeSuppressionHashes[$pHash])) {
-                    $isSuppressed = true;
-                }
-            }
+            $scheduledSuppressed = $isSuppressed($phone, null);
 
             $records[] = [
                 'source' => 'proposal_2026',
@@ -349,9 +381,9 @@ try {
                 'name' => '',
                 'bought_2026' => false,
                 'purchase_check_status' => 'verified',
-                'suppressed' => $isSuppressed,
+                'suppressed' => $scheduledSuppressed,
                 'suppression_check_status' => 'verified',
-                'marketing_allowed' => $legalBasisVerified && !$isSuppressed,
+                'marketing_allowed' => $legalBasisVerified && !$scheduledSuppressed,
                 'marketing_permission_status' => $legalBasisVerified ? 'verified' : 'unavailable',
                 'identity_status' => 'verified',
             ];
@@ -376,14 +408,17 @@ try {
         ],
     ];
 
-    emitForensicJson([
+    $response = [
         'source' => 'CRM_META_AUDIENCE_READ_ONLY',
         'snapshot_id' => $snapshotId,
         'as_of' => $asOf,
         'coverage' => $coverage,
         'records' => $records,
-    ], $forensicStartedMs);
+    ];
 
 } finally {
+    // emitForensicJson exits the process. It MUST happen after rollback,
+    // never inside the transaction (where PHP exit can skip finally).
     \Illuminate\Support\Facades\DB::rollBack();
 }
+emitForensicJson($response, $forensicStartedMs);
