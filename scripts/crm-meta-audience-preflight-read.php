@@ -22,11 +22,11 @@ $expectedTables = [
     'orders_items' => ['id', 'order_id', 'product_id'],
     'products' => ['id', 'slug'],
     'proposal_flows' => ['id', 'slug', 'with_name_campaign_id', 'without_name_campaign_id'],
-    'proposal_dispatches' => ['id', 'proposal_flow_id', 'phone_e164', 'phone_lookup_hash', 'resolved_customer_id', 'created_at'],
+    'proposal_dispatches' => ['id', 'proposal_flow_id', 'phone_e164', 'phone_lookup_hash', 'resolved_customer_id', 'campaign_scheduled_contact_id', 'status', 'eligibility_status', 'duplicate_of_id', 'created_at'],
     'campaign_scheduleds' => ['id', 'campaign_id', 'created_at', 'communication_class', 'suppression_scope_key', 'suppression_snapshot'],
     'campaign_scheduled_contacts' => ['id', 'campaign_scheduled_id', 'lead_id', 'whatsapp', 'created_at'],
     'leads' => ['id', 'whatsapp', 'status'],
-    'communication_suppressions' => ['id', 'phone_lookup_hash', 'channel', 'communication_class', 'scope_type',
+    'communication_suppressions' => ['id', 'phone_e164', 'phone_lookup_hash', 'customer_id', 'reason_code', 'channel', 'communication_class', 'scope_type',
         'scope_key', 'starts_at', 'ends_at', 'revoked_at'],
 ];
 $tables = [];
