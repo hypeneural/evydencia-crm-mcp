@@ -21,6 +21,11 @@ if (!in_array($action, ['meta.audience.read', 'meta.audience.extract', 'meta.aud
     emitForensicJson(['error' => 'invalid_meta_audience_action'], $forensicStartedMs);
 }
 
+$purchaseRule = (string) ($payload['purchase_rule'] ?? 'ANY_VALID_PURCHASE_2026');
+if (!in_array($purchaseRule, ['ANY_VALID_PURCHASE_2026', 'NO_VALID_NATAL_2026_PURCHASE'], true)) {
+    emitForensicJson(['error' => 'invalid_meta_audience_purchase_rule'], $forensicStartedMs);
+}
+
 $targetYear = (int) ($payload['year'] ?? 2026);
 if ($targetYear !== 2026) {
     emitForensicJson(['error' => 'invalid_meta_audience_year'], $forensicStartedMs);
@@ -268,6 +273,52 @@ try {
         if ($decision['ambiguous']) $ambiguousCustomerIds[$cId] = true;
     }
 
+    // 4b. Natal-only mode is deliberately separate from the legacy ANY-2026 mode.
+    // A customer buying a different product in 2026 may remain eligible ONLY here.
+    // Match the canonical CRM definition: orders.created_at in 2026, products.slug
+    // equal to config('natal.product_slug'), and the commercial status policy.
+    $all2026BuyerCount = count($buyerCustomerIds);
+    $natalBuyerCount = null;
+    $natalAmbiguousCount = null;
+    if ($purchaseRule === 'NO_VALID_NATAL_2026_PURCHASE') {
+        $natalSlug = (string) config('natal.product_slug', 'natal');
+        if ($natalSlug === '' || strlen($natalSlug) > 60 || !preg_match('/^[a-z0-9_-]+$/', $natalSlug)) {
+            throw new \\RuntimeException('meta_audience_invalid_natal_slug');
+        }
+        $asOfNatal = \\Carbon\\CarbonImmutable::parse($asOf, 'America/Sao_Paulo');
+        $canonicalNatalIds = app(\\App\\Services\\Reports\\NatalValidOrdersQuery::class)
+            ->getValidCustomerIds($asOfNatal, 2026, $natalSlug);
+        $canonicalNatalBuyers = array_fill_keys($canonicalNatalIds, true);
+        // Additional conservative financial cross-check: any paid Natal order
+        // in a transitional/unknown status is quarantined, never re-targeted.
+        $natalOrders = $DB::table('orders as no')
+            ->join('orders_items as noi', 'noi.order_id', '=', 'no.id')
+            ->join('products as np', 'np.id', '=', 'noi.product_id')
+            ->where('no.created_at', '>=', '2026-01-01 00:00:00')
+            ->where('no.created_at', '<', '2027-01-01 00:00:00')
+            ->where('no.created_at', '<', $asOfNatal->format('Y-m-d H:i:s'))
+            ->where('np.slug', $natalSlug)
+            ->distinct()->get(['no.id', 'no.customer_id']);
+        $natalBuyers = $canonicalNatalBuyers;
+        $natalAmbiguous = [];
+        foreach ($natalOrders as $no) {
+            $id = (int) $no->id;
+            $custId = (int) $no->customer_id;
+            if ($custId <= 0) throw new \\RuntimeException('order_without_customer_relation');
+            $facts = [['status' => $latestStatusByOrder[$id] ?? null,
+                'has_status' => isset($ordersWithStatus[$id]),
+                'created_2026' => true,
+                'paid_2026' => isset($paidOrderIds2026[$id])]];
+            $decision = evyMetaAudienceClassifyPurchases2026($facts);
+            if ($decision['buyer']) $natalBuyers[$custId] = true;
+            if ($decision['ambiguous']) $natalAmbiguous[$custId] = true;
+        }
+        $buyerCustomerIds = $natalBuyers;
+        $ambiguousCustomerIds = $natalAmbiguous;
+        $natalBuyerCount = count($natalBuyers);
+        $natalAmbiguousCount = count($natalAmbiguous);
+    }
+
     // 5. Query ALL Customers
     $customers = $DB::table('customers')
         ->select(['id', 'uuid', 'name', 'email', 'whatsapp', 'phone', 'whatsapp_e164', 'phone_e164'])
@@ -419,7 +470,7 @@ try {
         'snapshot_id' => $snapshotId,
         'as_of' => $asOf,
         'target_year' => 2026,
-        'purchase_rule' => 'ANY_VALID_PURCHASE_2026',
+        'purchase_rule' => $purchaseRule,
         'customers_complete' => true,
         'proposals_complete' => true,
         'purchases_2026_complete' => true,
@@ -443,6 +494,9 @@ try {
             'suppression_rules_examined' => count($suppressionRows),
             'suppression_scope' => 'whatsapp_or_all_marketing_global_or_natal2026',
             'buyer_customer_ids' => count($buyerCustomerIds),
+            'all_2026_buyer_customer_ids' => $all2026BuyerCount,
+            'natal_2026_buyer_customer_ids' => $natalBuyerCount,
+            'natal_2026_ambiguous_customer_ids' => $natalAmbiguousCount,
             'ambiguous_customer_ids' => count($ambiguousCustomerIds),
             'proposal_dispatch_rows' => $dispatchRecordsCount,
             'scheduled_only_not_exported' => $scheduledRecordsCount,
@@ -473,6 +527,7 @@ try {
         'proposal_resolved_customer_missing',
         'natal_2026_proposal_flow_unavailable',
         'natal_2026_flow_has_no_campaign_ids',
+        'meta_audience_invalid_natal_slug',
     ];
     $reason = in_array($error->getMessage(), $known, true)
         ? $error->getMessage() : 'meta_audience_source_unavailable';
