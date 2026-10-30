@@ -894,7 +894,13 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     gateway_ms:gwMs,
     ...(typeof bt?.php_ms==='number'?{php_ms:bt.php_ms,sql_count:bt.sql_count??null,sql_ms:bt.sql_ms??null}:{}),
     ...(typeof bt?.cache_hit==='boolean'?{cache_hit:bt.cache_hit}:{}),
-    response_bytes:respBytes
+    response_bytes:respBytes,
+    ...(tool.startsWith('crm_meta_publico_natal_')?{
+      meta_export_rows:Number.isSafeInteger(result?.counts?.export_rows)
+       ?result.counts.export_rows:Number.isSafeInteger(result?.rows)?result.rows:null,
+      meta_source_customers:Number.isSafeInteger(result?.source_counts?.customers)
+       ?result.source_counts.customers:null,
+    }:{})
    });
    return {content:[{type:'text',text:summarizeToolResult(tool,result)}],structuredContent:result};
   }catch(e){
@@ -1524,6 +1530,8 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       coverage:item.coverage,
       source_counts:item.coverage.source_counts,
       counts:item.result.counts,
+      source_quality:item.coverage.origin_quality||{},
+      query_telemetry:item.queryTelemetry||{sql_count:null,sql_ms:null},
       ready_for_export:item.result.counts.export_rows>=100,
    });
 
@@ -1541,7 +1549,13 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       }
      }
      const raw=await direct.metaAudienceRead({fresh:true});
-     if(raw?.available===false)throw Error('crm_meta_audience_'+(raw.reason==='legal_basis_not_verified'?'legal_basis_not_verified':'source_unavailable'));
+     if(raw?.available===false){
+      const known=new Set(['legal_basis_not_verified','meta_audience_suppression_hash_mismatch',
+       'paid_2026_orders_missing_referential_integrity','order_without_customer_relation',
+       'proposal_resolved_customer_missing','natal_2026_proposal_flow_unavailable',
+       'natal_2026_flow_has_no_campaign_ids','unexpected_transaction_isolation']);
+      throw Error('crm_meta_audience_'+(known.has(raw.reason)?raw.reason:'source_unavailable'));
+     }
      if(!Array.isArray(raw?.records)||!raw?.coverage?.snapshot_id)throw Error('crm_meta_audience_incomplete_source');
      const result=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
      // At most 12 snapshots and one per operator; never retain stale PII.
@@ -1553,6 +1567,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      }
      const key=cacheKey(result.snapshot_id);
      const item={operatorKey,result,coverage:raw.coverage,
+       queryTelemetry:raw.audience_query_telemetry||null,
        createdAt:nowMs,expiresAt:nowMs+CACHE_TTL_MS};
      metaAudienceCache.set(key,item);
      const cleanup=setTimeout(()=>{
