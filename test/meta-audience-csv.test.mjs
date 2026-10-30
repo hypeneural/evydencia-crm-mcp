@@ -233,3 +233,30 @@ test('P25.6: transitive buyer/opt-out exclusion unaffected by permutation of sou
   assert.doesNotMatch(out.csv,/buyer@example|optout@example/);
  }
 });
+
+
+test('P25.7: overlapping 2026 purchase and marketing opt-out is visible in aggregated metrics',()=>{
+ const buyerAndSuppressed=row({
+  source_id:'buyer-suppressed',phone:'48999990120',
+  bought_2026:true,suppressed:true,
+ });
+ const other=row({source_id:'clear-contact',phone:'48999990121'});
+ const result=build([buyerAndSuppressed,other]);
+ assert.equal(result.counts.excluded_2026_buyer,1);
+ assert.equal(result.counts.excluded_suppressed,0);
+ assert.equal(result.counts.identity_groups_with_buyer,1);
+ assert.equal(result.counts.identity_groups_with_suppression,1);
+ assert.equal(result.counts.identity_groups_buyer_and_suppressed,1);
+ assert.equal(result.counts.export_rows,1);
+ assert.doesNotMatch(result.csv,/5548999990120/);
+ assert.match(result.csv,/5548999990121/);
+});
+test('P25.7: marketing opt-out without buyer is counted as independent exclusion',()=>{
+ const blocked=row({source_id:'optout',phone:'48999990131',suppressed:true});
+ const clear=row({source_id:'clear',phone:'48999990132'});
+ const result=build([blocked,clear]);
+ assert.equal(result.counts.identity_groups_with_suppression,1);
+ assert.equal(result.counts.identity_groups_buyer_and_suppressed,0);
+ assert.equal(result.counts.excluded_suppressed,1);
+ assert.equal(result.counts.export_rows,1);
+});
