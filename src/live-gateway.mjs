@@ -6,8 +6,8 @@
 import {McpServer,createMcpHandler,fromJsonSchema,requireBearerAuth,getOAuthProtectedResourceMetadataUrl,oauthMetadataResponse,validateHostHeader} from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import {execFileSync} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
-import {dirname,resolve} from 'node:path';
+import {randomUUID,randomBytes} from 'node:crypto';
+import {dirname,resolve,isAbsolute,relative} from 'node:path';
 import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
@@ -18,7 +18,14 @@ import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGamep
 import {lookupGameplayWithCustomerLinks} from './gameplay-links.mjs';
 import {paginatePublishedFamilies} from './gameplay-family-inventory.mjs';
 import {MCP_UI_CARD_RESOURCE_URI,MCP_UI_CARD_V1_FALLBACK_URI,OUT_VISUAL_CARD_OBJECT_SCHEMA,UI_CRM_TOOL_NAMES,buildVisualCardPayload,formatVisualCardTextFallback,registerCrmVisualCardUi} from './mcp-ui-cards.mjs';
-import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,supportedGatewayScopes} from './oauth-gateway.mjs';
+import {gatewayConfig,createOAuthServer,operatorVerifier,GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,SCOPE_AUDIENCE_EXPORT,supportedGatewayScopes} from './oauth-gateway.mjs';
+import {buildMetaAudienceCsv,assertMetaAudienceUploadReady} from './meta-audience-csv.mjs';
+import {metadataOnlyMetaAudienceSnapshot,metaAudienceSnapshotUnchanged} from './meta-audience-snapshot.mjs';
+import {persistMetaAudienceCsv} from './meta-audience-private-write.mjs';
+import {validateMetaCustomerListCsv} from './meta-audience-csv-validator.mjs';
+import {purgeExpiredAudienceExports} from './meta-audience-private-files.mjs';
+import {startMetaAudienceJanitor} from './meta-audience-janitor.mjs';
+import {mkdir,unlink,realpath} from 'node:fs/promises';
 import {printserverConfig,printserverClient} from './printserver-client.mjs';
 import {renderCanonicalCrmLabel} from './crm-label-render.mjs';
 import {readyForPickupClient} from './malotes-ready-client.mjs';
@@ -44,6 +51,7 @@ export const LIVE_TOOL_NAMES=Object.freeze(['crm_capacidades','crm_status','crm_
 export const DIRECT_CRM_TOOL_NAMES=Object.freeze(['crm_estatisticas_natal','crm_natal_participantes_estatisticas','crm_pedidos_buscar','crm_pedido_detalhe','crm_relatorio_itens_vendidos','crm_relatorio_natal_sem_participantes','crm_relatorio_clientes_natal']);
 export const GAMEPLAY_CRM_TOOL_NAMES=Object.freeze(['crm_gameplay_links','crm_gameplay_auditoria','crm_gameplay_galerias_disponiveis']);
 export const FORENSIC_CRM_TOOL_NAMES=Object.freeze(['crm_clientes_buscar','crm_propostas_natal_consultar_lote']);
+export const META_AUDIENCE_TOOL_NAMES=Object.freeze(['crm_meta_publico_natal_previa','crm_meta_publico_natal_exportar']);
 export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
 export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
 export const MALOTES_BATCH_TOOL_NAME='crm_processar_malotes_retirada';
@@ -53,11 +61,34 @@ export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GA
 export {ZAPI_INSTANCE_TOOL_NAMES};
 const READ={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 const WRITE_IDEMPOTENT={readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true};
+// Local private CSV creation is a sensitive write, not a read-only or
+// repeat-safe operation. MCP annotations are advisory, OAuth remains enforced.
+const PRIVATE_AUDIENCE_EXPORT={readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:false};
 // A physical print is an externally visible, potentially irreversible action in a private device fleet.
 const PRINT_WRITE={readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false};
-const SAFE_ERR=/^(malotes_[a-z0-9_]+|gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable)$/;
+const SAFE_ERR=/^(malotes_[a-z0-9_]+|gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|crm_meta_audience_[a-z0-9_]+|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable|EXPORT_BLOCKED_[A-Z0-9_]+|META_CSV_[A-Z0-9_]+)$/;
 
 function classifyToolError(code){
+ if(code==='crm_meta_audience_snapshot_changed_review_again'){
+  return {error_category:'CONFLICT',
+   hint:'A base mudou após a prévia. Solicite uma nova prévia e confirme novamente; nenhum CSV antigo foi liberado.'};
+ }
+ if(code==='crm_meta_audience_snapshot_missing_or_expired'){
+  return {error_category:'CONFLICT',
+   hint:'A prévia expirou ou pertence a outra autorização. Gere nova prévia antes da exportação.'};
+ }
+ if(code==='crm_meta_audience_legal_basis_not_verified'){
+  return {error_category:'BLOCKED',
+   hint:'A política jurídica e de proteção de dados ainda não foi aprovada no servidor. Nenhum contato foi exportado.'};
+ }
+ if(code==='crm_meta_audience_meta_audience_suppression_hash_mismatch'){
+  return {error_category:'BLOCKED',
+   hint:'A chave HMAC instalada não confere com registros da blacklist. Corrigir configuração do CRM antes de exportar.'};
+ }
+ if(code.startsWith('EXPORT_BLOCKED_')||code.startsWith('META_CSV_')){
+  return {error_category:'DATA_QUALITY',
+   hint:'A cobertura, identidade ou formato do público não foi validado. Consulte a prévia e a auditoria local; não envie à Meta.'};
+ }
  if(code==='crm_public_package_or_campaign_not_found'){
   return {
    error_category:'NOT_FOUND',
@@ -180,6 +211,8 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_relatorio_clientes_natal',capability:'natal_customers_segmentation',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_legacy_api',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct})=>direct},
  {tool:'crm_clientes_buscar',capability:'customers_and_leads_search',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct,full})=>Boolean(direct&&full)},
  {tool:'crm_propostas_natal_consultar_lote',capability:'natal_proposal_history_batch',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full})=>Boolean(direct&&full)},
+ {tool:'crm_meta_publico_natal_previa',capability:'meta_audience_natal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,metaAudience})=>Boolean(direct&&metaAudience)},
+ {tool:'crm_meta_publico_natal_exportar',capability:'meta_audience_natal_export',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_AUDIENCE_EXPORT,source:'crm_direct_forensic_bridge',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,metaAudience})=>Boolean(direct&&metaAudience)},
  {tool:'crm_previa_proposta_natal',capability:'natal_proposal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:true,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PROPOSAL_WRITE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)},
@@ -190,8 +223,8 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_consultar_impressao_etiqueta',capability:'printserver_job_status',access:'read',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PRINT_WRITE,source:'printserver_broker',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,full,print})=>Boolean(direct&&full&&print)}
 ]);
 
-function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,malotesBatchEnabled=false,malotesPrintBatchEnabled=false,perfSnapshot=null,gameplayEnabled=false}={}){
- const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled),batch:Boolean(malotesBatchEnabled||malotesPrintBatchEnabled)};
+function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{uiAppsEnabled=true,printserverEnabled=false,malotesReadyEnabled=false,malotesBatchEnabled=false,malotesPrintBatchEnabled=false,perfSnapshot=null,gameplayEnabled=false,metaAudienceEnabled=false}={}){
+ const flags={direct:Boolean(directEnabled),full:Boolean(operatorFullCrm),ui:Boolean(uiAppsEnabled),print:Boolean(printserverEnabled),ready:Boolean(malotesReadyEnabled),batch:Boolean(malotesBatchEnabled||malotesPrintBatchEnabled),metaAudience:Boolean(metaAudienceEnabled)};
  const tools=LIVE_CATALOG.map(({when,...meta})=>{
   const active=Boolean(when(flags));
   return {...meta,registered:active,state:active?'LIVE_ACTIVE':'NOT_AVAILABLE'};
@@ -265,7 +298,8 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
  // Count only original v0.12 tools; UI, PrintServer and Gameplay are additive.
  const printSet=new Set(PRINTSERVER_TOOL_NAMES);
  const gameplaySet=new Set(GAMEPLAY_CRM_TOOL_NAMES);
- const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)&&!gameplaySet.has(t.tool)).length;
+ const metaSet=new Set(META_AUDIENCE_TOOL_NAMES);
+  const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)&&!gameplaySet.has(t.tool)&&!metaSet.has(t.tool)).length;
  const mcpUiActive=Boolean(directEnabled&&operatorFullCrm&&uiAppsEnabled);
  return {
   service:'evydencia-crm-mcp-live',
@@ -279,6 +313,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   forensic_audit_enabled:Boolean(directEnabled&&operatorFullCrm),
   proposal_dispatch_enabled:Boolean(operatorFullCrm),
   mcp_ui_apps_enabled:mcpUiActive,
+  meta_audience_enabled:Boolean(metaAudienceEnabled&&directEnabled),
   write_requires_explicit_confirmation:true,
   tools_total_catalog:tools.length,
   tools_active_count:activeTools.length,
@@ -288,6 +323,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
   ...(gameplayEnabled&&directEnabled?{gameplay_crm_tools:GAMEPLAY_CRM_TOOL_NAMES}:{}),
   ...(directEnabled&&operatorFullCrm?{forensic_crm_tools:FORENSIC_CRM_TOOL_NAMES}:{}),
   ...(operatorFullCrm?{proposal_crm_tools:PROPOSAL_CRM_TOOL_NAMES}:{}),
+  ...(metaAudienceEnabled&&directEnabled?{meta_audience_tools:META_AUDIENCE_TOOL_NAMES}:{}),
   ...(mcpUiActive?{ui_crm_tools:UI_CRM_TOOL_NAMES,ui_resource_uri:MCP_UI_CARD_RESOURCE_URI,ui_fallback_resource_uri:MCP_UI_CARD_V1_FALLBACK_URI}:{}),
   ...(zapiContext?.diagEnabled?{
    zapi_diagnostics_enabled:true,
@@ -337,6 +373,13 @@ function summarizeToolResult(tool,res){
    return `OK [crm_pedido_detalhe]: order_id=${res.order?.order_id??'n/d'}, parcelas=${Array.isArray(res.order?.installments)?res.order.installments.length:0}, eventos_status=${res.order?.status_history_count??0}. Consulte structuredContent.`;
   case 'crm_clientes_buscar':
    return `OK [crm_clientes_buscar]: retornados=${Array.isArray(res.customers)?res.customers.length:0}, total=${res.pagination?.total_matching_customers??'n/d'}. Consulte structuredContent.`;
+  case 'crm_meta_publico_natal_previa': {
+   const c = res.counts || {};
+   const supInfo = `supressoes_exclusivas=${c.excluded_suppressed??0}, optouts_marketing_total=${c.identity_groups_with_suppression??0}, sobreposicao_compra_e_optout=${c.identity_groups_buyer_and_suppressed??0}`;
+   return `OK [crm_meta_publico_natal_previa]: snapshot=${res.snapshot_id}, elegiveis=${c.export_rows??0}, compradores_excluidos=${c.excluded_2026_buyer??0}, ${supInfo}, ready=${res.ready_for_export}. Zero dados pessoais exibidos.`;
+  }
+  case 'crm_meta_publico_natal_exportar':
+   return `OK [crm_meta_publico_natal_exportar]: arquivo gerado com sucesso. Linhas=${res.rows}, telefones_unicos=${res.unique_phones}, sha256=${res.sha256}. Arquivo salvo em local privado restrito (expira em ${res.expira_em}). Zero dados pessoais no chat.`;
   case 'crm_renderizar_card_visual':
    return formatVisualCardTextFallback(res);
   case 'crm_previa_proposta_natal':
@@ -353,6 +396,58 @@ function summarizeToolResult(tool,res){
    return `OK [${tool}]: consulta concluída. Consulte structuredContent.`;
  }
 }
+
+const OUT_META_AUDIENCE_PREVIEW=z.looseObject({
+ source:z.literal('CRM_META_AUDIENCE_PREVIEW'),
+ target_year:z.literal(2026),
+ snapshot_id:z.string(),
+ as_of:z.string(),
+ purchase_rule:z.literal('ANY_VALID_PURCHASE_2026'),
+ coverage:z.looseObject({
+  customers_complete:z.boolean(),
+  proposals_complete:z.boolean(),
+  purchases_2026_complete:z.boolean(),
+  suppression_complete:z.boolean(),
+  marketing_permission_complete:z.boolean(),
+  identity_crosscheck_complete:z.boolean()
+ }),
+ source_counts:z.looseObject({
+  customers:z.number().int().nonnegative(),
+  proposals:z.number().int().nonnegative()
+ }),
+ counts:z.looseObject({
+  input:z.number().int().nonnegative(),
+  customer_records:z.number().int().nonnegative(),
+  proposal_records:z.number().int().nonnegative(),
+  duplicate_identity_rows:z.number().int().nonnegative(),
+  duplicate_phone_rows_collapsed:z.number().int().nonnegative(),
+  excluded_2026_buyer:z.number().int().nonnegative(),
+  excluded_suppressed:z.number().int().nonnegative(),
+  excluded_no_marketing_permission:z.number().int().nonnegative(),
+  excluded_ambiguous_or_unknown:z.number().int().nonnegative(),
+  excluded_conflicting_customer_ids:z.number().int().nonnegative(),
+  excluded_no_valid_phone:z.number().int().nonnegative(),
+  eligible_people:z.number().int().nonnegative(),
+  export_rows:z.number().int().nonnegative()
+ }),
+ ready_for_export:z.boolean()
+});
+
+const OUT_META_AUDIENCE_EXPORT=z.looseObject({
+ source:z.literal('CRM_META_AUDIENCE_EXPORT'),
+ ready:z.boolean(),
+ snapshot_id:z.string(),
+ as_of:z.string(),
+ rows:z.number().int().nonnegative(),
+ unique_phones:z.number().int().nonnegative(),
+ rows_with_email:z.number().int().nonnegative(),
+ sha256:z.string(),
+ arquivo_id:z.string(),
+ delivery_status:z.literal('private_gateway_storage_only'),
+ expira_em:z.string(),
+ contains_personal_data:z.literal(true),
+ counts:z.record(z.any()).optional()
+});
 
 const OUT_PROPOSAL_HISTORY=z.looseObject({
  source:z.literal('CRM_NATAL_PROPOSAL_READ_ONLY'),
@@ -371,6 +466,7 @@ const OUT_CAPACIDADES=z.looseObject({
  forensic_audit_enabled:z.boolean(),
  proposal_dispatch_enabled:z.boolean(),
  mcp_ui_apps_enabled:z.boolean().nullish(),
+ meta_audience_enabled:z.boolean().optional(),
  write_requires_explicit_confirmation:z.boolean(),
  tools_total_catalog:z.number().int(),
  tools_active_count:z.number().int(),
@@ -379,7 +475,9 @@ const OUT_CAPACIDADES=z.looseObject({
   operator_id:z.string(),
   granted_scopes:z.array(z.string()),
   print_scope_granted:z.boolean(),
-  print_tool_enabled:z.boolean()
+  print_tool_enabled:z.boolean(),
+  audience_export_scope_granted:z.boolean().optional(),
+  audience_export_tool_enabled:z.boolean().optional()
  }).nullish(),
  tools:z.array(z.looseObject({
   tool:z.string(),
@@ -691,12 +789,12 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
 export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_GAMEPLAY_LINKS,OUT_GAMEPLAY_AUDIT,OUT_GAMEPLAY_AVAILABLE,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_PROPOSAL_HISTORY,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
-async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv}){
+async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv,legacyReader=null,audienceSnapshots=null}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
  const grantedScopes=new Set(Array.isArray(auth?.scopes)&&auth.scopes.length?auth.scopes:[GATEWAY_SCOPE]);
  const crm=crmClient({baseUrl:cfg.crmBaseUrl,token:ex.upstream,privateEnabled:true,timeoutMs:cfg.crmTimeoutMs,fetchFn,strictEnvelope:true});
- const direct=cfg.internalReadToken?legacyReadClient({
+ const direct=legacyReader??(cfg.internalReadToken?legacyReadClient({
   baseUrl:cfg.crmBaseUrl,
   token:cfg.internalReadToken,
   fetchFn,
@@ -709,7 +807,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
    upstreamGrantHash:ex.upstreamGrantHash||'',
    cacheSecret:ex.cacheSecret||null
   }
- }):null;
+ }):null);
  const zapiTools=zapi?await zapi.ensureOperatorTools(ex.operatorId):[];
  // Optional Gameplay configuration is captured by gatewayConfig(env) and
  // never implicitly loaded from another process-global environment.
@@ -825,7 +923,13 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     gateway_ms:gwMs,
     ...(typeof bt?.php_ms==='number'?{php_ms:bt.php_ms,sql_count:bt.sql_count??null,sql_ms:bt.sql_ms??null}:{}),
     ...(typeof bt?.cache_hit==='boolean'?{cache_hit:bt.cache_hit}:{}),
-    response_bytes:respBytes
+    response_bytes:respBytes,
+    ...(tool.startsWith('crm_meta_publico_natal_')?{
+      meta_export_rows:Number.isSafeInteger(result?.counts?.export_rows)
+       ?result.counts.export_rows:Number.isSafeInteger(result?.rows)?result.rows:null,
+      meta_source_customers:Number.isSafeInteger(result?.source_counts?.customers)
+       ?result.source_counts.customers:null,
+    }:{})
    });
    return {content:[{type:'text',text:summarizeToolResult(tool,result)}],structuredContent:result};
   }catch(e){
@@ -846,7 +950,15 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   registeredNames.add(name);
   const {requiredScopes=[GATEWAY_SCOPE],_meta:extraMeta,...restExtra}=extraConfig||{};
   const mergedMeta={...(extraMeta||{}),securitySchemes:[{type:'oauth2',scopes:[...requiredScopes]}]};
-  m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,_meta:mergedMeta},safe(name,fn));
+  // MCP SDK 2.x scopeChallenge enforces per-tool HTTP 403 insufficient_scope
+  // before the callback; the handler also checks permissions defensively.
+  const exportScopeChallenge=requiredScopes.includes(SCOPE_AUDIENCE_EXPORT)
+   ?({authInfo})=>requiredScopes.every(scope=>authInfo?.scopes?.includes(scope))
+      ?undefined:{scopes:[...requiredScopes],errorDescription:'Audience export requires the explicitly granted OAuth scope'}
+   :undefined;
+  m.registerTool(name,{title,description,inputSchema,outputSchema,annotations,...restExtra,
+    ...(exportScopeChallenge?{scopeChallenge:exportScopeChallenge}:{}),
+    _meta:mergedMeta},safe(name,fn));
  };
 
  reg('crm_capacidades','Capacidades disponíveis e Telemetria','Use quando precisar consultar o inventário fiel deste conector LIVE, versão/commit implantado (build_commit), ferramentas habilitadas (29 originais + card visual opcional) e métricas reais de latência/cache/SQL (performance_telemetry).',z.object({verificar_gameplay:z.boolean().default(false)}),OUT_CAPACIDADES,async({verificar_gameplay})=>({...manifest(Boolean(direct),cfg.operatorFullCrm,(zapi||zapiDiag)?{
@@ -855,7 +967,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
   tools:zapiTools,
   diagEnabled:Boolean(zapiDiag),
   diagConfigured:Boolean(zapiDiag&&zapiDiag.listForOperator(ex.operatorId).length>0)
- }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean(cfg.malotesBatchEnabled&&ex.canReady),malotesPrintBatchEnabled:Boolean(cfg.malotesPrintBatchEnabled&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled),perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay)}),
+ }:null,{uiAppsEnabled:cfg.uiAppsEnabled,printserverEnabled:Boolean(printCfg.enabled&&ex.canPrint),malotesReadyEnabled:Boolean(cfg.malotesReadyEnabled&&ex.canReady),malotesBatchEnabled:Boolean(cfg.malotesBatchEnabled&&ex.canReady),malotesPrintBatchEnabled:Boolean(cfg.malotesPrintBatchEnabled&&ex.canPrint&&printCfg.enabled&&labelRenderEnabled),perfSnapshot:perf?.snapshot()??null,gameplayEnabled:Boolean(gameplay),metaAudienceEnabled:Boolean(cfg.metaAudienceEnabled)}),
   // Report EFFECTIVE token scopes, not scopes_supported advertised by OAuth metadata.
   // No access tokens, gateway secrets or upstream abilities in this response.
   oauth_authorization:{
@@ -863,7 +975,9 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
    granted_scopes:[...grantedScopes].sort(),
    print_scope_granted:grantedScopes.has(SCOPE_PRINT_WRITE),
    orders_write_scope_granted:grantedScopes.has(SCOPE_ORDERS_READY_WRITE),
-   print_tool_enabled:Boolean(printCfg.enabled&&ex.canPrint&&grantedScopes.has(SCOPE_PRINT_WRITE))
+   print_tool_enabled:Boolean(printCfg.enabled&&ex.canPrint&&grantedScopes.has(SCOPE_PRINT_WRITE)),
+   audience_export_scope_granted:grantedScopes.has(SCOPE_AUDIENCE_EXPORT),
+   audience_export_tool_enabled:Boolean(cfg.audienceExportEnabled&&ex.canExportAudience&&grantedScopes.has(SCOPE_AUDIENCE_EXPORT))
   },
   ...(verificar_gameplay?{gameplay_private_probe:await probeGameplayPrivateAccess(gameplay)}:{})
  }));
@@ -1427,6 +1541,158 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      prepareProposalPhones(telefones);
      return await direct.proposalHistoryBatch({telefones,historico_limite});
     });
+   if(cfg.metaAudienceEnabled&&direct){
+   // createGateway owns the shared, operator-bound cache so separate MCP calls
+   // can preview then export the SAME snapshot. Never store duplicate raw rows.
+   const metaAudienceCache=audienceSnapshots;
+   const PRIVATE_EXPORTS_DIR=cfg.audiencePrivateCsvDir;
+   const operatorKey=String(ex.operatorId)+':'+String(ex.upstreamGrantHash||'');
+   const cacheKey=id=>operatorKey+':'+id;
+   const CACHE_TTL_MS=5*60*1000;
+   const MAX_AUDIENCE_SNAPSHOTS=12;
+   const previewPayload=(item)=>({
+      source:'CRM_META_AUDIENCE_PREVIEW',
+      target_year:2026,
+      snapshot_id:item.result.snapshot_id,
+      as_of:item.result.as_of,
+      purchase_rule:item.result.purchase_rule,
+      coverage:item.coverage,
+      source_counts:item.coverage.source_counts,
+      counts:item.result.counts,
+      source_quality:item.coverage.origin_quality||{},
+      query_telemetry:item.queryTelemetry||{sql_count:null,sql_ms:null},
+      ready_for_export:item.result.counts.export_rows>=100 && item.result.counts.eligible_people>=100,
+      next_action:item.result.counts.export_rows>=100 && item.result.counts.eligible_people>=100
+       ?'Peça explicitamente para exportar o snapshot_id da prévia; o MCP reconferirá a lista.'
+       :'Lista ainda insuficiente; confira contagens, telefones inválidos e exclusões antes de solicitar exportação.',
+   });
+
+   reg('crm_meta_publico_natal_previa','Prévia analítica do público Meta Ads Natal 2026 (sem PII)',
+    'Consulta clientes do CRM e propostas Natal 2026, excluindo compradores de 2026 de qualquer produto, supressões e opt-outs. Retorna SOMENTE contadores agregados, integridade e cobertura, sem nenhum dado pessoal.',
+    z.object({forcar_atualizacao:z.boolean().default(false)}),
+    OUT_META_AUDIENCE_PREVIEW,async({forcar_atualizacao})=>{
+     const nowMs=Date.now();
+     // A repeated click within 45 s uses the same labeled as_of; the export
+     // ALWAYS reads a fresh CRM snapshot before writing the CSV.
+     if(!forcar_atualizacao){
+      for(const item of metaAudienceCache.values()){
+       if(item.operatorKey===operatorKey && item.expiresAt>nowMs
+          && nowMs-item.createdAt<45_000) return previewPayload(item);
+      }
+     }
+     const raw=await direct.metaAudienceRead({fresh:true});
+     if(raw?.available===false){
+      const known=new Set(['legal_basis_not_verified','meta_audience_suppression_hash_mismatch',
+       'paid_2026_orders_missing_referential_integrity','order_without_customer_relation',
+       'proposal_resolved_customer_missing','natal_2026_proposal_flow_unavailable',
+       'natal_2026_flow_has_no_campaign_ids','unexpected_transaction_isolation']);
+      throw Error('crm_meta_audience_'+(known.has(raw.reason)?raw.reason:'source_unavailable'));
+     }
+     if(!Array.isArray(raw?.records)||!raw?.coverage?.snapshot_id)throw Error('crm_meta_audience_incomplete_source');
+     const result=buildMetaAudienceCsv({records:raw.records,coverage:raw.coverage});
+     // At most 12 snapshots and one per operator; never retain stale PII.
+     for(const [key,item] of metaAudienceCache){
+      if(item.expiresAt<=nowMs||item.operatorKey===operatorKey)metaAudienceCache.delete(key);
+     }
+     while(metaAudienceCache.size>=MAX_AUDIENCE_SNAPSHOTS){
+      metaAudienceCache.delete(metaAudienceCache.keys().next().value);
+     }
+     const key=cacheKey(result.snapshot_id);
+     // Cache only aggregate metadata and the SHA; never keep the entire
+     // generated customer CSV in memory while awaiting operator confirmation.
+     const item={operatorKey,result:metadataOnlyMetaAudienceSnapshot(result),coverage:raw.coverage,
+       queryTelemetry:raw.audience_query_telemetry||null,
+       createdAt:nowMs,expiresAt:nowMs+CACHE_TTL_MS};
+     metaAudienceCache.set(key,item);
+     const cleanup=setTimeout(()=>{
+       if(metaAudienceCache.get(key)===item)metaAudienceCache.delete(key);
+     },CACHE_TTL_MS+1000);
+     cleanup.unref?.();
+     return previewPayload(item);
+    },READ,{requiredScopes:[GATEWAY_SCOPE]});
+
+   reg('crm_meta_publico_natal_exportar','Exportar público Meta Ads Natal 2026 em CSV privado',
+    'Gera CSV privado mediante consentimento explícito do gestor e escopo crm.audience.export. Retorna contagens/arquivo_id, mas NÃO disponibiliza download pelo ChatGPT; o transporte autenticado ainda não existe. Nunca envie a lista à Meta automaticamente.',
+    z.object({confirmado_pelo_operador:z.boolean(),snapshot_id:z.string().min(16).max(100)}),
+    OUT_META_AUDIENCE_EXPORT,async({confirmado_pelo_operador,snapshot_id})=>{
+     if(!grantedScopes.has(SCOPE_AUDIENCE_EXPORT)||!ex.canExportAudience)throw Error('insufficient_operator_export_scope');
+     if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
+
+     if(!snapshot_id)throw Error('crm_meta_audience_preview_required');
+     const key=cacheKey(snapshot_id);
+     const item=metaAudienceCache.get(key);
+     if(!item||item.operatorKey!==operatorKey||item.expiresAt<Date.now()){
+      metaAudienceCache.delete(key);
+      throw Error('crm_meta_audience_snapshot_missing_or_expired');
+     }
+     if(!PRIVATE_EXPORTS_DIR||!isAbsolute(PRIVATE_EXPORTS_DIR)){
+      throw Error('crm_meta_audience_private_directory_unconfigured');
+     }
+
+     const {result}=item;
+     // Mandatory last-second revalidation: a buyer/opt-out may have appeared
+     // after preview. Never export an obsolete list without operator review.
+     const freshRaw=await direct.metaAudienceRead({fresh:true});
+     if(freshRaw?.available===false||!Array.isArray(freshRaw?.records))
+       throw Error('crm_meta_audience_source_unavailable');
+     const freshResult=buildMetaAudienceCsv({records:freshRaw.records,coverage:freshRaw.coverage});
+     // A buyer/opt-out can change the PREVIEW counts even if the exported
+     // rows remain identical. Demand fresh approval for that audit change.
+     if(!metaAudienceSnapshotUnchanged(result,freshResult,{
+       previewSourceCounts:item.coverage.source_counts,
+       liveSourceCounts:freshRaw.coverage?.source_counts,
+     })){
+      metaAudienceCache.delete(key);
+      throw Error('crm_meta_audience_snapshot_changed_review_again');
+     }
+     assertMetaAudienceUploadReady(freshResult,{minRows:100});
+     const validated=validateMetaCustomerListCsv(freshResult.csv,{minRows:100});
+
+     await mkdir(PRIVATE_EXPORTS_DIR,{recursive:true,mode:0o700});
+     // Never write PII beneath the Git checkout, even if .gitignore hides CSVs
+     // and even if an intermediate path component is a symlink.
+     const [canonicalPrivateDir,canonicalRepoRoot]=await Promise.all([
+      realpath(PRIVATE_EXPORTS_DIR),realpath(REPO_ROOT)
+     ]);
+     const inRepo=relative(canonicalRepoRoot,canonicalPrivateDir);
+     if(inRepo===''||(!inRepo.startsWith('..')&&!isAbsolute(inRepo))){
+      throw Error('crm_meta_audience_private_directory_inside_checkout');
+     }
+     // Purge orphan CSVs left by a previous process restart; the in-process
+     // one-hour timer below is merely a second line of defense.
+     await purgeExpiredAudienceExports(PRIVATE_EXPORTS_DIR,{ttlMs:3600*1000});
+     const exportId=randomUUID();
+     const filePath=resolve(PRIVATE_EXPORTS_DIR,`meta-audience-natal2026-${exportId}.csv`);
+     // Fail if an unexpected file already exists; never overwrite past exports.
+     // Helper removes partially written CSV on disk/fsync errors and never
+     // unlinks preexisting files when exclusive creation fails.
+     await persistMetaAudienceCsv(filePath,freshResult.csv);
+     metaAudienceCache.delete(key); // release all CSV PII from snapshot cache
+     // Short-lived best-effort cleanup, plus operator maintenance on restart.
+     const cleanup=setTimeout(()=>{unlink(filePath).catch(()=>{});},3600*1000);
+     cleanup.unref?.();
+
+     return {
+      source:'CRM_META_AUDIENCE_EXPORT',
+      ready:true,
+      snapshot_id:result.snapshot_id,
+      as_of:result.as_of,
+      rows:validated.rows,
+      unique_phones:validated.unique_phones,
+      rows_with_email:validated.rows_with_email,
+      sha256:validated.sha256,
+      arquivo_id:exportId,
+      delivery_status:'private_gateway_storage_only',
+      download_available_in_chat:false,
+      next_action:'Arquivo guardado no servidor. Download pelo ChatGPT ainda não implementado; não confunda arquivo_id com link.',
+      // A filesystem path is NOT a downloadable URL in ChatGPT.
+      expira_em:new Date(Date.now()+3600*1000).toISOString(),
+      contains_personal_data:true,
+      counts:result.counts
+     };
+    },PRIVATE_AUDIENCE_EXPORT,{requiredScopes:[GATEWAY_SCOPE,SCOPE_AUDIENCE_EXPORT]});
+  }
+
    reg('crm_clientes_buscar','Buscar clientes e leads (inclusive com zero pedidos) no CRM','Use quando precisar buscar clientes ou leads (inclusive com 0 pedidos em somente_sem_pedidos=true ou cadastro incompleto em somente_cadastro_incompleto=true) diretamente em /gestao/clientes por busca livre, nome, telefone, e-mail, documento ou UUID.',z.object({
     busca:z.string().min(2).max(120).optional(),
     nome_cliente:z.string().min(2).max(100).optional(),
@@ -1592,12 +1858,19 @@ function rateLimiter(now){
  };
 }
 
-export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now(),labelRenderer=renderCanonicalCrmLabel}={}){
+export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now(),labelRenderer=renderCanonicalCrmLabel,legacyReader=null}={}){
  const cfg=gatewayConfig(env);
  const printCfg=printserverConfig(env);
  const perf=createGatewayPerfTracker();
  const operators=operatorVerifier(cfg,{fetchFn,now});
  const oauth=createOAuthServer(cfg,{operators,now,log});
+ const audienceSnapshots=new Map();
+ // One sweeper per gateway process, including after a restart; no extra
+ // cron/systemd unit and no impact on unrelated CRM/PrintServer services.
+ const audienceJanitor=cfg.audienceExportEnabled&&cfg.audiencePrivateCsvDir
+  ?startMetaAudienceJanitor(cfg.audiencePrivateCsvDir,{
+    onError:()=>log({evt:'meta_audience_janitor_error'}),
+  }):null;
  let mcp,zapi=null;
  const zapiDiag=cfg.zapiDiagEnabled?createZapiInstanceDiagnostics(cfg,{
   fetchFn,
@@ -1615,14 +1888,14 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   now,
   log,
   diagnostics:zapiDiag,
-  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES,...PRINTSERVER_TOOL_NAMES,...ZAPI_INSTANCE_TOOL_NAMES],
+  reservedToolNames:[...LIVE_TOOL_NAMES,...DIRECT_CRM_TOOL_NAMES,...FORENSIC_CRM_TOOL_NAMES,...PROPOSAL_CRM_TOOL_NAMES,...UI_CRM_TOOL_NAMES,...PRINTSERVER_TOOL_NAMES,...ZAPI_INSTANCE_TOOL_NAMES,...META_AUDIENCE_TOOL_NAMES],
   gatewayVersion:GATEWAY_VERSION,
   onToolsUpdated:()=>mcp?.notify?.toolsChanged?.()
  }):null;
  const resourceUrl=new URL(cfg.resource);
  const resourceMetadataUrl=getOAuthProtectedResourceMetadataUrl(resourceUrl);
  const gate=requireBearerAuth({verifier:oauth.verifier,requiredScopes:[GATEWAY_SCOPE],resourceMetadataUrl,expectedResource:resourceUrl});
- mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
+ mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env,legacyReader,audienceSnapshots}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:supportedGatewayScopes(cfg),resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};
@@ -1646,6 +1919,8 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
     zapi_diagnostics_enabled:Boolean(zapiDiag),
     mcp_ui_apps_enabled:Boolean(cfg.internalReadToken&&cfg.operatorFullCrm&&cfg.uiAppsEnabled),
     printserver_enabled:Boolean(printCfg.enabled),
+    // No filename, directory, or customer PII in health responses.
+    meta_audience_retention_janitor_enabled:Boolean(audienceJanitor),
     telemetry_summary:{
      calls_total:snap.calls_total,
      error_rate:snap.error_rate,
@@ -1683,7 +1958,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
   log({evt:'http',method:request.method,path:path.slice(0,64),status:res.status,ms:Math.round(performance.now()-t0)});
   return res;
  }
- return {cfg,zapi,perf,handle,close:async()=>{await Promise.allSettled([mcp.close(),zapi?.close()])}};
+ return {cfg,zapi,perf,handle,close:async()=>{audienceJanitor?.stop();await Promise.allSettled([mcp.close(),zapi?.close()])}};
 }
 
 // node:http bridge (the @modelcontextprotocol/node adapter is not a dependency).

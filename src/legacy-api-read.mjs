@@ -10,6 +10,10 @@ import {baseURL,day,phone} from './core.mjs';
 export const BRIDGE_PROJECTION_VERSION='v0.12.1-hardened';
 const MAX_BRIDGE_STDIN_BYTES=16384;
 const MAX_BRIDGE_STDOUT_BYTES=8*1024*1024;
+// The audience reader returns full PII only to this local private process.
+// Keep a SEPARATE, hard-capped output budget instead of raising limits for
+// every unrelated CRM bridge on the shared VPS.
+const MAX_META_AUDIENCE_STDOUT_BYTES=24*1024*1024;
 const SCRIPTS_DIR=resolve(dirname(fileURLToPath(import.meta.url)),'..','scripts');
 const BRIDGE_SCRIPT=resolve(SCRIPTS_DIR,'crm-natal-bridge.php');
 const FORENSIC_BRIDGE_SCRIPT=resolve(SCRIPTS_DIR,'crm-forensic-bridge.php');
@@ -1063,7 +1067,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
   return 15000;
  };
 
- async function execPhpJsonBridge(scriptPath,payload,{bridgeTimeoutMs,kind,fresh=false}){
+ async function execPhpJsonBridge(scriptPath,payload,{bridgeTimeoutMs,kind,fresh=false,maxOutputBytes=MAX_BRIDGE_STDOUT_BYTES}){
   assertOperatorAuthorized();
   const crmAppPath=process.env.EVYD_CRM_APP_PATH||'/var/www/evydencia/current';
   const cacheKey=buildScopedBridgeCacheKey({
@@ -1081,7 +1085,7 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    return await SHARED_BRIDGE_READ_CACHE.execute(cacheKey,async()=>{
     const {stdout}=await spawnPhpBridgeStdin(scriptPath,JSON.stringify(payload),{
      timeoutMs:bridgeTimeoutMs,
-     maxBuffer:MAX_BRIDGE_STDOUT_BYTES,
+     maxBuffer:maxOutputBytes,
      env:{...process.env,EVYD_CRM_APP_PATH:crmAppPath}
     });
     let parsed;
@@ -1099,8 +1103,12 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
  }
 
  async function runForensicBridge(payload,{fresh=false}={}){
+  const audience=payload?.action==='meta.audience.read';
   return await execPhpJsonBridge(FORENSIC_BRIDGE_SCRIPT,payload,{
-   bridgeTimeoutMs:Math.max(timeoutMs,15000),
+   // Full audience scan may be slower than a single-order lookup; do not
+   // raise global timeouts and NEVER retry side effects (bridge is read-only).
+   bridgeTimeoutMs:audience?Math.max(timeoutMs,45000):Math.max(timeoutMs,15000),
+   maxOutputBytes:audience?MAX_META_AUDIENCE_STDOUT_BYTES:MAX_BRIDGE_STDOUT_BYTES,
    kind:'forensic_bridge',fresh
   });
  }
@@ -1542,6 +1550,11 @@ export function legacyReadClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000,inc
    assertOperatorAuthorized();
    if(!canUseForensicBridge())fail('proposals_history_bridge_unavailable');
    return await runForensicBridge({action:'proposals.history.batch',telefones,ano:2026,historico_limite},{fresh:true});
+  },
+  async metaAudienceRead({legal_basis_policy='legitimate_interest_customer_reactivation_with_optout_check',fresh=false}={}){
+   assertOperatorAuthorized();
+   if(!canUseForensicBridge())fail('meta_audience_bridge_unavailable');
+   return await runForensicBridge({action:'meta.audience.read',year:2026,legal_basis_policy},{fresh});
   },
   async zapiConnectionHistory({instanceId,limit=25}={}){
    if(typeof instanceId!=='string'||!/^[A-Za-z0-9_-]{4,80}$/.test(instanceId.trim()))fail('invalid_zapi_instance_id');

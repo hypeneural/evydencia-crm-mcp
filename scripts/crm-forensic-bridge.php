@@ -1781,5 +1781,14 @@ if ($action === 'proposals.history.batch') {
     require __DIR__ . '/crm-proposal-history-read.php';
 }
 
+// Schema-only diagnostic, no PII. Not exposed as an MCP tool until review.
+if ($action === 'meta.audience.schema.preflight') {
+    require __DIR__ . '/crm-meta-audience-preflight-read.php';
+}
+
+if ($action === "meta.audience.read" || $action === "meta.audience.extract" || $action === "meta.audience.preview") {
+    require __DIR__ . "/crm-meta-audience-read.php";
+}
+
 fwrite(STDERR, json_encode(['error' => 'unknown_forensic_action']) . "\n");
 exit(4);
