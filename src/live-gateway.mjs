@@ -12,6 +12,8 @@ import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {crmClient,phone,proposalName,proposalProjection} from './core.mjs';
 import {prepareProposalPhones} from './proposal-phone-variants.mjs';
+import {createProposalIntentJournal} from './proposal-intent-journal.mjs';
+import {createProposalDispatcher} from './proposal-dispatch.mjs';
 import {legacyReadClient} from './legacy-api-read.mjs';
 import {createGameplayReadClient,probeGameplayPrivateAccess} from './gameplay-read-client.mjs';
 import {gameplayOrderStatus,gameplayOrderSelectionRequired,registerDistinctGameplayOrderStatus,gameplayAuditEligibleStatuses} from './gameplay-order-status.mjs';
@@ -53,7 +55,7 @@ export const META_AUDIENCE_TOOL_NAMES=Object.freeze(['crm_meta_publico_natal_pre
 export const PRINTSERVER_TOOL_NAMES=Object.freeze(['crm_previa_malotes_retirada','crm_solicitar_impressao_etiqueta','crm_consultar_impressao_etiqueta']);
 export const MALOTES_READY_TOOL_NAME='crm_marcar_disponivel_retirada';
 export const MALOTES_BATCH_TOOL_NAME='crm_processar_malotes_retirada';
-export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal']);
+export const PROPOSAL_CRM_TOOL_NAMES=Object.freeze(['crm_previa_proposta_natal','crm_enviar_proposta_natal','crm_consultar_solicitacao_proposta_natal']);
 export {UI_CRM_TOOL_NAMES};
 export const ZAPI_MCP_TOOL_NAMES=Object.freeze([ZAPI_STATUS_TOOL_NAME,...ZAPI_GATEWAY_TOOL_NAMES]);
 export {ZAPI_INSTANCE_TOOL_NAMES};
@@ -210,6 +212,7 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_meta_publico_natal_exportar',capability:'meta_audience_natal_export',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_AUDIENCE_EXPORT,source:'crm_direct_forensic_bridge',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,metaAudience})=>Boolean(direct&&metaAudience)},
  {tool:'crm_previa_proposta_natal',capability:'natal_proposal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:true,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_enviar_proposta_natal',capability:'natal_proposal_dispatch',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_PROPOSAL_WRITE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
+  {tool:'crm_consultar_solicitacao_proposta_natal',capability:'natal_proposal_request_outcome',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:false,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
  {tool:'crm_renderizar_card_visual',capability:'mcp_ui_visual_card',access:'read',required_scope:GATEWAY_SCOPE,source:'gateway_mcp_ui_app',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full,ui})=>Boolean(direct&&full&&ui)},
  {tool:'crm_previa_malotes_retirada',capability:'printserver_order_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_read_only',supports_filters:true,supports_pagination:false,supports_history:false,when:({direct,full,print,ready})=>Boolean(direct&&full&&(print||ready))},
  {tool:MALOTES_READY_TOOL_NAME,capability:'crm_order_ready_write',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_ORDERS_READY_WRITE,source:'crm_extension_sanctum',supports_filters:false,supports_pagination:false,supports_history:false,when:({full,ready})=>Boolean(full&&ready)},
@@ -294,7 +297,7 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
  const printSet=new Set(PRINTSERVER_TOOL_NAMES);
  const gameplaySet=new Set(GAMEPLAY_CRM_TOOL_NAMES);
  const metaSet=new Set(META_AUDIENCE_TOOL_NAMES);
-  const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)&&!gameplaySet.has(t.tool)&&!metaSet.has(t.tool)).length;
+  const legacyPreservedCount=activeTools.filter(t=>!uiSet.has(t.tool)&&!printSet.has(t.tool)&&!gameplaySet.has(t.tool)&&!metaSet.has(t.tool)&&t.tool!=='crm_consultar_solicitacao_proposta_natal').length;
  const mcpUiActive=Boolean(directEnabled&&operatorFullCrm&&uiAppsEnabled);
  return {
   service:'evydencia-crm-mcp-live',
@@ -380,7 +383,8 @@ function summarizeToolResult(tool,res){
   case 'crm_previa_proposta_natal':
    return `OK [crm_previa_proposta_natal]: elegivel=${Boolean(res.ready)}. Consulte structuredContent.`;
   case 'crm_enviar_proposta_natal':
-   return `OK [crm_enviar_proposta_natal]: agendado=${Boolean(res.scheduled)}. Consulte structuredContent.`;
+   case 'crm_consultar_solicitacao_proposta_natal':
+    return `Proposta: ${res.resolution||'inconclusive'}; modalidade=${res.delivery_scope||'unknown'}; protocolo=${res.request_id||'não criado'}. ${res.message||'Agendamento não comprova entrega.'}`;
   case ZAPI_STATUS_TOOL_NAME:
    return `OK [${ZAPI_STATUS_TOOL_NAME}]: oauth_status=${res.oauth_status||'n/d'}, ferramentas=${res.discovered_tools_count??0}, whatsapp=${res.whatsapp_connection?.status||'n/d'}. Consulte structuredContent.`;
   case ZAPI_DIAG_TOOL_NAME:
@@ -640,6 +644,7 @@ const OUT_NATAL_PARTICIPANTS=z.looseObject({
 const OUT_VISUAL_CARD=OUT_VISUAL_CARD_OBJECT_SCHEMA;
 const OUT_PROPOSAL_PREVIEW=z.looseObject({
  ready:z.boolean(),
+ delivery_scope:z.enum(['full_cadence','initial_whatsapp_only','unknown']).nullish(),
  variant:z.string().nullish(),
  campaign_id:z.number().nullish(),
  message_preview:z.string().nullish(),
@@ -648,6 +653,8 @@ const OUT_PROPOSAL_PREVIEW=z.looseObject({
 });
 const OUT_PROPOSAL_DISPATCH=z.looseObject({
  scheduled:z.boolean(),
+ resolution:z.enum(['confirmed','rejected','inconclusive']),
+ delivery_scope:z.enum(['full_cadence','initial_whatsapp_only','unknown']),
  status:z.string().nullish(),
  replay:z.boolean().nullish(),
  dispatch_uuid:z.string().nullish(),
@@ -784,7 +791,7 @@ const OUT_ZAPI_HISTORICO=z.looseObject({
 // Exported for contract tests against real (PHP-encoded) CRM payload shapes.
 export const OUTPUT_SCHEMAS=Object.freeze({OUT_CAPACIDADES,OUT_GENERIC,OUT_GAMEPLAY_LINKS,OUT_GAMEPLAY_AUDIT,OUT_GAMEPLAY_AVAILABLE,OUT_CUSTOMER,OUT_ORDER_DETAIL,OUT_ORDERS_SEARCH,OUT_CUSTOMERS_SEARCH,OUT_NATAL_STATS,OUT_NATAL_PARTICIPANTS,OUT_VISUAL_CARD,OUT_PROPOSAL_PREVIEW,OUT_PROPOSAL_DISPATCH,OUT_PROPOSAL_HISTORY,OUT_ZAPI_STATUS,OUT_ZAPI_DIAGNOSTICO,OUT_ZAPI_HISTORICO});
 
-async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv,legacyReader=null,audienceSnapshots=null}){
+async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled,labelRenderEnv,legacyReader=null,audienceSnapshots=null,proposalJournal}){
  const ex=auth?.extra||{};
  if(typeof ex.upstream!=='string'||!ex.operatorId)throw Error('gateway_missing_identity');
  const grantedScopes=new Set(Array.isArray(auth?.scopes)&&auth.scopes.length?auth.scopes:[GATEWAY_SCOPE]);
@@ -891,6 +898,22 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
    return {status:r.status,ok:r.ok,json};
   }finally{clearTimeout(timeout)}
  };
+ const proposalOutcome=async requestId=>{
+  if(!z.string().uuid().safeParse(requestId).success)throw Error('invalid_proposal_request_id');
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),cfg.crmTimeoutMs);
+  try{
+   const r=await fetchFn(new URL(cfg.crmBaseUrl+'/api/v1/extension/proposals/requests/'+requestId),{
+    method:'GET',redirect:'error',signal:controller.signal,cache:'no-store',
+    headers:{Accept:'application/json',Authorization:'Bearer '+ex.upstream,'Cache-Control':'no-store'}
+   });
+   if(r.redirected)throw Error('crm_redirect_forbidden');
+   return {status:r.status,ok:r.ok,json:await r.json()};
+  }finally{clearTimeout(timeout)}
+ };
+ const proposals=createProposalDispatcher({journal:proposalJournal,
+  actor:{operatorId:ex.operatorId,origin:cfg.crmBaseUrl},
+  preview:body=>callExtensionPost('/api/v1/extension/proposals/preview',body),
+  schedule:(body,headers)=>callExtensionPost('/api/v1/extension/proposals/schedule',body,headers),outcome:proposalOutcome});
  const safe=(tool,fn)=>async(input,ctx)=>{
   const t0=performance.now();
   try{
@@ -1248,42 +1271,27 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
     const err=json?.error||{};
     return {ready:false,scheduled:false,http_status:status,error_code:err.code||'PROPOSAL_NOT_ELIGIBLE',message:err.message||'Não foi possível gerar a prévia da proposta.',retryable:Boolean(err.retryable)};
    }
-   return {...proposalProjection(json),variant:json?.data?.variant??json?.data?.selection?.variant??null,campaign_id:json?.data?.campaign_id??json?.data?.campaign?.id??null,message_preview:json?.data?.message_preview??json?.data?.message??null,phone_formatted:json?.data?.phone_formatted??null};
+   const scope=['full_cadence','initial_whatsapp_only'].includes(json?.data?.delivery_scope)?json.data.delivery_scope:'unknown';
+   return {...proposalProjection(json),ready:json?.data?.ready===true&&scope!=='unknown',delivery_scope:scope,variant:json?.data?.variant??json?.data?.selection?.variant??null,campaign_id:json?.data?.campaign_id??json?.data?.selection?.campaign_id??json?.data?.campaign?.id??null,message_preview:json?.data?.message_preview??json?.data?.message??null,phone_formatted:json?.data?.phone_formatted??null};
   });
-  reg('crm_enviar_proposta_natal','Disparar / Agendar Proposta de Natal 2026','Use quando o operador autorizar explicitamente o disparo oficial da proposta comercial de Natal 2026 pelo CRM. EXIGE confirmado_pelo_operador=true explícito (sem confirmação falha fechada antes de chamar o CRM), escopo crm.proposal.write + ability extension:proposal-write, aplica a Regra de Ouro e garante idempotência. NÃO use sem prévia e confirmação explícita.',z.object({
+  reg('crm_enviar_proposta_natal','Agendar proposta de Natal 2026','Use para um pedido explícito do operador de enviar a proposta oficial a este destinatário. A prévia e elegibilidade são verificadas internamente; na régua saudável não peça confirmação redundante. EXIGE confirmado_pelo_operador=true, OAuth crm.proposal.write e ability extension:proposal-write. allow_initial_only=true SOMENTE quando o operador pedir explicitamente somente o WhatsApp inicial sem acompanhamentos. Resultado inconclusivo exige consultar a mesma referência, nunca repetir POST. Agendamento não comprova entrega. Reenvios históricos permanecem fora deste fluxo.',z.object({
    telefone:z.string().min(8).max(30),
    nome:z.string().max(80).optional(),
    confirmado_pelo_operador:z.boolean(),
+    allow_initial_only:z.boolean().default(false),
    modo_reenvio:z.enum(['normal','send_again','abort_and_resend']).default('normal'),
    request_id:z.string().uuid().optional()
-  }),OUT_PROPOSAL_DISPATCH,async({telefone,nome,confirmado_pelo_operador,modo_reenvio='normal',request_id})=>{
+  }),OUT_PROPOSAL_DISPATCH,async({telefone,nome,confirmado_pelo_operador,allow_initial_only=false,modo_reenvio='normal',request_id})=>{
    if(!grantedScopes.has(SCOPE_PROPOSAL_WRITE)||!ex.canWriteProposal)throw Error('insufficient_operator_write_scope');
    if(confirmado_pelo_operador!==true)throw Error('operator_confirmation_required');
    const normPhone=phone(telefone);
    const normName=proposalName(nome)??null;
-   const reqId=request_id||randomUUID();
-   const {ok,status,json}=await callExtensionPost('/api/v1/extension/proposals/schedule',{
-    request_id:reqId,phone:normPhone,name:normName,resend_mode:modo_reenvio
-   },{'X-Idempotency-Key':reqId,'X-Request-ID':reqId});
-   if(!ok){
-    const err=json?.error||{};
-    return {scheduled:false,http_status:status,error_code:err.code||'PROPOSAL_DISPATCH_REJECTED',message:err.message||'O CRM recusou o disparo da proposta.',retryable:Boolean(err.retryable),request_id:reqId};
-   }
-   const d=json?.data||{};
-   return {
-    scheduled:true,
-    status:d.status||d.proposal?.status||'scheduled',
-    replay:Boolean(d.replay),
-    dispatch_uuid:d.dispatch_uuid||d.proposal?.uuid||null,
-    phone_masked:d.phone_masked||null,
-    recipient_name:normName,
-    variant:d.variant||d.proposal?.variant||null,
-    variant_label:d.variant_label||null,
-    scheduled_at:d.scheduled_at||d.proposal?.send_after||null,
-    resend_mode:d.resend_mode||modo_reenvio,
-    request_id:reqId
-   };
+   return proposals.send({phone:normPhone,name:normName,confirmedByOperator:confirmado_pelo_operador,
+    allowInitialOnly:allow_initial_only,resendMode:modo_reenvio,requestId:request_id});
   },WRITE_IDEMPOTENT,{requiredScopes:[GATEWAY_SCOPE,SCOPE_PROPOSAL_WRITE]});
+  reg('crm_consultar_solicitacao_proposta_natal','Consultar agendamento de proposta',
+   'Consulta somente leitura do resultado de uma referência de proposta. Use após timeout, resposta ausente ou resultado inconclusivo. Não agenda, não executa Doctor e não envia mensagens. Ausência/pendência permanecem inconclusivas.',
+   z.object({request_id:z.string().uuid()}),OUT_PROPOSAL_DISPATCH,({request_id})=>proposals.consult(request_id));
  }
  if(direct){
   reg('crm_estatisticas_natal','Central de Inteligência — Estatísticas e Operação de Natal','Use quando precisar dos dados canônicos oficiais de /gestao/natal/estatisticas (2021–2026). ROTA RÁPIDA RECOMENDADA: para perguntas diretas de vendas, pedidos válidos, contratado, recebido, saldo ou metas atuais de Natal 2026, passe SEMPRE perfil_resposta="kpi_minimal" (<5 KB, retorno imediato com integrity_checks e metas R$ 300k base vs R$ 400k ampliada). Para visão executiva multi-ano use perfil_resposta="default" e nivel_detalhe="resumo". Use secoes sob demanda: simulador_previsao, financeiro_caixa (reconciliação explícita oi.total vs oi.payment_total da diferença de R$ 1.230,00, Permuta non_cash_barter vs Stone Débito debit_card), clientes_recompra_campanhas (recompra 2025->2026, cidades, canais, cupons e dia/hora de orders.created_at — NÃO representa ROAS nem horário pago), agenda_demanda, pacotes_produtos_bonus ou operacional_listas. NÃO use para demografia/idades de crianças/bebês (use crm_natal_participantes_estatisticas).',z.object({
@@ -1853,6 +1861,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  const operators=operatorVerifier(cfg,{fetchFn,now});
  const oauth=createOAuthServer(cfg,{operators,now,log});
  const audienceSnapshots=new Map();
+ const proposalJournal=createProposalIntentJournal({directory:cfg.proposalJournalDirectory,key:cfg.key,now});
  // One sweeper per gateway process, including after a restart; no extra
  // cron/systemd unit and no impact on unrelated CRM/PrintServer services.
  const audienceJanitor=cfg.audienceExportEnabled&&cfg.audiencePrivateCsvDir
@@ -1883,7 +1892,7 @@ export function createGateway(env,{fetchFn=fetch,log=defaultLog,now=()=>Date.now
  const resourceUrl=new URL(cfg.resource);
  const resourceMetadataUrl=getOAuthProtectedResourceMetadataUrl(resourceUrl);
  const gate=requireBearerAuth({verifier:oauth.verifier,requiredScopes:[GATEWAY_SCOPE],resourceMetadataUrl,expectedResource:resourceUrl});
- mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env,legacyReader,audienceSnapshots}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
+ mcp=createMcpHandler(ctx=>liveServer(ctx.authInfo,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,printCfg,labelRenderer,labelRenderEnabled:env.EVYD_CRM_LABEL_RENDER_ENABLED==='1',labelRenderEnv:env,legacyReader,audienceSnapshots,proposalJournal}),{responseMode:'auto',maxRequestBodySize:65536,onerror:()=>log({evt:'mcp_error'})});
  const allowed=rateLimiter(now);
  const allowedHosts=[cfg.hostname,...(cfg.insecureLocal?['localhost','127.0.0.1']:[])];
  const metaOpts={oauthMetadata:oauth.metadata,resourceServerUrl:resourceUrl,scopesSupported:supportedGatewayScopes(cfg),resourceName:'Evydência CRM (operador autenticado)',dangerouslyAllowInsecureIssuerUrl:cfg.insecureLocal};

@@ -131,6 +131,8 @@ export function gatewayConfig(env){
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
   allowedOperators,redirects,internalReadToken,
   operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
+  proposalJournalDirectory:typeof env.EVYD_PROPOSAL_JOURNAL_DIR==='string'&&env.EVYD_PROPOSAL_JOURNAL_DIR.trim()
+   ?env.EVYD_PROPOSAL_JOURNAL_DIR.trim():null,
   printserverEnabled:env.EVYD_PRINTSERVER_ENABLED==='1',
   malotesReadyEnabled:env.EVYD_MALOTES_READY_WRITE_ENABLED==='1',
   malotesBatchEnabled:env.EVYD_MALOTES_BATCH_ENABLED==='1',

@@ -4,6 +4,9 @@ import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {createHash,randomBytes} from 'node:crypto';
+import {mkdtemp,rm,chmod} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
 import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES,FORENSIC_CRM_TOOL_NAMES,PROPOSAL_CRM_TOOL_NAMES,UI_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
 import {gatewayConfig,createSealer,redirectAllowed} from '../src/oauth-gateway.mjs';
@@ -20,7 +23,10 @@ const OPS={
  'fake-op7-ready-000008':{id:7,ab:[...R,'extension:proposal-read','extension:orders-ready-write']}
 };
 const INTERNAL_TOK='fake-internal-crm-read-token-000001';
-const revoked=new Set(),crmLog=[],logs=[],secrets=[...Object.keys(OPS),INTERNAL_TOK];
+const revoked=new Set(),crmLog=[],logs=[],secrets=[...Object.keys(OPS),INTERNAL_TOK],proposalReceipts=new Map();
+const journalFolders=[];
+async function proposalJournalFolder(){const folder=await mkdtemp(join(tmpdir(),'evy-gateway-proposals-'));await chmod(folder,0o700);journalFolders.push(folder);return folder}
+after(async()=>{for(const folder of journalFolders)await rm(folder,{recursive:true,force:true})});
 const KEY=randomBytes(32).toString('base64');
 const REDIR='https://chatgpt.com/connector_platform_oauth_redirect';
 // The SDK bearer gate also checks expiresAt against the real clock, so start from real time.
@@ -49,12 +55,19 @@ before(async()=>{
    let raw='';req.on('data',c=>raw+=c);req.on('end',()=>{
     const body=JSON.parse(raw||'{}');
     if(u.pathname==='/api/v1/extension/proposals/preview')
-     return send(200,env1({ready:true,variant:body.name?'with_name':'without_name',recipient:{name:body.name||null,has_name:Boolean(body.name)},campaign:{id:415,type:'christmas_proposal'},message:body.name?`Olá, ${body.name}! Proposta Natal 2026`:'Olá! Proposta Natal 2026'}));
-    if(u.pathname==='/api/v1/extension/proposals/schedule')
-     return send(200,env1({scheduled:true,proposal:{id:901,uuid:'prop-uuid-901',status:'waiting',variant:body.name?'with_name':'without_name',campaign_id:415,send_after:'2026-10-25T13:20:00-03:00',cancel_until:'2026-10-25T13:20:00-03:00'},customer:{exists:true}}));
+     return send(200,env1({ready:true,delivery_scope:'full_cadence',variant:body.name?'with_name':'without_name',recipient:{name:body.name||null,has_name:Boolean(body.name)},campaign:{id:415,type:'christmas_proposal'},message:body.name?`Olá, ${body.name}! Proposta Natal 2026`:'Olá! Proposta Natal 2026'}));
+    if(u.pathname==='/api/v1/extension/proposals/schedule'){
+     const receipt={status:'scheduled',dispatch_uuid:'11111111-2222-4333-8444-555555555555',delivery_scope:'full_cadence',scheduled_at:'2026-10-25T16:20:00Z',replay:false};
+     proposalReceipts.set(tok+':'+body.request_id,{...receipt,proposal_request_id:body.request_id,resolution:'confirmed'});
+     return send(201,env1(receipt));
+    }
     send(404,'{}');
    });
    return;
+  }
+  if(req.method==='GET'&&u.pathname.startsWith('/api/v1/extension/proposals/requests/')){
+   const id=u.pathname.split('/').at(-1);
+   return send(200,env1(proposalReceipts.get(tok+':'+id)??{proposal_request_id:id,resolution:'inconclusive',delivery_scope:'unknown'}));
   }
   if(req.method==='POST'&&u.pathname==='/api/v1/extension/orders/6002/ready-for-pickup'){
    if(!OPS[tok]?.ab?.includes('extension:orders-ready-write'))return send(403,'{}');
@@ -351,7 +364,7 @@ test('no write call ever reached the CRM and logs carry no secrets or PII',()=>{
 });
 
 test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispatch (requiring explicit confirmation), forensic customer search, full participants and CRM URLs',async()=>{
- const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
+ const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',EVYD_PROPOSAL_JOURNAL_DIR:await proposalJournalFolder()});
  const hz=await call(g,'/healthz');
  assert.equal(hz.status,200);
  const hzJson=await hz.json();
@@ -398,8 +411,15 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
   const sent=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:true,request_id:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'}});
   assert.equal(sent.isError,undefined);
   assert.equal(sent.structuredContent.scheduled,true);
-  assert.equal(sent.structuredContent.dispatch_uuid,'prop-uuid-901');
+  assert.equal(sent.structuredContent.dispatch_uuid,'11111111-2222-4333-8444-555555555555');
+  assert.equal(sent.structuredContent.delivery_scope,'full_cadence');
+  assert.equal(sent.structuredContent.resolution,'confirmed');
   assert.equal(crmLog.find(x=>x.path==='/api/v1/extension/proposals/schedule')?.idempotencyKey,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+  const queried=await client.callTool({name:'crm_consultar_solicitacao_proposta_natal',arguments:{request_id:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'}});
+  assert.equal(queried.structuredContent.resolution,'confirmed');
+  const replay=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:true}});
+  assert.equal(replay.structuredContent.request_id,sent.structuredContent.request_id);
+  assert.equal(crmLog.filter(x=>x.path==='/api/v1/extension/proposals/schedule').length,1);
  }finally{await client.close()}
 });
 
@@ -552,7 +572,7 @@ test('PrintServer synthetic job status is readable with print scope, never needs
   assert.equal(capabilities.structuredContent.oauth_authorization.print_tool_enabled,true);
   assert.ok(capabilities.structuredContent.oauth_authorization.granted_scopes.includes('print.jobs.write'));
   assert.equal(capabilities.structuredContent.legacy_v012_tools_preserved_count,
-   capabilities.structuredContent.tools.filter(t=>t.registered&&!t.tool.startsWith('crm_renderizar_card_visual')&&!t.tool.startsWith('crm_previa_malotes_retirada')&&!t.tool.startsWith('crm_solicitar_impressao_etiqueta')&&!t.tool.startsWith('crm_consultar_impressao_etiqueta')).length);
+   capabilities.structuredContent.tools.filter(t=>t.registered&&!t.tool.startsWith('crm_renderizar_card_visual')&&!t.tool.startsWith('crm_previa_malotes_retirada')&&!t.tool.startsWith('crm_solicitar_impressao_etiqueta')&&!t.tool.startsWith('crm_consultar_impressao_etiqueta')&&t.tool!=='crm_consultar_solicitacao_proposta_natal').length);
   const r=await client.callTool({name:'crm_consultar_impressao_etiqueta',arguments:{order_id:999999,job_id:TEST_JOB}});
   assert.equal(r.isError,undefined);
   assert.equal(r.structuredContent.print_state,'spooled');
