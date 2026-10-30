@@ -1551,8 +1551,18 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      }
 
      const {result}=item;
-     assertMetaAudienceUploadReady(result,{minRows:100});
-     const validated=validateMetaCustomerListCsv(result.csv,{minRows:100});
+     // Mandatory last-second revalidation: a buyer/opt-out may have appeared
+     // after preview. Never export an obsolete list without operator review.
+     const freshRaw=await direct.metaAudienceRead({fresh:true});
+     if(freshRaw?.available===false||!Array.isArray(freshRaw?.records))
+       throw Error('crm_meta_audience_source_unavailable');
+     const freshResult=buildMetaAudienceCsv({records:freshRaw.records,coverage:freshRaw.coverage});
+     if(freshResult.sha256!==result.sha256){
+      metaAudienceCache.delete(key);
+      throw Error('crm_meta_audience_snapshot_changed_review_again');
+     }
+     assertMetaAudienceUploadReady(freshResult,{minRows:100});
+     const validated=validateMetaCustomerListCsv(freshResult.csv,{minRows:100});
 
      await mkdir(PRIVATE_EXPORTS_DIR,{recursive:true,mode:0o700});
      // Purge orphan CSVs left by a previous process restart; the in-process
@@ -1562,7 +1572,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
      const filePath=resolve(PRIVATE_EXPORTS_DIR,`meta-audience-natal2026-${exportId}.csv`);
      // Fail if an unexpected file already exists; never overwrite past exports.
      const fd=await open(filePath,'wx',0o600);
-     try {await fd.writeFile(result.csv,{encoding:'utf8'});}
+     try {await fd.writeFile(freshResult.csv,{encoding:'utf8'});}
      finally {await fd.close();}
      metaAudienceCache.delete(key); // release all CSV PII from snapshot cache
      // Short-lived best-effort cleanup, plus operator maintenance on restart.
