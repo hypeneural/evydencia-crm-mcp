@@ -1,5 +1,8 @@
 # Meta Ads — contrato de CSV manual e auditoria P25 (29/10/2026)
 
+> **STATUS HISTÓRICO / NÃO USAR COMO RUNBOOK:** este documento registra uma fase anterior. O MCP Meta Audience já foi implantado em P25.8 (`2f7755d`); a atualização P25.9 está em validação na PR #23. Para operar ou homologar agora, use o [manual operacional P25.9](./META_AUDIENCE_P25_9_MANUAL_OPERACIONAL_20261030.md). Os passos de implementação inicial abaixo são preservados apenas como histórico.
+
+
 Estado: formatador OFFLINE v3 e validador disponíveis na PR draft #23. O leitor SQL global, ferramenta de exportação MCP, OAuth dedicado, download e implantação LIVE NÃO estão prontos. Nenhum upload para Meta autorizado.
 
 ## Requisitos de formato
