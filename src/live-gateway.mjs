@@ -1552,7 +1552,7 @@ async function liveServer(auth,{cfg,fetchFn,operators,log,zapi,zapiDiag,perf,pri
       counts:item.result.counts,
       source_quality:item.coverage.origin_quality||{},
       query_telemetry:item.queryTelemetry||{sql_count:null,sql_ms:null},
-      ready_for_export:item.result.counts.export_rows>=100,
+      ready_for_export:item.result.counts.export_rows>=100 && item.result.counts.eligible_people>=100,
    });
 
    reg('crm_meta_publico_natal_previa','Prévia analítica do público Meta Ads Natal 2026 (sem PII)',
