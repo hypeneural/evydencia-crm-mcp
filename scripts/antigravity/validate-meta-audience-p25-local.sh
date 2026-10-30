@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# P25.3 — exactly one LOCAL synthetic/static validation pass.
+# P25.6 — exactly one LOCAL synthetic/static validation pass.
 # No CRM writes, no Meta Ads, no GitHub Actions, no deploy, no remote DB calls.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-printf '%s\n' "META P25.4 local audit only — no real contacts"
+printf '%s\n' "META P25.6 local audit only — no real contacts"
 printf 'git HEAD: '; git rev-parse HEAD
 printf 'working tree: '; git status --porcelain
 if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -18,13 +18,15 @@ node --version
 php -v | head -n 1
 node --check src/meta-audience-csv.mjs
 node --check src/meta-audience-csv-validator.mjs
+node --check src/meta-audience-csv-audit.mjs
 node --check src/meta-audience-private-files.mjs
 node --check src/live-gateway.mjs
 node --check src/oauth-gateway.mjs
 node --check src/legacy-api-read.mjs
 node --check scripts/antigravity/purge-meta-audience-private.mjs
 node --check scripts/antigravity/meta-audience-release-preflight.mjs
-node --test test/meta-audience-csv.test.mjs test/meta-audience-mcp.test.mjs test/meta-audience-private-files.test.mjs test/meta-audience-php-contract.test.mjs test/meta-audience-release-preflight.test.mjs
+node --check scripts/antigravity/verify-meta-audience-download.mjs
+node --test test/meta-audience-csv-audit.test.mjs test/meta-audience-csv.test.mjs test/meta-audience-mcp.test.mjs test/meta-audience-private-files.test.mjs test/meta-audience-php-contract.test.mjs test/meta-audience-release-preflight.test.mjs
 php -l scripts/crm-meta-audience-purchase-classifier.php
 php -l scripts/crm-meta-audience-read.php
 php -l scripts/crm-meta-audience-preflight-read.php
@@ -33,4 +35,4 @@ php -l test/meta-audience-purchase-classifier.php
 php test/meta-audience-purchase-classifier.php
 npm run check
 npm test
-printf '%s\n' 'P25.3 LOCAL QA PASS — MySQL real, legal approval, Meta upload and download transport remain unverified'
+printf '%s\n' 'P25.6 LOCAL QA PASS — proves synthetic code only; Meta matched size and production logs require separate verification'
