@@ -3,7 +3,7 @@
 # No CRM writes, no Meta Ads, no GitHub Actions, no deploy, no remote DB calls.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-printf '%s\n' "META P25.3 local audit only — no real contacts"
+printf '%s\n' "META P25.4 local audit only — no real contacts"
 printf 'git HEAD: '; git rev-parse HEAD
 printf 'working tree: '; git status --porcelain
 if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -22,6 +22,8 @@ node --check src/meta-audience-private-files.mjs
 node --check src/live-gateway.mjs
 node --check src/oauth-gateway.mjs
 node --check src/legacy-api-read.mjs
+node --check scripts/antigravity/purge-meta-audience-private.mjs
+node --check scripts/antigravity/meta-audience-release-preflight.mjs
 node --test test/meta-audience-csv.test.mjs test/meta-audience-mcp.test.mjs test/meta-audience-private-files.test.mjs test/meta-audience-php-contract.test.mjs
 php -l scripts/crm-meta-audience-purchase-classifier.php
 php -l scripts/crm-meta-audience-read.php
