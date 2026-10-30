@@ -351,10 +351,16 @@ try {
     $scheduledRecordsCount = 0;
     if (!$flow) throw new \RuntimeException('natal_2026_proposal_flow_unavailable');
     if ($flow) {
+        // Only a successfully persisted eligible proposal may enter the
+        // candidate list. A failed/aborted/suppressed/duplicate dispatch is
+        // NOT proof of a reachable recipient (nor proof of delivery).
         $dispatches = $DB::table('proposal_dispatches')
             ->where('proposal_flow_id', (int) $flow->id)
             ->where('created_at', '>=', '2026-01-01 00:00:00')
             ->where('created_at', '<', '2027-01-01 00:00:00')
+            ->where('status', 'scheduled')
+            ->whereIn('eligibility_status', ['allowed', 'eligible'])
+            ->whereNull('duplicate_of_id')
             ->get(['id', 'phone_e164', 'resolved_customer_id', 'campaign_scheduled_contact_id']);
 
         foreach ($dispatches as $d) {
@@ -393,35 +399,23 @@ try {
         // Both campaign ID and season scope must agree; a scope-only OR
         // would accidentally import unrelated marketing campaign recipients.
         if (!$campaignIds) throw new \RuntimeException('natal_2026_flow_has_no_campaign_ids');
-        $scheduledContacts = $DB::table('campaign_scheduled_contacts as cc')
+        // Legacy scheduled contacts may be unsolicited, not sent, or merely
+        // reserved. They are an audit metric, NOT automatically quote requests.
+        // Every eligible proposal is already represented by a qualified
+        // proposal_dispatch above. Do not export scheduled-only contacts.
+        $scheduledRecordsCount = (int) $DB::table('campaign_scheduled_contacts as cc')
             ->join('campaign_scheduleds as cs', 'cs.id', '=', 'cc.campaign_scheduled_id')
             ->where('cs.created_at', '>=', '2026-01-01 00:00:00')
             ->where('cs.created_at', '<', '2027-01-01 00:00:00')
             ->whereIn('cs.campaign_id', $campaignIds)
             ->where('cs.suppression_scope_key', 'natal:2026')
-            ->get(['cc.id', 'cc.lead_id', 'cc.whatsapp']);
+            ->whereNotExists(function ($query) use ($flow) {
+                $query->selectRaw('1')
+                    ->from('proposal_dispatches as pd')
+                    ->whereColumn('pd.campaign_scheduled_contact_id', 'cc.id')
+                    ->where('pd.proposal_flow_id', (int) $flow->id);
+            })->count();
 
-        foreach ($scheduledContacts as $sc) {
-            $phone = evyNormalizePhoneE164($sc->whatsapp);
-            $scheduledSuppressed = $isSuppressed($phone, null);
-
-            $records[] = [
-                'source' => 'proposal_2026',
-                'source_id' => 'scheduled-' . $sc->id,
-                'phone' => $phone,
-                'email' => null,
-                'name' => '',
-                'bought_2026' => false,
-                'purchase_check_status' => 'verified',
-                'suppressed' => $scheduledSuppressed,
-                'suppression_check_status' => 'verified',
-                'marketing_allowed' => $legalBasisVerified && !$scheduledSuppressed,
-                'marketing_permission_status' => $legalBasisVerified ? 'verified' : 'unavailable',
-                'identity_status' => 'verified',
-            ];
-            $proposalRecordsCount++;
-            $scheduledRecordsCount++;
-        }
     }
 
     $coverage = [
@@ -443,7 +437,8 @@ try {
         'origin_quality' => [
             'unique_customers' => $uniqueCustomerCount,
             'proposal_dispatch_rows' => $dispatchRecordsCount,
-            'scheduled_contact_rows' => $scheduledRecordsCount,
+            'scheduled_only_not_exported' => $scheduledRecordsCount,
+            'dispatch_scheduled_does_not_prove_delivered' => true,
             'scheduled_does_not_prove_quote_requested' => true,
         ],
     ];
