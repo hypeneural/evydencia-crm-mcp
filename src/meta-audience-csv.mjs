@@ -111,8 +111,13 @@ export function buildMetaAudienceCsv({records,coverage}={}) {
         || (r.email!=null&&typeof r.email!=='string')) {
       throw Error('EXPORT_BLOCKED_INVALID_RECORD_CONTRACT');
     }
-    if (r.purchase_check_status!=='verified' || r.suppression_check_status!=='verified'
-        || r.marketing_permission_status!=='verified') {
+    // Unknown purchase for one person is quarantined, NOT silently deemed
+    // a non-buyer and not allowed to stop exports of all unrelated customers.
+    // Suppression or lawful-basis verification is still GLOBAL fail-closed.
+    if (r.suppression_check_status!=='verified'
+        || r.marketing_permission_status!=='verified'
+        || (r.purchase_check_status!=='verified'
+            && r.identity_status==='verified')) {
       throw Error('EXPORT_BLOCKED_RECORD_HAS_UNVERIFIED_ELIGIBILITY');
     }
     counts[r.source==='customer'?'customer_records':'proposal_records']++;
