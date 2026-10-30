@@ -72,3 +72,8 @@ Se todos os testes locais passarem, atualizar a PR #23 com um único recibo, sem
 ## Adendo de auditoria de diretório (P25.4.1)
 
 Confirmar o novo teste MCP de bloqueio de arquivo dentro do checkout (inclusive symlink de diretório); pasta de teste fica em tmpdir e é removida ao final. O preflight de release só considera pronto diretório absoluto, restrito 0700, FORA do Git checkout. Não criar arquivo real de clientes durante a validação. Execução nativa do HEAD atual continua obrigatória.
+
+
+## P25.4.2 — Gate SQL crítico
+
+O ChatGPT também otimizou a query de orders_status para JOIN de MAX(id) por order_id em lotes de 1.000, e a recuperação de pedidos anteriores pagos em 2026 por lotes de 1.000. Validar via php -l e, se houver STAGING isolado, comparar IDs/status contra CurrentOrderStatusResolver e verificar EXPLAIN, integridade e performance; sem SQL em produção e sem criar índice/migration. O script de teste estático de regressão já está incluído.
