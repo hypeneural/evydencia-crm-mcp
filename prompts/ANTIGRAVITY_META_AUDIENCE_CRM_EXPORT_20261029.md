@@ -1,3 +1,55 @@
+# ANTIGRAVITY — P25.2: SOMENTE VALIDAR O HOTFIX LOCAL
+
+IMPORTANTE: Esta seção SUBSTITUI as instruções antigas P25.1 de implementar ou alterar código abaixo. O ChatGPT já auditou o commit e5a5beba269b56ecee3ef0c17f17da9cc2c00855, aplicou correções na própria branch da PR #23 e documentou todos os achados em docs/META_AUDIENCE_P25_2_FORENSIC_REVIEW_20261029.md. Sua tarefa agora é VALIDAR O HEAD ATUAL em worktree isolado, não reimplementar tudo.
+
+Repositório hypeneural/evydencia-crm-mcp, branch feat/meta-audience-crm-export-foundation-20261029, PR #23 permanece draft, base base/reprint-live-6abe039-20261029.
+
+## Gate A — checklist automatizado único (sem GitHub Actions)
+
+Em checkout/worktree limpo e isolado, conferir git status e HEAD, então executar em Git Bash ou WSL:
+
+    bash scripts/antigravity/validate-meta-audience-p25-local.sh
+
+Esse script executa node --check dos módulos, testes sintéticos focados, php -l nos bridges, npm run check e npm test completo. Antigravity deve registrar contagens, duração e SHA, sem PII. NÃO alterar banco, sem workflow, sem envio, sem Meta, sem VPS nessa execução.
+
+Atenção: Antigravity alegou 330 PASS antes das correções. É obrigatório REPETIR toda a validação do HEAD novo. Se houver falha, reproduzir e reportar P0 exato com arquivo/linha e corrigir somente se necessário; executar testes afetados uma vez e repetir o gate. Não abrir ciclos indefinidos.
+
+## Gate B — validação local SQL/Laravel em ambiente de testes
+
+Usar apenas banco sintético/homologação autorizado, com 2026 e fontes seguintes:
+- customers sem pedidos; customers históricos; duplicatas; dois cadastros com mesmo telefone; DDD 55 e números sem nono dígito;
+- orders criados em 2026 com waiting_payment sem pagamento (não é comprador); payment_confirmed; pagamento real 2026 de pedido criado em 2025; payment_refunded; payment_chargeback; status desconhecido e pedido sem customer_id;
+- proposal_flows Natal 2026, proposal_dispatches sem customer, scheduled com escopo exato, scheduled de campanha alheia e proposta recebida por cliente comprador;
+- communication_suppressions com chave canônica diferente da proposals.hash_key, channel/all, marketing/global/season, revogação e opt-out; validar que apenas regras realmente aplicáveis bloqueiam;
+- política jurídica não configurada: sem dados; apenas política nominal: sem dados; política documentada e dados sintéticos: consultar e dar contagens;
+- snapshot REPEATABLE READ, SQL session READ ONLY e rollback comprovado; sem N+1 e com EXPLAIN read-only apenas se necessário.
+
+Não alterar Laravel legado nem executar migration. Conferir nomes de colunas/índices com o preflight read-only. Se banco de homologação não existir, marcar Gate B UNKNOWN e retornar os fixtures necessários, em vez de tocar produção.
+
+## Gate C — OAuth/MCP e contrato do gestor
+
+Com servidor LOCAL sintético, comprovar:
+1. Apenas crm.read: PREVIA sem PII e tentativa de EXPORTAR deve retornar HTTP 403 OAuth insufficient_scope pelo scopeChallenge; token sem grant ou operador fora da allowlist é bloqueado, inclusive depois de refresh.
+2. OAuth crm.audience.export com allowlist + confirmação explícita + preview válido: CSV de clientes fictícios em diretório absoluto privado, arquivo 0600/dir 0700, mínimo de 100 números únicos 55+DDD+número.
+3. Exportar sem snapshot_id, com snapshot alheio, expirado ou alterado: BLOCKED; comprador/opt-out que aparece entre preview e export exige nova prévia.
+4. Retorno MCP deve conter apenas contagens agregadas, digest, arquivo_id e delivery_status=private_gateway_storage_only; não pode conter telefones, e-mails, nomes, tokens ou caminho de filesystem.
+5. Verificar que arquivo_id não é um link de download: ainda falta contrato autenticado de entrega ao ChatGPT. Não prometer que já é possível clicar e baixar; registrar NO-GO desse subfluxo.
+6. Conferir o janitor privado em reinício, symlinks, arquivos de outros serviços e TTL 1h. Não ativar cron global e não apagar outros arquivos.
+
+## Gate D — recibo final e stop
+
+Entregar somente:
+- SHA da branch, PASS/FAIL/UNKNOWN por Gate A–C, testes nativos Node/PHP/MySQL, contagens sintéticas, comparativo OAuth e status de entrega privada;
+- divergências de regra financeira, jurídico, status dos pedidos ou esquema; indicação se bloqueiam a exportação real;
+- comandos locais efetivamente usados e tempo (não inventar), nenhuma PII ou segredos;
+- decisão técnica GO para QA (se todos os critérios locais passaram), mas LIVE EXPORT continua NO-GO até aprovação do gestor, prova de base legal, transporte de arquivo privado e canário controlado.
+
+NÃO fazer merge, deploy, publicar GitHub Actions, chamar Meta Ads, criar público, exportar contatos reais, enviar mensagem, modificar CRM legado, PrintServer, Gameplay, Z-API ou DNS. Não pedir nova autorização apenas para testes 100% sintéticos; pedir autorização separada se necessidade REAL em VPS/CRM.
+
+Fonte canônica: docs/META_AUDIENCE_P25_2_FORENSIC_REVIEW_20261029.md; docs/META_CUSTOMER_LIST_CSV_SPEC_20261029.md e docs/META_AUDIENCE_DATA_MODEL_FORENSIC_20261029.md.
+
+---
+
 # ANTIGRAVITY — AJUSTES P25.1 META CSV (EXECUTAR PRIMEIRO)
 
 **ESTE BLOCO SUPERA QUALQUER REFERÊNCIA V2 ANTIGA ABAIXO.**
