@@ -35,11 +35,13 @@ test('P0: business status keys from Laravel OrderStatus include refunded and cha
  assert.match(reader,/unexpected_transaction_isolation/);
 });
 
-test('P0: legal approval must be server-side and missing approval never returns records',async()=>{
+test('P25.5: CRM audience uses one approved-purpose code and keeps opt-out checks',async()=>{
  const s=await source('scripts/crm-meta-audience-read.php');
- assert.match(s,/EVYD_META_AUDIENCE_LGPD_APPROVED/);
- assert.match(s,/EVYD_META_AUDIENCE_LGPD_POLICY_REF/);
- assert.match(s,/legal_basis_not_verified/);
+ assert.match(s,/unsupported_audience_purpose/);
+ assert.match(s,/legitimate_interest_customer_reactivation_with_optout_check/);
+ assert.doesNotMatch(s,/EVYD_META_AUDIENCE_LGPD_APPROVED/);
+ assert.doesNotMatch(s,/EVYD_META_AUDIENCE_LGPD_POLICY_REF/);
+ assert.match(s,/CommunicationSuppressionEvaluator::class/);
  const check=s.indexOf('if (!$legalBasisVerified)');
  const customers=s.indexOf("DB::table('customers')");
  assert.ok(check>0&&customers>check);
