@@ -67,3 +67,16 @@ Um código de falha de hash HMAC ou relação comercial é seguro para auditoria
 - Gate F: limpeza garantida de arquivos CSV ociosos em VPS exige job local específico; timer em processo + limpeza na próxima export não garante deleção após restart sem nova exportação.
 
 Decisão: P25.3_SOURCE_FIXES_APPLIED / NODE_AND_PHP_LOCAL_QA_PENDING / SQL_HOMOLOGATION_UNKNOWN / CHATGPT_DOWNLOAD_NOT_READY / LIVE_EXPORT_NO_GO / META_UPLOAD_NO_GO. A PR #23 permanece DRAFT.
+
+
+## 8. Correção adicional P25.3.1 — quarentena por identidade (sem relaxar proteção)
+
+- Um status incerto, chargeback/refund pago ou histórico sem status marca o customer como ambiguous e purchase_check_status unavailable. Isso NÃO significa "não comprou".
+- Antes, um único customer com purchase_check_status unavailable fazia a função buildMetaAudienceCsv rejeitar o corpus inteiro. Agora o transformador só tolera essa incerteza quando identity_status ambiguous/unknown, que exclui o grupo inteiro antes de escrever o CSV. Status de suppressions ou permissão legal unavailable CONTINUA bloqueando o lote globalmente.
+- Se um proposal_dispatch tem resolved_customer_id de customer ambíguo, ou matched_customer_count > 1, ou resolução explicitamente ambígua, também é marcado ambiguous. IDs e telefones vinculados são excluídos transitivamente. O dispatch deve ainda pertencer a selected_campaign_id do flow Natal.
+- Teste sintético adicionado: customer com compra incerta não entra no arquivo, mas outro cliente comprovadamente elegível permanece. Isso reduz o risco de bloquear toda a operação do gestor por uma única exceção financeira sem anunciar a pessoa incerta.
+- O guard de upload também exige pelo menos 100 pessoas elegíveis distintas, além de 100 telefones válidos: dois números do mesmo titular não contam como duas pessoas.
+- Na resposta MCP a prévia explica a próxima ação. A exportação informa download_available_in_chat=false; arquivo_id e path interno não são link.
+- Novo total de testes não pode ser inferido da passagem histórica 342/342: Antigravity deve executar e publicar o recibo atualizado do HEAD da PR #23.
+
+**Risco aberto:** Um dispatch sem customer_id com telefone diferente daquele do comprador pode não ser conciliável. Não criar equivalência por último oito dígitos. Os flags de ambiguidade e quarentena só cobrem relacionamentos verificáveis; validação SQL real e de fontes de identidade ainda obrigatória antes de produção.
