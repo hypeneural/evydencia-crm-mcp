@@ -6,7 +6,8 @@ export const CAMPAIGN_FORENSIC_TOOL_NAMES=Object.freeze([
  'crm_campanha_atividade_evidencias',
  'crm_campanha_voz_diagnostico',
  'crm_campanhas_saude_operacional',
- 'crm_campanhas_execucoes_buscar'
+ 'crm_campanhas_execucoes_buscar',
+ 'crm_campanhas_telefones_consultar_lote'
 ]);
 
 export function registerCampaignForensicTools({reg,client,z,readAnnotations,requiredScope}){
@@ -36,6 +37,25 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
   voice_counts:z.array(z.looseObject({})),
   coverage:z.looseObject({})
  });
+
+ const OUT_BATCH=z.looseObject({
+  contract_version:z.literal('campaign-audit.v1'),
+  source:z.literal('CRM_CANONICAL_READ_ONLY'),
+  inputs:z.array(z.looseObject({})),
+  rows:z.array(z.looseObject({})),
+  has_more:z.boolean(),
+  next_cursor:z.string().nullable(),
+  coverage:z.looseObject({})
+ });
+ reg('crm_campanhas_telefones_consultar_lote','Localizar campanhas de até 50 telefones',
+  'Consulta somente leitura por telefones E.164 ou nacionais. Elimina entradas duplicadas, preserva variantes legadas apenas como candidatas e retorna atividades, NÃO comprova envio ou entrega. Para saber se SMS, e-mail, WhatsApp ou voz chegaram, passe cada contact_id a detalhe/evidências. Nunca use essa ferramenta para disparar mensagens.',
+  z.object({
+   telefones:z.array(z.string().min(8).max(40)).min(1).max(50),
+   campaign_id:z.number().int().positive().optional(),
+   from_date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+   limit:z.number().int().min(1).max(100).default(50),
+   cursor:z.string().regex(/^[1-9]\d*$/).optional()
+  }),OUT_BATCH,async(filters)=>client.lookup(filters),readAnnotations,access);
 
  const OUT_SEARCH=z.looseObject({
   contract_version:z.literal('campaign-audit.v1'),
