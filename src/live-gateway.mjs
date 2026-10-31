@@ -359,6 +359,16 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
 function summarizeToolResult(tool,res){
  if(!res||typeof res!=='object')return `OK [${tool}]: resposta concluída em structuredContent.`;
  switch(tool){
+  case 'crm_campanhas_execucoes_buscar':
+   return `Busca de campanhas: ${res.rows?.length??0} atividades nesta página; há mais registros: ${res.has_more?'sim':'não'}. O estado encerrado não confirma entrega integral. Abra uma atividade para verificar evidências.`;
+  case 'crm_campanha_atividade_detalhe':
+   return `Atividade ${res.contact_id}: ${res.progress?.completed??'n/d'} etapas concluídas de ${res.plan?.stage_count??'total não capturado'}. Estado ${res.progress?.state??'indisponível'}; conclusão comprovada: ${res.progress?.verified_complete?'sim':'não'}. Os totais de canal são preliminares; consulte itens e callbacks.`;
+  case 'crm_campanha_atividade_evidencias':
+   return `Evidências ${res.kind} da atividade ${res.contact_id}: ${res.rows?.length??0} registros; mais páginas: ${res.has_more?'sim':'não'}. Consulte structuredContent para códigos e horários; ausência de evento só vale para o filtro e período consultados.`;
+  case 'crm_campanha_voz_diagnostico':
+   return `Voz da atividade ${res.contact_id}: ${res.resumo_gestor??'status não verificado'} Saúde atual SmartVoice não consultada. ${res.proxima_verificacao??''}`;
+  case 'crm_campanhas_saude_operacional':
+   return `Operação dos provedores: ${res.provider_accounts?.length??0} contas analisadas nas últimas 24h; sem sonda de conectividade atual. Consulte structuredContent para erros HTTP e callbacks por conta.`;
   case 'crm_capacidades':
    return `OK [crm_capacidades]: versao=${res.version}, commit=${res.build_commit}, modo=${res.mode}, ativas=${res.tools_active_count}/${res.tools_total_catalog} (legado_v012_preservadas=${res.legacy_v012_tools_preserved_count??res.tools_active_count}).`;
   case 'crm_status':
