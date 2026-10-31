@@ -101,3 +101,21 @@ test('global search is GET-only, cursor bounded and pages retain incompleteness'
  await assert.rejects(reader.search({campaign_id:415,from_date:'2026-02-30'}),/invalid_filters/);
  await assert.rejects(reader.search({campaign_id:415,cursor:'5 OR 5=5'}),/invalid_filters/);
 });
+
+test('batch phone lookup uses only fixed read-only POST and rejects oversize inputs',async()=>{
+ const seen=[];
+ const reader=client(async(url,opts)=>{
+  seen.push({url:String(url),method:opts.method,body:JSON.parse(opts.body)});
+  return envelope({contract_version:'campaign-audit.v1',source:'CRM_CANONICAL_READ_ONLY',
+   inputs:[{index:0,status:'normalized'}],rows:[],
+   has_more:false,next_cursor:null,coverage:{matching_rows:'page_exhausted'}});
+ });
+ const data=await reader.lookup({telefones:['48999990001'],campaign_id:415,limit:10});
+ assert.equal(data.coverage.matching_rows,'page_exhausted');
+ assert.equal(seen.length,1);
+ assert.equal(seen[0].method,'POST');
+ assert.equal(new URL(seen[0].url).pathname,'/api/v1/extension/campaign-audit/lookup');
+ assert.deepEqual(seen[0].body.telefones,['48999990001']);
+ await assert.rejects(reader.lookup({telefones:Array(51).fill('48999990001')}),/invalid_filters/);
+ assert.equal(seen.length,1);
+});
