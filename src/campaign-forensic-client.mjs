@@ -102,17 +102,17 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
    throw Error('crm_campaign_audit_invalid_filters');
   if(scheduled_status!==undefined&&!['scheduled','paused','completed','aborted'].includes(scheduled_status))
    throw Error('crm_campaign_audit_invalid_filters');
-  if(from_date!==undefined&&(!/^\\d{4}-\\d{2}-\\d{2}$/.test(from_date)||
+  if(from_date!==undefined&&(!/^\d{4}-\d{2}-\d{2}$/.test(from_date)||
     !Number.isFinite(Date.parse(from_date))||new Date(from_date).toISOString().slice(0,10)!==from_date))
    throw Error('crm_campaign_audit_invalid_filters');
   if(!Number.isSafeInteger(limit)||limit<1||limit>50||
-    (cursor!==undefined&&(!/^[1-9]\\d*$/.test(String(cursor))||
+    (cursor!==undefined&&(!/^[1-9]\d*$/.test(String(cursor))||
       !Number.isSafeInteger(Number(cursor)))))
    throw Error('crm_campaign_audit_invalid_filters');
   const r=await get('/api/v1/extension/campaign-audit/activities',
    {campaign_id,scheduled_status,from_date,limit,cursor});
   if(!Array.isArray(r.rows)||r.rows.length>limit||typeof r.has_more!=='boolean'||
-    (r.has_more&&(!r.next_cursor||!/^[1-9]\\d*$/.test(r.next_cursor))))
+    (r.has_more&&(!r.next_cursor||!/^[1-9]\d*$/.test(r.next_cursor))))
    throw contractError();
   return r;
  }
