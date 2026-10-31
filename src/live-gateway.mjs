@@ -67,6 +67,20 @@ const PRINT_WRITE={readOnlyHint:false,destructiveHint:true,idempotentHint:true,o
 const SAFE_ERR=/^(malotes_[a-z0-9_]+|gameplay_[a-z0-9_]+|printserver_[a-z0-9_]+|crm_[a-z0-9_]+|invalid_[a-z0-9_]+|legacy_read_[a-z0-9_]+|insufficient_operator_[a-z0-9_]+|operator_token_revoked|crm_meta_audience_[a-z0-9_]+|operator_confirmation_required|zapi_[a-z0-9_]+|(?:natal|forensic)_bridge_[a-z0-9_]+|natal_stats_unavailable|EXPORT_BLOCKED_[A-Z0-9_]+|META_CSV_[A-Z0-9_]+)$/;
 
 function classifyToolError(code){
+ if(code.startsWith('crm_campaign_audit_')){
+  if(code==='crm_campaign_audit_forbidden')return {error_category:'UNAUTHORIZED',
+   hint:'Token ou ability de auditoria não concedidos. Não interprete como ausência de atividades.'};
+  if(code==='crm_campaign_audit_not_found')return {error_category:'NOT_FOUND'};
+  if(code==='crm_campaign_audit_rate_limited')return {error_category:'RATE_LIMITED'};
+  if(code==='crm_campaign_audit_timeout')return {error_category:'TIMEOUT'};
+  if(['crm_campaign_audit_contract_invalid','crm_campaign_audit_invalid_json',
+   'crm_campaign_audit_invalid_content_type','crm_campaign_audit_response_too_large'].includes(code))
+   return {error_category:'CONTRACT_MISMATCH'};
+  if(['crm_campaign_audit_invalid_contact_id','crm_campaign_audit_invalid_filters',
+    'crm_campaign_audit_invalid_path','crm_campaign_audit_invalid_timeout'].includes(code))
+   return {error_category:'INVALID_INPUT'};
+  return {error_category:'UNAVAILABLE',hint:'Auditoria indisponível ou desativada; não conclua que nenhuma mensagem foi enviada.'};
+ }
  if(code==='crm_meta_audience_snapshot_changed_review_again'){
   return {error_category:'CONFLICT',
    hint:'A base mudou após a prévia. Solicite uma nova prévia e confirme novamente; nenhum CSV antigo foi liberado.'};
