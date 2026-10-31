@@ -13,6 +13,11 @@ const create=()=>{
  const registered=new Map(),calls=[];
  const client={
   activity:async(id)=>{calls.push(['activity',id]);return activity;},
+  lookup:async(filters)=>({contract_version:'campaign-audit.v1',
+   source:'CRM_CANONICAL_READ_ONLY',
+   inputs:filters.telefones.map((p,i)=>({index:i,status:'normalized'})),
+   rows:[],has_more:false,next_cursor:null,
+   coverage:{matching_rows:'page_exhausted',message_delivery:'not_queried'}}),
   search:async(filters)=>({contract_version:'campaign-audit.v1',
    source:'CRM_CANONICAL_READ_ONLY',filters,rows:[
     {contact_id:101,scheduled_id:201,campaign_id:415,contact_status:'done',
@@ -37,7 +42,7 @@ const create=()=>{
  return {registered,calls};
 };
 
-test('registers five explicitly read-only, bounded tools',()=>{
+test('registers six explicitly read-only, bounded tools',()=>{
  const r=create();
  assert.deepEqual([...r.registered.keys()],CAMPAIGN_FORENSIC_TOOL_NAMES);
  for(const t of r.registered.values()){
@@ -86,5 +91,15 @@ test('global search reports recorded status without claiming successful delivery
  assert.equal(r.rows[0].scheduled_status,'completed');
  assert.equal(r.data_quality.phone_lookup,'not_included');
  assert.equal(r.has_more,false);
+ assert.equal(t.output.safeParse(r).success,true);
+});
+
+test('phone lookup does not claim delivery and retains input references',async()=>{
+ const {registered}=create();
+ const t=registered.get('crm_campanhas_telefones_consultar_lote');
+ const r=await t.handler({telefones:['48999990001','48999990001'],limit:20});
+ assert.equal(r.inputs.length,2);
+ assert.equal(r.rows.length,0);
+ assert.equal(r.coverage.message_delivery,'not_queried');
  assert.equal(t.output.safeParse(r).success,true);
 });
