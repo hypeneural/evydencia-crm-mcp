@@ -5,7 +5,8 @@ export const CAMPAIGN_FORENSIC_TOOL_NAMES=Object.freeze([
  'crm_campanha_atividade_detalhe',
  'crm_campanha_atividade_evidencias',
  'crm_campanha_voz_diagnostico',
- 'crm_campanhas_saude_operacional'
+ 'crm_campanhas_saude_operacional',
+ 'crm_campanhas_execucoes_buscar'
 ]);
 
 export function registerCampaignForensicTools({reg,client,z,readAnnotations,requiredScope}){
@@ -35,6 +36,25 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
   voice_counts:z.array(z.looseObject({})),
   coverage:z.looseObject({})
  });
+
+ const OUT_SEARCH=z.looseObject({
+  contract_version:z.literal('campaign-audit.v1'),
+  source:z.literal('CRM_CANONICAL_READ_ONLY'),
+  filters:z.looseObject({}),
+  rows:z.array(z.looseObject({})),
+  has_more:z.boolean(),
+  next_cursor:z.string().nullable(),
+  data_quality:z.looseObject({})
+ });
+ reg('crm_campanhas_execucoes_buscar','Localizar atividades de campanhas sem informar telefone',
+  'Consulta global somente leitura e paginada. Se campaign_id for omitido busca todas as campanhas dentro do período a partir de from_date (padrão 30 dias). Não revela nomes ou números; retorna IDs e links para investigação detalhada. completed é estado registrado e não prova entrega da régua. Leia data_quality e has_more antes de concluir ausência de casos.',
+  z.object({
+   campaign_id:z.number().int().positive().optional(),
+   scheduled_status:z.enum(['scheduled','paused','completed','aborted']).optional(),
+   from_date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+   limit:z.number().int().min(1).max(50).default(30),
+   cursor:z.string().regex(/^[1-9]\d*$/).optional()
+  }),OUT_SEARCH,async(filters)=>client.search(filters),readAnnotations,access);
 
  const OUT_HEALTH=z.looseObject({
   contract_version:z.literal('campaign-audit.v1'),
