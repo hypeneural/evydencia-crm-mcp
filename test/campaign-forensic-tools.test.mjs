@@ -9,7 +9,7 @@ const activity={
  channels:[{channel:'voice',provider:'smartvoice',items:1,delivered:0,failed:1}],
  coverage:{plan:'captured'},activity_url:'/gestao/campanhas/atividades/22/detalhes'
 };
-const create=()=>{
+const create=({audioCompleted=false}={})=>{
  const registered=new Map(),calls=[];
  const client={
   activity:async(id)=>{calls.push(['activity',id]);return activity;},
@@ -31,7 +31,9 @@ const create=()=>{
     channel:opts.channel??null,rows:opts.kind==='items'?[
      {id:91,provider:'smartvoice',status:'failed',outbox_status:'failed',
       error_code:'business_attempt_already_registered',provider_message_id:'synthetic-command-91'}
-    ]:[{id:100,delivery_item_id:91,attempt_number:1,http_status:409,error_code:'business_attempt_already_registered'}],
+    ]:opts.kind==='events'
+      ?(audioCompleted?[{id:102,delivery_item_id:91,event_type:'voice_audio_completed'}]:[])
+      :[{id:100,delivery_item_id:91,attempt_number:1,http_status:409,error_code:'business_attempt_already_registered'}],
     has_more:false,next_cursor:null,coverage:'page_exhausted'};
   }
  };
@@ -57,15 +59,16 @@ test('voice diagnostic does not imply audio completed or current provider health
  const tool=registered.get('crm_campanha_voz_diagnostico');
  const data=await tool.handler({contact_id:11});
  assert.equal(data.provider_health,'not_queried');
- assert.equal(data.audio_completed,'not_verified_from_item_summary');
+ assert.equal(data.audio_completed,'not_verified');
  assert.equal(data.latest_recorded_voice_attempt.http_status,409);
  assert.equal(data.latest_attempt_matches_latest_item,true);
  assert.match(data.resumo_gestor,/409/);
  assert.match(data.proxima_verificacao,/Conciliar/);
  assert.equal(data.latest_recorded_voice_item.status,'failed');
- assert.deepEqual(calls.map(x=>x[0]),['activity','evidence','evidence']);
+ assert.deepEqual(calls.map(x=>x[0]),['activity','evidence','evidence','evidence']);
  assert.equal(calls[1][2].channel,'voice');
  assert.equal(calls[2][2].channel,'voice');
+ assert.equal(calls[3][2].kind,'events');
  assert.equal(tool.output.safeParse(data).success,true);
 });
 
@@ -103,4 +106,12 @@ test('phone lookup does not claim delivery and retains input references',async()
  assert.equal(r.rows.length,0);
  assert.equal(r.coverage.message_delivery,'not_queried');
  assert.equal(t.output.safeParse(r).success,true);
+});
+
+test('voice audio completion requires correlated event from exact item',async()=>{
+ const {registered}=create({audioCompleted:true});
+ const r=await registered.get('crm_campanha_voz_diagnostico').handler({contact_id:11});
+ assert.equal(r.audio_completed,'confirmed_for_latest_item');
+ assert.equal(r.dtmf_confirmed,'not_verified');
+ assert.equal(r.coverage.voice_events,'page_exhausted');
 });
