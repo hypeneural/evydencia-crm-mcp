@@ -39,7 +39,7 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
  if(!Number.isInteger(timeoutMs)||timeoutMs<100||timeoutMs>60000)throw Error('crm_campaign_audit_invalid_timeout');
  async function get(path,params={}){
   // Fixed prefixes and validated path parameters; no arbitrary URL or redirect.
-  if(path!=='/api/v1/extension/campaign-audit/health' && !/^\/api\/v1\/extension\/campaign-audit\/activities\/[1-9][0-9]*(?:\/evidence)?$/.test(path))
+  if(path!=='/api/v1/extension/campaign-audit/health' && path!=='/api/v1/extension/campaign-audit/activities' && !/^\/api\/v1\/extension\/campaign-audit\/activities\/[1-9][0-9]*(?:\/evidence)?$/.test(path))
    throw Error('crm_campaign_audit_invalid_path');
   const url=new URL(root+path);
   for(const [key,value] of Object.entries(params)){
@@ -65,7 +65,7 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
    const json=await boundedJson(response);
    if(json?.schema_version!=='1.0'||!json.data||
       json.data.contract_version!=='campaign-audit.v1'||
-      (path!=='/api/v1/extension/campaign-audit/health' &&
+      (path!=='/api/v1/extension/campaign-audit/health' && path!=='/api/v1/extension/campaign-audit/activities' &&
        (typeof json.data.contact_id!=='number'||!Number.isSafeInteger(json.data.contact_id)))||
       typeof json.generated_at!=='string'||!Number.isFinite(Date.parse(json.generated_at)))
     throw contractError();
@@ -97,6 +97,25 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
   if(r.rows.length>limit)throw contractError();
   return r;
  }
+ async function search({campaign_id,scheduled_status,from_date,limit=30,cursor}={}){
+  if(campaign_id!==undefined&&(!Number.isSafeInteger(campaign_id)||campaign_id<1))
+   throw Error('crm_campaign_audit_invalid_filters');
+  if(scheduled_status!==undefined&&!['scheduled','paused','completed','aborted'].includes(scheduled_status))
+   throw Error('crm_campaign_audit_invalid_filters');
+  if(from_date!==undefined&&(!/^\\d{4}-\\d{2}-\\d{2}$/.test(from_date)||
+    !Number.isFinite(Date.parse(from_date))||new Date(from_date).toISOString().slice(0,10)!==from_date))
+   throw Error('crm_campaign_audit_invalid_filters');
+  if(!Number.isSafeInteger(limit)||limit<1||limit>50||
+    (cursor!==undefined&&(!/^[1-9]\\d*$/.test(String(cursor))||
+      !Number.isSafeInteger(Number(cursor)))))
+   throw Error('crm_campaign_audit_invalid_filters');
+  const r=await get('/api/v1/extension/campaign-audit/activities',
+   {campaign_id,scheduled_status,from_date,limit,cursor});
+  if(!Array.isArray(r.rows)||r.rows.length>limit||typeof r.has_more!=='boolean'||
+    (r.has_more&&(!r.next_cursor||!/^[1-9]\\d*$/.test(r.next_cursor))))
+   throw contractError();
+  return r;
+ }
  async function health(){
   const r=await get('/api/v1/extension/campaign-audit/health');
   if(r.source!=='CRM_PASSIVE_OPERATIONAL_EVIDENCE'||
@@ -105,5 +124,5 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
    throw contractError();
   return r;
  }
- return {activity,evidence,health};
+ return {activity,evidence,search,health};
 }
