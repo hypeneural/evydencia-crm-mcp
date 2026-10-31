@@ -223,7 +223,7 @@ const LIVE_CATALOG=Object.freeze([
  {tool:'crm_relatorio_clientes_natal',capability:'natal_customers_segmentation',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_legacy_api',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct})=>direct},
  {tool:'crm_clientes_buscar',capability:'customers_and_leads_search',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:true,supports_history:false,when:({direct,full})=>Boolean(direct&&full)},
  {tool:'crm_propostas_natal_consultar_lote',capability:'natal_proposal_history_batch',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:true,supports_pagination:false,supports_history:true,when:({direct,full})=>Boolean(direct&&full)},
- ...CAMPAIGN_FORENSIC_TOOL_NAMES.map(name=>({tool:name,capability:name,access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_campaign_forensic_api',supports_filters:true,supports_pagination:name==='crm_campanha_atividade_evidencias',supports_history:true,when:({campaignAudit})=>campaignAudit})),
+ ...CAMPAIGN_FORENSIC_TOOL_NAMES.map(name=>({tool:name,capability:name,access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_campaign_forensic_api',supports_filters:true,supports_pagination:['crm_campanha_atividade_evidencias','crm_campanhas_execucoes_buscar','crm_campanhas_telefones_consultar_lote'].includes(name),supports_history:true,when:({campaignAudit})=>campaignAudit})),
  {tool:'crm_meta_publico_natal_previa',capability:'meta_audience_natal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_direct_forensic_bridge',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,metaAudience})=>Boolean(direct&&metaAudience)},
  {tool:'crm_meta_publico_natal_exportar',capability:'meta_audience_natal_export',access:'write_idempotent',required_scope:GATEWAY_SCOPE+'+'+SCOPE_AUDIENCE_EXPORT,source:'crm_direct_forensic_bridge',supports_filters:false,supports_pagination:false,supports_history:false,when:({direct,metaAudience})=>Boolean(direct&&metaAudience)},
  {tool:'crm_previa_proposta_natal',capability:'natal_proposal_preview',access:'read',required_scope:GATEWAY_SCOPE,source:'crm_extension_api',supports_filters:true,supports_pagination:false,supports_history:false,when:({full})=>Boolean(full)},
@@ -359,6 +359,8 @@ function manifest(directEnabled=false,operatorFullCrm=false,zapiContext=null,{ui
 function summarizeToolResult(tool,res){
  if(!res||typeof res!=='object')return `OK [${tool}]: resposta concluída em structuredContent.`;
  switch(tool){
+  case 'crm_campanhas_telefones_consultar_lote':
+   return `Consulta de telefones: ${res.inputs?.length??0} entradas, ${res.rows?.length??0} atividades candidatas nesta página, mais páginas: ${res.has_more?'sim':'não'}. Identidade e entrega NÃO estão comprovadas; abra as atividades e confira os callbacks.`;
   case 'crm_campanhas_execucoes_buscar':
    return `Busca de campanhas: ${res.rows?.length??0} atividades nesta página; há mais registros: ${res.has_more?'sim':'não'}. O estado encerrado não confirma entrega integral. Abra uma atividade para verificar evidências.`;
   case 'crm_campanha_atividade_detalhe':
