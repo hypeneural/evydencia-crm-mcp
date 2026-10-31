@@ -85,3 +85,19 @@ test('activity outside returned contact ID is rejected',async()=>{
  const c=client(async()=>envelope({...activityData,contact_id:999}));
  await assert.rejects(c.activity(101),/contract_invalid/);
 });
+
+test('global search is GET-only, cursor bounded and pages retain incompleteness',async()=>{
+ let seen=null;
+ const fx={contract_version:'campaign-audit.v1',source:'CRM_CANONICAL_READ_ONLY',
+  filters:{campaign_id:415,limit:10},rows:[{contact_id:88,scheduled_id:99}],
+  has_more:true,next_cursor:'88',data_quality:{phone_lookup:'not_included'}};
+ const reader=client(async(url,opts)=>{seen={url:String(url),method:opts.method};return envelope(fx)});
+ const data=await reader.search({campaign_id:415,from_date:'2026-10-01',limit:10,cursor:'99'});
+ assert.equal(data.has_more,true);
+ assert.equal(data.next_cursor,'88');
+ assert.equal(seen.method,'GET');
+ assert.match(seen.url,/campaign_id=415/);
+ assert.match(seen.url,/from_date=2026-10-01/);
+ await assert.rejects(reader.search({campaign_id:415,from_date:'2026-02-30'}),/invalid_filters/);
+ await assert.rejects(reader.search({campaign_id:415,cursor:'5 OR 5=5'}),/invalid_filters/);
+});
