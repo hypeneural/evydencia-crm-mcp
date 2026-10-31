@@ -128,7 +128,9 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
     error_category:latestAttempt.error_category,error_code:latestAttempt.error_code,
     started_at:latestAttempt.started_at,finished_at:latestAttempt.finished_at
    }:null;
-   const conflict409=latestAttempt?.http_status===409;
+   const attemptMatchesItem=Boolean(latestItem&&latestAttempt&&
+    Number(latestAttempt.delivery_item_id)===Number(latestItem.id));
+   const conflict409=attemptMatchesItem&&Number(latestAttempt.http_status)===409;
    const humanSummary=!latestItem
     ?'Nenhum item de ligação registrado nesta atividade; confira se há etapa de voz prevista.'
     :conflict409
@@ -140,9 +142,13 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
        :'Existe atividade de voz registrada; o resultado final ainda precisa ser comprovado.';
    const suggestedAction=conflict409
     ?'Conciliar o identificador do mesmo comando pela leitura SmartVoice antes de qualquer nova ação.'
-    :'Consultar os eventos de voz e a etapa correspondente para confirmar o resultado.';
+    :latestAttempt&&!attemptMatchesItem
+     ?'A última tentativa HTTP pertence a outro item de voz; abra as evidências por ID antes de associar a falha.'
+     :'Consultar os eventos de voz e a etapa correspondente para confirmar o resultado.';
    return {
     resumo_gestor:humanSummary,proxima_verificacao:suggestedAction,
+    latest_attempt_matches_latest_item:attemptMatchesItem,
+    last_voice_item_ordering:'delivery_item_id_desc_not_provider_event_time',
     source:'CRM_CANONICAL_READ_ONLY',contact_id,
     provider_health:'not_queried',
     latest_recorded_voice_item:cleanItem,
