@@ -16,13 +16,16 @@ que ainda não estão na `main`. PR deve ser reconciliada com #28 e #24 antes de
    `audio_completed=not_verified_from_item_summary`: não confundir com disponibilidade
    atual nem comprovação de áudio completo.
 
-4. `crm_campanhas_saude_operacional({})` — últimos sinais por conta de integração: tentativas HTTP, callbacks e erros em 24h; não é prova de saúde online.\n\nTodas readOnlyHint=true, destructiveHint=false, openWorldHint=false; acesso
+4. `crm_campanhas_saude_operacional({})` — últimos sinais por conta de integração: tentativas HTTP, callbacks e erros em 24h; não é prova de saúde online.
+
+Todas readOnlyHint=true, destructiveHint=false, openWorldHint=false; acesso
 `crm.read` no gateway + **ability específica** `extension:campaign-audit-read`
 validada pelo backend. São apenas dicas de ferramenta: a permissão real é do CRM.
 
-A ferramenta atual `crm_propostas_natal_consultar_lote` ainda serve para
-**localizar o `contact_id` de até 50 telefones**. A partir daí, o detalhe e
-as evidências novas permitem acompanhar o histórico longo em páginas.
+5. `crm_campanhas_execucoes_buscar({campaign_id?,scheduled_status?,from_date?,cursor?,limit?})` — busca global paginada por campanha e estado registrado, limitada ao período (30 dias por padrão, 366 dias no máximo). `completed` não comprova entrega.
+6. `crm_campanhas_telefones_consultar_lote({telefones,campaign_id?,from_date?,limit?,cursor?})` — localização read-only por até 50 telefones, deduplicação E.164, variantes legadas marcadas como candidatas; NÃO comprova envio.
+
+A ferramenta legada `crm_propostas_natal_consultar_lote` continua disponível em paralelo até substituição homologada. Para confirmar entrega, use `contact_id` devolvido e consulte detalhe/evidências.
 
 ## Semântica e limites
 
@@ -44,12 +47,10 @@ as evidências novas permitem acompanhar o histórico longo em páginas.
 
 ## Contratos técnicos
 
-`src/campaign-forensic-client.mjs` usa somente endpoints GET fixos em
-`/api/v1/extension/campaign-audit/activities/{contactId}` e
-`/evidence`, HTTPS/localhost, bearer da conexão autenticada, redirects proibidos,
+`src/campaign-forensic-client.mjs` usa GET fixos em `/activities`, `/activities/{contactId}`, `/evidence` e `/health`, e um único POST de CONSULTA em `/campaign-audit/lookup` (até 50 telefones), HTTPS/localhost, bearer autenticado, redirects proibidos,
 timeout configurável, corpo máximo 768 KiB e validação de envelope.
 
-`src/campaign-forensic-tools.mjs` registra os três tools com descrições de
+`src/campaign-forensic-tools.mjs` registra seis ferramentas com descrições de
 seleção por intenção, input/output Zod e anotação estritamente read-only.
 
 `src/live-gateway.mjs`: inclusão cirúrgica do registrador e catálogo; não altera
@@ -67,9 +68,7 @@ rotina de envio nem `proposal-intent-journal`.
 - Testar que o catálogo MCP continua íntegro (PrintServer, Z-API, Meta, Gameplay,
   CRM proposal), que erros 401/403/429/503 são diferentes e que nenhum POST comercial
   ocorre em reads.
-- Projetar leaf posterior (CRM #469/MCP #29) de `lookup` por múltiplos telefones,
-  pesquisa global por campanha, anomalias, callbacks órfãos e indicadores de saúde
-  de workers/provedores em endpoints autenticados. Não implementar diagnóstico
+- Lookup por múltiplos telefones e pesquisa global por campanha já estão implementados nesta branch; permanece necessário homologá-los com MySQL sintético, índices e isolamento de operadores. Detectores de anomalias, callbacks órfãos e saúde atual de workers/provedores exigem uma leaf posterior. Não implementar diagnóstico
   de disponibilidade usando resultados de mensagens passadas.
 
 ## Documentação oficial
