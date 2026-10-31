@@ -108,7 +108,21 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
     error_category:latestAttempt.error_category,error_code:latestAttempt.error_code,
     started_at:latestAttempt.started_at,finished_at:latestAttempt.finished_at
    }:null;
+   const conflict409=latestAttempt?.http_status===409;
+   const humanSummary=!latestItem
+    ?'Nenhum item de ligação registrado nesta atividade; confira se há etapa de voz prevista.'
+    :conflict409
+     ?'Conflito HTTP 409 na última tentativa de voz. Não comprova ligação completada nem autoriza rediscagem.'
+     :latestItem.answered_at
+      ?'Atendimento registrado; a reprodução integral do áudio ainda exige confirmação independente.'
+      :latestItem.status==='failed'
+       ?'Há falha registrada na última ligação. Consulte as tentativas e o retorno do SmartVoice.'
+       :'Existe atividade de voz registrada; o resultado final ainda precisa ser comprovado.';
+   const suggestedAction=conflict409
+    ?'Conciliar o identificador do mesmo comando pela leitura SmartVoice antes de qualquer nova ação.'
+    :'Consultar os eventos de voz e a etapa correspondente para confirmar o resultado.';
    return {
+    resumo_gestor:humanSummary,proxima_verificacao:suggestedAction,
     source:'CRM_CANONICAL_READ_ONLY',contact_id,
     provider_health:'not_queried',
     latest_recorded_voice_item:cleanItem,
