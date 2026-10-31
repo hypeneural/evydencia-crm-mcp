@@ -56,6 +56,38 @@ seleção por intenção, input/output Zod e anotação estritamente read-only.
 `src/live-gateway.mjs`: inclusão cirúrgica do registrador e catálogo; não altera
 rotina de envio nem `proposal-intent-journal`.
 
+## Roteamento eficiente para o ChatGPT
+
+O agente deve escolher a ferramenta pelo objetivo, sem consultar repositório/SSH:
+- "Quais campanhas/atividades existem e quais estão encerradas?" →
+  `crm_campanhas_execucoes_buscar`; seguir o cursor enquanto `has_more`.
+- "Um ou até 50 telefones já têm campanha?" →
+  `crm_campanhas_telefones_consultar_lote`; deduplica E.164 e marca candidatos
+  de legado; jamais inferir entrega a partir do match.
+- "O que aconteceu nesta atividade?" →
+  `crm_campanha_atividade_detalhe`, depois
+  `crm_campanha_atividade_evidencias` por canal e tipo de fonte, com cursor.
+- "A última chamada do SmartVoice chegou e o áudio tocou?" →
+  `crm_campanha_voz_diagnostico`; compara a última tentativa HTTP com o
+  **mesmo delivery_item_id**, consulta eventos de voz e só confirma áudio/DTMF
+  quando existe evento explícito correlacionado. IDs diferentes não são
+  associados por aproximação.
+- "Serviços estão online e qual último disparo?" →
+  `crm_campanhas_saude_operacional` fornece **sinais passivos de 24 h**.
+  Nenhuma conclusão de conectividade/worker atual até existir sonda independente
+  autorizada. Eventos antigos não demonstram disponibilidade atual.
+- "Há erro de envio e devo reenviar?" → **Não reenviar** por ferramenta
+  forense; investigar idempotência e conciliação via Issue MCP #24.
+
+Todas ferramentas devem retornar `structuredContent` com os dados canônicos,
+`content` compacto em português, `isError=true` em falha, e informações de
+`coverage`/cursor/erro suficientes para não fabricar sucesso ou ausência.
+`readOnlyHint` é uma dica; Sanctum e OAuth conferem autorização real.
+Favor preservar nomes das ferramentas e schemas publicados, e ordenar catálogo
+deterministicamente. MCP 2026-07-28 e guia atual OpenAI:
+https://developers.openai.com/plugins/build/mcp-server ;
+https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/server/tools.mdx
+
 ## Dependências e gates
 
 - Backend CRM #469 deve ser publicado **antes**, após CI/QA e operador aprovar.
