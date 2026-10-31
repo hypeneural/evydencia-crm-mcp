@@ -31,6 +31,7 @@ as evidências novas permitem acompanhar o histórico longo em páginas.
 - WhatsApp `RECEIVED` comprova entrega e `READ` leitura; `READ_BY_ME`
   não comprova leitura pelo cliente.
 - SMS `DELIVRD` é o recibo de entrega; ausência de DLR é `unknown`.
+- Velip API v2: HTTP 200 e `return.status_code=0/OK` provam aceite de API, não DLR. `httpdup` evita duplicidade em janela e erro 244 indica duplicidade, exigindo reconciliação, não novo MakeSMS. Conferir retorno `WR` conforme `VelipSmsProvider`.
 - Resend `email.delivered` refere-se ao servidor destino; multi-destinatários
   podem ter resultados individuais desde 22/01/2026.
 - SmartVoice: 202 = comando `QUEUED`; 409 = conflito de identidade/tentativa;
@@ -76,6 +77,8 @@ rotina de envio nem `proposal-intent-journal`.
 - https://developers.openai.com/plugins/reference
 - https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 - https://v2.developer.z-api.io/
+- https://developers.velip.com.br/api/v2/getting-started/
+- https://developers.velip.com.br/api/v2/rate-limits/
 - https://resend.com/changelog/webhook-event-visibility
 
 Sem API de polling SmartVoice pública validada aqui; usar o contrato proprietário
