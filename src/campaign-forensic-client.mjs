@@ -116,6 +116,48 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
    throw contractError();
   return r;
  }
+ async function lookup({telefones,campaign_id,from_date,limit=50,cursor}={}){
+  if(!Array.isArray(telefones)||telefones.length<1||telefones.length>50||
+     !telefones.every(x=>typeof x==='string'&&x.length>=8&&x.length<=40))
+   throw Error('crm_campaign_audit_invalid_filters');
+  if(campaign_id!==undefined&&(!Number.isSafeInteger(campaign_id)||campaign_id<1))
+   throw Error('crm_campaign_audit_invalid_filters');
+  if(from_date!==undefined&&(!/^\d{4}-\d{2}-\d{2}$/.test(from_date)||
+    !Number.isFinite(Date.parse(from_date))||new Date(from_date).toISOString().slice(0,10)!==from_date))
+   throw Error('crm_campaign_audit_invalid_filters');
+  if(!Number.isSafeInteger(limit)||limit<1||limit>100||
+     (cursor!==undefined&&(!/^[1-9]\d*$/.test(String(cursor))||
+      !Number.isSafeInteger(Number(cursor)))))
+   throw Error('crm_campaign_audit_invalid_filters');
+  const ctrl=new AbortController(),timeout=setTimeout(()=>ctrl.abort(),timeoutMs);
+  try{
+   let response;
+   try{
+    response=await fetchFn(new URL(root+'/api/v1/extension/campaign-audit/lookup'),{
+     method:'POST',redirect:'error',signal:ctrl.signal,
+     headers:{Accept:'application/json','Content-Type':'application/json',
+      Authorization:'Bearer '+token},
+     body:JSON.stringify({telefones,campaign_id,from_date,limit,cursor})
+    });
+   }catch(e){
+    if(ctrl.signal.aborted||e?.name==='AbortError')throw Error('crm_campaign_audit_timeout');
+    throw Error('crm_campaign_audit_transport_unavailable');
+   }
+   if(response.redirected)throw Error('crm_campaign_audit_redirect_forbidden');
+   if([401,403].includes(response.status))throw Error('crm_campaign_audit_forbidden');
+   if(response.status===429)throw Error('crm_campaign_audit_rate_limited');
+   if(response.status===503)throw Error('crm_campaign_audit_disabled_or_unavailable');
+   if(!response.ok)throw Error('crm_campaign_audit_http_'+response.status);
+   const json=await boundedJson(response);
+   if(json?.schema_version!=='1.0'||json?.data?.contract_version!=='campaign-audit.v1'||
+    !Array.isArray(json.data.inputs)||!Array.isArray(json.data.rows)||
+    typeof json.data.has_more!=='boolean'||typeof json.generated_at!=='string'||
+    !Number.isFinite(Date.parse(json.generated_at))||
+    (json.data.has_more&&!/^[1-9]\d*$/.test(json.data.next_cursor||'')))
+    throw contractError();
+   return json.data;
+  }finally{clearTimeout(timeout)}
+ }
  async function health(){
   const r=await get('/api/v1/extension/campaign-audit/health');
   if(r.source!=='CRM_PASSIVE_OPERATIONAL_EVIDENCE'||
@@ -124,5 +166,5 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
    throw contractError();
   return r;
  }
- return {activity,evidence,search,health};
+ return {activity,evidence,search,lookup,health};
 }
