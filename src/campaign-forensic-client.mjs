@@ -83,14 +83,15 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
    throw contractError();
   return r;
  }
- async function evidence(contactId,{kind,limit=50,cursor}={}){
+ async function evidence(contactId,{kind,limit=50,cursor,channel}={}){
   const n=id(contactId);
-  if(!KINDS.has(kind)||!Number.isInteger(limit)||limit<1||limit>100
+  if(!KINDS.has(kind)||(channel!==undefined&&!['whatsapp','sms','email','voice'].includes(channel))
+   ||(channel!==undefined&&kind==='decisions')||!Number.isInteger(limit)||limit<1||limit>100
    ||(cursor!==undefined&&(!/^[1-9]\d*$/.test(String(cursor))||!Number.isSafeInteger(Number(cursor)))))
    throw Error('crm_campaign_audit_invalid_filters');
   const r=await get('/api/v1/extension/campaign-audit/activities/'+n+'/evidence',
-   {kind,limit,cursor});
-  if(r.contact_id!==n||r.kind!==kind||!Array.isArray(r.rows)||
+   {kind,limit,cursor,channel});
+  if(r.contact_id!==n||r.kind!==kind||(r.channel??null)!==(channel??null)||!Array.isArray(r.rows)||
     typeof r.has_more!=='boolean'||(r.has_more&&(!r.next_cursor||!/^[1-9]\d*$/.test(r.next_cursor))))
    throw contractError();
   if(r.rows.length>limit)throw contractError();
