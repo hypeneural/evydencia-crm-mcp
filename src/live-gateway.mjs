@@ -364,7 +364,7 @@ function summarizeToolResult(tool,res){
   case 'crm_campanhas_execucoes_buscar':
    return `Busca de campanhas: ${res.rows?.length??0} atividades nesta página; há mais registros: ${res.has_more?'sim':'não'}. O estado encerrado não confirma entrega integral. Abra uma atividade para verificar evidências.`;
   case 'crm_campanha_atividade_detalhe':
-   return `Atividade ${res.contact_id}: ${res.progress?.completed??'n/d'} etapas concluídas de ${res.plan?.stage_count??'total não capturado'}. Estado ${res.progress?.state??'indisponível'}; conclusão comprovada: ${res.progress?.verified_complete?'sim':'não'}. Os totais de canal são preliminares; consulte itens e callbacks.`;
+   return `Atividade ${res.contact_id}: ${res.progress?.completed??'n/d'} etapas concluídas de ${res.plan?.stage_count??'total não capturado'}. Estado ${res.progress?.state??'indisponível'}; plano de etapas encerrado: ${res.progress?.verified_complete?'sim':'não'}. Isso NÃO comprova entrega ao destinatário; consulte itens e callbacks.`;
   case 'crm_campanha_atividade_evidencias':
    return `Evidências ${res.kind} da atividade ${res.contact_id}: ${res.rows?.length??0} registros; mais páginas: ${res.has_more?'sim':'não'}. Consulte structuredContent para códigos e horários; ausência de evento só vale para o filtro e período consultados.`;
   case 'crm_campanha_voz_diagnostico':
