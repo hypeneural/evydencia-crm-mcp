@@ -36,7 +36,7 @@ async function boundedJson(response){
 export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeoutMs=7000}={}){
  const root=baseURL(baseUrl);
  if(typeof token!=='string'||token.length<1)throw Error('crm_campaign_audit_missing_token');
- if(!Number.isInteger(timeoutMs)||timeoutMs<500||timeoutMs>60000)throw Error('crm_campaign_audit_invalid_timeout');
+ if(!Number.isInteger(timeoutMs)||timeoutMs<100||timeoutMs>60000)throw Error('crm_campaign_audit_invalid_timeout');
  async function get(path,params={}){
   // Fixed prefixes and validated path parameters; no arbitrary URL or redirect.
   if(!/^\/api\/v1\/extension\/campaign-audit\/activities\/[1-9][0-9]*(?:\/evidence)?$/.test(path))
