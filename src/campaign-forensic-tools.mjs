@@ -4,7 +4,8 @@
 export const CAMPAIGN_FORENSIC_TOOL_NAMES=Object.freeze([
  'crm_campanha_atividade_detalhe',
  'crm_campanha_atividade_evidencias',
- 'crm_campanha_voz_diagnostico'
+ 'crm_campanha_voz_diagnostico',
+ 'crm_campanhas_saude_operacional'
 ]);
 
 export function registerCampaignForensicTools({reg,client,z,readAnnotations,requiredScope}){
@@ -34,6 +35,17 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
   voice_counts:z.array(z.looseObject({})),
   coverage:z.looseObject({})
  });
+
+ const OUT_HEALTH=z.looseObject({
+  contract_version:z.literal('campaign-audit.v1'),
+  source:z.literal('CRM_PASSIVE_OPERATIONAL_EVIDENCE'),
+  window_hours:z.literal(24),
+  provider_accounts:z.array(z.looseObject({})),
+  coverage:z.looseObject({provider_current_reachability:z.literal('not_probed')})
+ });
+ reg('crm_campanhas_saude_operacional','Últimos sinais de operação Z-API, SMS, e-mail e SmartVoice',
+  'Leitura passiva do CRM: por conta de integração traz última tentativa HTTP, último webhook e contagem de erros nas últimas 24h. NÃO testa conectividade ao provedor, não comprova entrega de mensagem nem estado online dos workers. Para ligação individual use crm_campanha_voz_diagnostico.',
+  z.object({}),OUT_HEALTH,async()=>client.health(),readAnnotations,access);
 
  reg('crm_campanha_atividade_detalhe','Auditoria completa de atividade de campanha',
   'Consulta o plano capturado, todas as etapas, o progresso e os totais de entrega por canal de UMA atividade. O identificador é campaign_scheduled_contacts.id, não campaign_scheduleds.id. Não comprova entrega sem callback; para logs completos use crm_campanha_atividade_evidencias. Somente leitura, sem envio, SMS, e-mail ou chamada.',
