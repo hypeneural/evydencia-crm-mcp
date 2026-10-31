@@ -39,7 +39,7 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
  if(!Number.isInteger(timeoutMs)||timeoutMs<100||timeoutMs>60000)throw Error('crm_campaign_audit_invalid_timeout');
  async function get(path,params={}){
   // Fixed prefixes and validated path parameters; no arbitrary URL or redirect.
-  if(!/^\/api\/v1\/extension\/campaign-audit\/activities\/[1-9][0-9]*(?:\/evidence)?$/.test(path))
+  if(path!=='/api/v1/extension/campaign-audit/health' && !/^\/api\/v1\/extension\/campaign-audit\/activities\/[1-9][0-9]*(?:\/evidence)?$/.test(path))
    throw Error('crm_campaign_audit_invalid_path');
   const url=new URL(root+path);
   for(const [key,value] of Object.entries(params)){
@@ -65,8 +65,8 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
    const json=await boundedJson(response);
    if(json?.schema_version!=='1.0'||!json.data||
       json.data.contract_version!=='campaign-audit.v1'||
-      typeof json.data.contact_id!=='number'||
-      !Number.isSafeInteger(json.data.contact_id)||
+      (path!=='/api/v1/extension/campaign-audit/health' &&
+       (typeof json.data.contact_id!=='number'||!Number.isSafeInteger(json.data.contact_id)))||
       typeof json.generated_at!=='string'||!Number.isFinite(Date.parse(json.generated_at)))
     throw contractError();
    return json.data;
@@ -97,5 +97,13 @@ export function createCampaignForensicClient({baseUrl,token,fetchFn=fetch,timeou
   if(r.rows.length>limit)throw contractError();
   return r;
  }
- return {activity,evidence};
+ async function health(){
+  const r=await get('/api/v1/extension/campaign-audit/health');
+  if(r.source!=='CRM_PASSIVE_OPERATIONAL_EVIDENCE'||
+     !Array.isArray(r.provider_accounts)||!r.coverage||
+     r.coverage.provider_current_reachability!=='not_probed')
+   throw contractError();
+  return r;
+ }
+ return {activity,evidence,health};
 }
