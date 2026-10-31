@@ -13,6 +13,11 @@ const create=()=>{
  const registered=new Map(),calls=[];
  const client={
   activity:async(id)=>{calls.push(['activity',id]);return activity;},
+  search:async(filters)=>({contract_version:'campaign-audit.v1',
+   source:'CRM_CANONICAL_READ_ONLY',filters,rows:[
+    {contact_id:101,scheduled_id:201,campaign_id:415,contact_status:'done',
+     scheduled_status:'completed',activity_url:'/gestao/campanhas/atividades/201/detalhes'}
+   ],has_more:false,next_cursor:null,data_quality:{phone_lookup:'not_included'}}),
   health:async()=>({contract_version:'campaign-audit.v1',source:'CRM_PASSIVE_OPERATIONAL_EVIDENCE',
    window_hours:24,provider_accounts:[],coverage:{provider_current_reachability:'not_probed'}}),
   evidence:async(id,opts)=>{
@@ -32,7 +37,7 @@ const create=()=>{
  return {registered,calls};
 };
 
-test('registers four explicitly read-only, bounded tools',()=>{
+test('registers five explicitly read-only, bounded tools',()=>{
  const r=create();
  assert.deepEqual([...r.registered.keys()],CAMPAIGN_FORENSIC_TOOL_NAMES);
  for(const t of r.registered.values()){
@@ -69,5 +74,15 @@ test('operational health is passive and never claims a live connectivity probe',
  const t=registered.get('crm_campanhas_saude_operacional');
  const r=await t.handler({});
  assert.equal(r.coverage.provider_current_reachability,'not_probed');
+ assert.equal(t.output.safeParse(r).success,true);
+});
+
+test('global search reports recorded status without claiming successful delivery',async()=>{
+ const {registered}=create();
+ const t=registered.get('crm_campanhas_execucoes_buscar');
+ const r=await t.handler({campaign_id:415,limit:20});
+ assert.equal(r.rows[0].scheduled_status,'completed');
+ assert.equal(r.data_quality.phone_lookup,'not_included');
+ assert.equal(r.has_more,false);
  assert.equal(t.output.safeParse(r).success,true);
 });
