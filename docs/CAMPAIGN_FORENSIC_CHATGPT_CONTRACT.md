@@ -1,6 +1,6 @@
 # ChatGPT MCP — Campanhas forenses / Issue #29 (preparação)
 
-**Não implantado.** Esta branch sai de `feat/p0-oauth-print-incremental-auth-issue-27`
+**Não implantado.** `EVYD_CAMPAIGN_AUDIT_TOOLS_ENABLED=1` é opt-in explícito no gateway; default desligado, e o backend tem a flag `extension.campaign_forensic.enabled=false` por padrão. Esta branch sai de `feat/p0-oauth-print-incremental-auth-issue-27`
 observada no build LIVE `9157ca6` em 31/10/2026, para preservar funcionalidades
 que ainda não estão na `main`. PR deve ser reconciliada com #28 e #24 antes de merge.
 
@@ -16,7 +16,7 @@ que ainda não estão na `main`. PR deve ser reconciliada com #28 e #24 antes de
    `audio_completed=not_verified_from_item_summary`: não confundir com disponibilidade
    atual nem comprovação de áudio completo.
 
-Todas readOnlyHint=true, destructiveHint=false, openWorldHint=false; acesso
+4. `crm_campanhas_saude_operacional({})` — últimos sinais por conta de integração: tentativas HTTP, callbacks e erros em 24h; não é prova de saúde online.\n\nTodas readOnlyHint=true, destructiveHint=false, openWorldHint=false; acesso
 `crm.read` no gateway + **ability específica** `extension:campaign-audit-read`
 validada pelo backend. São apenas dicas de ferramenta: a permissão real é do CRM.
 
