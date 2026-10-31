@@ -106,10 +106,11 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
   'Consulta, SEM ligar, o último item de voz registrado e a última tentativa HTTP de uma atividade, mais os contadores do canal. HTTP 409 sugere conflito que precisa ser reconciliado pelo comando SmartVoice; chamada atendida NÃO prova reprodução integral do áudio. Não testa conectividade atual do serviço e não dispara ligação.',
   z.object({contact_id:z.number().int().positive()}),OUT_VOICE,
   async({contact_id})=>{
-   const [activity,items,attempts]=await Promise.all([
+   const [activity,items,attempts,events]=await Promise.all([
     client.activity(contact_id),
     client.evidence(contact_id,{kind:'items',channel:'voice',limit:100}),
-    client.evidence(contact_id,{kind:'attempts',channel:'voice',limit:100})
+    client.evidence(contact_id,{kind:'attempts',channel:'voice',limit:100}),
+    client.evidence(contact_id,{kind:'events',channel:'voice',limit:100})
    ]);
    const latestItem=items.rows[0]||null,latestAttempt=attempts.rows[0]||null;
    const cleanItem=latestItem?{
@@ -128,6 +129,14 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
     error_category:latestAttempt.error_category,error_code:latestAttempt.error_code,
     started_at:latestAttempt.started_at,finished_at:latestAttempt.finished_at
    }:null;
+   // Prove playback from a correlated event of this exact item, not from
+   // answered_at/delivered_at or an unrelated call of the same contact.
+   const latestItemEvents=latestItem?events.rows.filter(event=>
+    Number(event.delivery_item_id)===Number(latestItem.id)):[];
+   const audioCompletedLatest=latestItemEvents.some(event=>
+    event.event_type==='voice_audio_completed');
+   const dtmfConfirmedLatest=latestItemEvents.some(event=>
+    event.event_type==='voice_dtmf_confirmed');
    const attemptMatchesItem=Boolean(latestItem&&latestAttempt&&
     Number(latestAttempt.delivery_item_id)===Number(latestItem.id));
    const conflict409=attemptMatchesItem&&Number(latestAttempt.http_status)===409;
@@ -154,10 +163,14 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
     latest_recorded_voice_item:cleanItem,
     latest_recorded_voice_attempt:cleanAttempt,
     voice_counts:activity.channels.filter(c=>c.channel==='voice'),
-    audio_completed:'not_verified_from_item_summary',
+    audio_completed:audioCompletedLatest?'confirmed_for_latest_item':
+      events.has_more?'not_verified_partial_event_history':'not_verified',
+    dtmf_confirmed:dtmfConfirmedLatest?'confirmed_for_latest_item':
+      events.has_more?'not_verified_partial_event_history':'not_verified',
     coverage:{plan:activity.coverage.plan,
      voice_items:items.has_more?'partial_more_pages':'page_exhausted',
      voice_attempts:attempts.has_more?'partial_more_pages':'page_exhausted',
+     voice_events:events.has_more?'partial_more_pages':'page_exhausted',
      provider_current_health:'not_queried'},
     activity_url:activity.activity_url,
     generated_at:activity.generated_at
