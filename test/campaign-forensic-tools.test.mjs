@@ -54,6 +54,8 @@ test('voice diagnostic does not imply audio completed or current provider health
  assert.equal(data.provider_health,'not_queried');
  assert.equal(data.audio_completed,'not_verified_from_item_summary');
  assert.equal(data.latest_recorded_voice_attempt.http_status,409);
+ assert.match(data.resumo_gestor,/409/);
+ assert.match(data.proxima_verificacao,/Conciliar/);
  assert.equal(data.latest_recorded_voice_item.status,'failed');
  assert.deepEqual(calls.map(x=>x[0]),['activity','evidence','evidence']);
  assert.equal(calls[1][2].channel,'voice');
