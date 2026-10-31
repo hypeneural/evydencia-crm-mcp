@@ -31,7 +31,7 @@ const create=()=>{
     channel:opts.channel??null,rows:opts.kind==='items'?[
      {id:91,provider:'smartvoice',status:'failed',outbox_status:'failed',
       error_code:'business_attempt_already_registered',provider_message_id:'synthetic-command-91'}
-    ]:[{id:100,attempt_number:1,http_status:409,error_code:'business_attempt_already_registered'}],
+    ]:[{id:100,delivery_item_id:91,attempt_number:1,http_status:409,error_code:'business_attempt_already_registered'}],
     has_more:false,next_cursor:null,coverage:'page_exhausted'};
   }
  };
@@ -59,6 +59,7 @@ test('voice diagnostic does not imply audio completed or current provider health
  assert.equal(data.provider_health,'not_queried');
  assert.equal(data.audio_completed,'not_verified_from_item_summary');
  assert.equal(data.latest_recorded_voice_attempt.http_status,409);
+ assert.equal(data.latest_attempt_matches_latest_item,true);
  assert.match(data.resumo_gestor,/409/);
  assert.match(data.proxima_verificacao,/Conciliar/);
  assert.equal(data.latest_recorded_voice_item.status,'failed');
