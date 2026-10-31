@@ -28,14 +28,27 @@ export function registerCampaignForensicTools({reg,client,z,readAnnotations,requ
   has_more:z.boolean(),
   next_cursor:z.string().nullable()
  });
+ const EVIDENCE_STATUS=z.enum([
+  'confirmed_for_latest_item','not_verified_partial_event_history','not_verified'
+ ]);
  const OUT_VOICE=z.looseObject({
   source:z.literal('CRM_CANONICAL_READ_ONLY'),
   contact_id:z.number().int().positive(),
+  resumo_gestor:z.string(),
+  proxima_verificacao:z.string(),
   provider_health:z.literal('not_queried'),
+  latest_attempt_matches_latest_item:z.boolean(),
+  last_voice_item_ordering:z.literal('delivery_item_id_desc_not_provider_event_time'),
   latest_recorded_voice_item:z.looseObject({}).nullable(),
   latest_recorded_voice_attempt:z.looseObject({}).nullable(),
+  audio_completed:EVIDENCE_STATUS,
+  dtmf_confirmed:EVIDENCE_STATUS,
   voice_counts:z.array(z.looseObject({})),
-  coverage:z.looseObject({})
+  coverage:z.looseObject({
+    voice_items:z.string(),
+    voice_attempts:z.string(),
+    voice_events:z.string()
+  })
  });
 
  const OUT_BATCH=z.looseObject({
