@@ -1,7 +1,8 @@
 const STRICT_READ_ABILITIES=new Set(['extension:bootstrap','extension:customer-read','extension:proposal-read']);
 const OPERATOR_ABILITIES=new Set([
  'extension:bootstrap','extension:customer-read','extension:proposal-read',
- 'extension:proposal-write','extension:participant-write','extension:gallery-read','extension:statistics-read'
+ 'extension:proposal-write','extension:participant-write','extension:gallery-read','extension:statistics-read',
+ 'extension:orders-ready-write'
 ]);
 export function assertReadOnlyAbilities(abilities,mode='bootstrap'){
  if(!Array.isArray(abilities)||abilities.length===0||abilities.some(x=>!STRICT_READ_ABILITIES.has(x))||

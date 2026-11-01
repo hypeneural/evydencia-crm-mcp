@@ -9,17 +9,24 @@ import {createCipheriv,createDecipheriv,createHash,createHmac,hkdfSync,randomByt
 import {OAuthError,OAuthErrorCode} from '@modelcontextprotocol/server';
 import {baseURL,crmClient} from './core.mjs';
 import {assertOperatorAbilities} from './live-abilities.mjs';
+import {gameplayReadConfig} from './gameplay-read-client.mjs';
 
 export const GATEWAY_SCOPE='crm.read';
 export const SCOPE_PROPOSAL_WRITE='crm.proposal.write';
+export const SCOPE_PRINT_WRITE='print.jobs.write';
+export const SCOPE_ORDERS_READY_WRITE='crm.orders.write';
 export const SCOPE_ZAPI_SEND='zapi.message.send';
 export const SCOPE_ZAPI_GROUP='zapi.group.manage';
-export const ALL_WRITE_SCOPES=Object.freeze([SCOPE_PROPOSAL_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]);
+export const SCOPE_AUDIENCE_EXPORT='crm.audience.export';
+export const ALL_WRITE_SCOPES=Object.freeze([SCOPE_PROPOSAL_WRITE,SCOPE_PRINT_WRITE,SCOPE_ORDERS_READY_WRITE,SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP,SCOPE_AUDIENCE_EXPORT]);
 export function supportedGatewayScopes(cfg){
  return [
   GATEWAY_SCOPE,
   ...(cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_PROPOSAL_WRITE]:[]),
-  ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[])
+  ...(cfg.printserverEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_PRINT_WRITE]:[]),
+  ...(cfg.malotesReadyEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_ORDERS_READY_WRITE]:[]),
+  ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[]),
+  ...(cfg.metaAudienceEnabled&&cfg.audienceExportEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken?[SCOPE_AUDIENCE_EXPORT]:[])
  ];
 }
 // ChatGPT uses the stable redirect when the AS advertises RFC 9207 `iss`; otherwise a per-connection callback.
@@ -52,6 +59,12 @@ export function gatewayConfig(env){
  const ops=String(env.EVYD_ALLOWED_OPERATOR_IDS||'').split(',').map(s=>s.trim()).filter(Boolean);
  if(!ops.length||ops.some(x=>!/^[1-9]\d{0,9}$/.test(x)))fail('operator_allowlist');
  const allowedOperators=new Set(ops);
+ const printOps=String(env.EVYD_PRINT_ALLOWED_OPERATOR_IDS||'').split(',').map(s=>s.trim()).filter(Boolean);
+ if(env.EVYD_PRINTSERVER_ENABLED==='1'&&(!printOps.length||printOps.some(id=>!allowedOperators.has(id))))fail('print_operator_allowlist');
+ const printAllowedOperators=new Set(printOps);
+ const audienceOps=String(env.EVYD_AUDIENCE_ALLOWED_OPERATOR_IDS||env.EVYD_AUDIENCE_ALLOWED_OPERATORS||'').split(',').map(s=>s.trim()).filter(Boolean);
+ if(audienceOps.some(id=>!allowedOperators.has(id)))fail('audience_operator_allowlist');
+ const audienceAllowedOperators=new Set(audienceOps);
  const redirects=String(env.EVYD_OAUTH_REDIRECT_URIS||DEFAULT_REDIRECTS).split(',').map(s=>s.trim()).filter(Boolean);
  for(const r of redirects){let u;try{u=new URL(r.replace(/\*$/,'x'))}catch{fail('redirect_allowlist')}if(u.protocol!=='https:'&&!isLocal(u.hostname))fail('redirect_allowlist')}
  const internalReadToken=typeof env.EVYD_INTERNAL_READ_TOKEN==='string'&&env.EVYD_INTERNAL_READ_TOKEN.trim().length>=12?env.EVYD_INTERNAL_READ_TOKEN.trim():null;
@@ -107,12 +120,33 @@ export function gatewayConfig(env){
   if(!Array.isArray(parsed)||parsed.length===0||parsed.length>20)fail('zapi_diag_instances');
   for(const item of parsed)pushDiagInstance(item,'zapi_diag_instances');
  }
+ // Capture the supplied gateway environment once. Tests and worker instances
+ // must not silently read process.env when creating per-operator tools.
+ let gameplayReadSettings=null,gameplayReadConfigError=false;
+ try{gameplayReadSettings=gameplayReadConfig(env)}
+ catch{gameplayReadConfigError=true}
  const rawObsPath=typeof env.EVYD_ZAPI_DIAG_OBS_PATH==='string'?env.EVYD_ZAPI_DIAG_OBS_PATH.trim():'';
  const zapiDiagObsPath=rawObsPath||(zapiStorePath?zapiStorePath.replace(/\.json$/i,'')+'.diag-obs.json':null);
  return Object.freeze({
   issuer:pub.origin,origin:pub.origin,hostname:pub.hostname,resource:pub.origin+'/mcp',crmBaseUrl,key,
   allowedOperators,redirects,internalReadToken,
   operatorFullCrm:env.EVYD_ENABLE_OPERATOR_FULL_CRM==='1',
+  printserverEnabled:env.EVYD_PRINTSERVER_ENABLED==='1',
+  malotesReadyEnabled:env.EVYD_MALOTES_READY_WRITE_ENABLED==='1',
+  malotesBatchEnabled:env.EVYD_MALOTES_BATCH_ENABLED==='1',
+  // Print-only batches do not authorize commercial CRM status writes.
+  malotesPrintBatchEnabled:env.EVYD_MALOTES_PRINT_BATCH_ENABLED==='1',
+  printAllowedOperators,
+  // Two deliberate switches: granting export MUST NOT implicitly turn on
+  // the master Meta Audience feature in the shared CRM production gateway.
+  metaAudienceEnabled:env.EVYD_META_AUDIENCE_ENABLED==='1',
+  audienceExportEnabled:env.EVYD_META_AUDIENCE_ENABLED==='1'&&env.EVYD_AUDIENCE_EXPORT_ENABLED==='1',
+  audienceAllowedOperators,
+  // Always use the explicit environment passed to gatewayConfig (also in tests).
+  // No implicit path in the repository for files containing customer contacts.
+  audiencePrivateCsvDir:typeof env.META_PRIVATE_CSV_DIR==='string'&&env.META_PRIVATE_CSV_DIR.trim()
+    ?env.META_PRIVATE_CSV_DIR.trim():null,
+  gameplayReadSettings,gameplayReadConfigError,
   uiAppsEnabled:env.EVYD_ENABLE_MCP_UI_APPS!=='0',
   strictReadOnlyToken:env.EVYD_STRICT_READONLY_TOKEN==='1',
   zapiEnabled,zapiMcpUrl,zapiIssuer,zapiStorePath,zapiRestStatus,
@@ -197,7 +231,11 @@ export function operatorVerifier(cfg,{fetchFn=fetch,now=()=>Date.now()}={}){
   const abilities=Object.freeze(Array.isArray(b.token?.abilities)?b.token.abilities.filter(x=>typeof x==='string'):[]);
   const canReadProposal=abilities.includes('extension:proposal-read');
   const canWriteProposal=!cfg.strictReadOnlyToken&&abilities.includes('extension:proposal-write');
-  const value=Object.freeze({operatorId:op,upstreamExpiresAt:Number.isFinite(exp)?Math.floor(exp/1000):null,abilities,canReadProposal,canWriteProposal});
+  // Independent print authorization: explicit operator allowlist, not proposal-write.
+  const canPrint=!cfg.strictReadOnlyToken&&cfg.printserverEnabled&&cfg.printAllowedOperators.has(op);
+  const canReady=!cfg.strictReadOnlyToken&&cfg.malotesReadyEnabled&&cfg.printAllowedOperators.has(op)&&abilities.includes('extension:orders-ready-write');
+  const canExportAudience=!cfg.strictReadOnlyToken&&cfg.audienceExportEnabled&&cfg.audienceAllowedOperators.has(op);
+  const value=Object.freeze({operatorId:op,upstreamExpiresAt:Number.isFinite(exp)?Math.floor(exp/1000):null,abilities,canReadProposal,canWriteProposal,canPrint,canReady,canExportAudience});
   if(cfg.operatorCacheMs>0){
    if(cache.size>=1000)cache.delete(cache.keys().next().value);
    cache.set(k,{value,until:now()+cfg.operatorCacheMs});
@@ -220,13 +258,16 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
  const upstreamGrantHash=up=>createHmac('sha256',bridgeCache).update('grant:'+String(up)).digest('base64url').slice(0,24);
  const scopesSupported=Object.freeze(supportedGatewayScopes(cfg));
  const supportedWriteScopes=scopesSupported.filter(s=>ALL_WRITE_SCOPES.includes(s));
- const eligibleScopesForOperator=v=>[
+ const eligibleScopesForOperator=(v,reqAudience=false)=>[
   GATEWAY_SCOPE,
   ...(cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canWriteProposal)?[SCOPE_PROPOSAL_WRITE]:[]),
-  ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[])
+  ...(cfg.printserverEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canPrint)?[SCOPE_PRINT_WRITE]:[]),
+  ...(cfg.malotesReadyEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canReady)?[SCOPE_ORDERS_READY_WRITE]:[]),
+  ...(cfg.zapiEnabled?[SCOPE_ZAPI_SEND,SCOPE_ZAPI_GROUP]:[]),
+  ...(reqAudience&&cfg.metaAudienceEnabled&&cfg.audienceExportEnabled&&cfg.operatorFullCrm&&!cfg.strictReadOnlyToken&&Boolean(v?.canExportAudience)?[SCOPE_AUDIENCE_EXPORT]:[])
  ];
- const computeGrantedScopes=(v,narrowWriteScopes=null)=>{
-  const eligible=eligibleScopesForOperator(v);
+ const computeGrantedScopes=(v,narrowWriteScopes=null,reqAudience=false)=>{
+  const eligible=eligibleScopesForOperator(v,reqAudience);
   if(Array.isArray(narrowWriteScopes)&&narrowWriteScopes.length>0){
    const allow=new Set([GATEWAY_SCOPE,...narrowWriteScopes]);
    return {scopes:eligible.filter(s=>allow.has(s)),narrow:true};
@@ -296,7 +337,8 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
   const rawReqScopes=String(params.get('scope')||'').split(/\s+/).filter(Boolean);
   const reqWriteScopes=rawReqScopes.filter(s=>supportedWriteScopes.includes(s));
   const sw=reqWriteScopes.length>0&&reqWriteScopes.length<supportedWriteScopes.length?reqWriteScopes:null;
-  const txn=seal.seal('evt',{cid,ru,st:state,cc, ...(sw?{sw}:{}),exp:sec()+600});
+  const reqAudience=rawReqScopes.includes(SCOPE_AUDIENCE_EXPORT);
+  const txn=seal.seal('evt',{cid,ru,st:state,cc, ...(sw?{sw}:{}), ...(reqAudience?{audReq:true}:{}), exp:sec()+600});
   return page({txn,ru});
  }
 
@@ -313,7 +355,7 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
    log({evt:'authorize_denied',reason});
    return page({txn,ru:t.ru,error:MSG[reason],status:reason==='crm_unavailable'?503:403});
   }
-  const grant=computeGrantedScopes(v,t.sw||null);
+  const grant=computeGrantedScopes(v,t.sw||null,Boolean(t.audReq));
   const code=seal.seal('evk',{cid:t.cid,ru:t.ru,cc:t.cc,op:v.operatorId,up,uexp:v.upstreamExpiresAt,sc:grant.scopes.join(' '),...(grant.narrow?{sc_narrow:true}:{}),exp:sec()+60,jti:randomBytes(12).toString('base64url')});
   log({evt:'authorize_granted',op:tag(v.operatorId)});
   return redirect(t.ru,{code,state:t.st,iss:cfg.issuer});
@@ -369,7 +411,8 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
    }
    if(v.operatorId!==r.op)return oauthErr(400,'invalid_grant');
    const narrowReq=r.sc_narrow?String(r.sc||'').split(/\s+/).filter(s=>ALL_WRITE_SCOPES.includes(s)):null;
-   const grant=computeGrantedScopes(v,narrowReq);
+   const reqAudience=String(r.sc||'').includes(SCOPE_AUDIENCE_EXPORT);
+   const grant=computeGrantedScopes(v,narrowReq,reqAudience);
    return issue({cid:c.cid,op:r.op,up:r.up,uexp:v.upstreamExpiresAt,scopeStr:grant.scopes.join(' '),narrow:grant.narrow});
   }
   return oauthErr(400,'unsupported_grant_type');
@@ -391,7 +434,8 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
     if(e?.message==='crm_unavailable')degraded=true; // CRM down: CRM calls fail closed anyway.
     else throw new OAuthError(OAuthErrorCode.InsufficientScope,e?.message==='operator_not_authorized'?'operator_not_authorized':'upstream_scope_rejected');
    }
-   const eligible=degraded?[GATEWAY_SCOPE]:eligibleScopesForOperator(v);
+   const reqAudience=sealedScopes.includes(SCOPE_AUDIENCE_EXPORT);
+   const eligible=degraded?[GATEWAY_SCOPE]:eligibleScopesForOperator(v,reqAudience);
    const effectiveScopes=a.sc_narrow?sealedScopes.filter(s=>eligible.includes(s)):eligible;
    return {
     token:tok,
@@ -407,6 +451,9 @@ export function createOAuthServer(cfg,{operators,now=()=>Date.now(),log=()=>{}})
      abilities:v?.abilities||[],
      canReadProposal:Boolean(v?.canReadProposal),
      canWriteProposal:!degraded&&Boolean(v?.canWriteProposal),
+     canPrint:!degraded&&Boolean(v?.canPrint),
+     canReady:!degraded&&Boolean(v?.canReady),
+     canExportAudience:!degraded&&Boolean(v?.canExportAudience),
      cacheSecret:bridgeCache,
      degraded
     }

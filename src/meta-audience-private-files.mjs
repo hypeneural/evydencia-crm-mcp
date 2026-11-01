@@ -1,0 +1,65 @@
+// Private Meta Audience CSV retention — only files minted by this feature.
+// Never emit filenames, full paths, file contents, phone, email or customer info.
+// Used on every export, and suitable for local/operator scheduled janitor.
+import {lstat,readdir,unlink,realpath} from 'node:fs/promises';
+import {isAbsolute,join,resolve,dirname,relative} from 'node:path';
+import {fileURLToPath} from 'node:url';
+
+const FILE_RE=/^meta-audience-natal2026-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.csv$/i;
+const HOUR_MS=60*60*1000;
+
+export async function purgeExpiredAudienceExports(directory,{nowMs=Date.now(),ttlMs=HOUR_MS,dryRun=false}={}){
+  if(typeof directory!=='string'||!isAbsolute(directory)
+      ||!Number.isFinite(nowMs)||!Number.isSafeInteger(ttlMs)
+      ||ttlMs<60_000||ttlMs>24*HOUR_MS){
+    throw Error('crm_meta_audience_invalid_retention_policy');
+  }
+  const root=await lstat(directory);
+  if(!root.isDirectory()||root.isSymbolicLink()
+      ||(process.platform!=='win32'&&(root.mode&0o077)!==0)){
+    throw Error('crm_meta_audience_private_directory_insecure');
+  }
+  if(typeof dryRun!=='boolean')throw Error('crm_meta_audience_invalid_retention_policy');
+  // The gateway export has this guard too. The janitor runs at startup,
+  // independently of export, so it must NEVER delete files in the checkout.
+  // realpath also detects intermediate directory symlink aliases.
+  const [privateRoot,repoRoot]=await Promise.all([
+    realpath(directory),
+    realpath(resolve(dirname(fileURLToPath(import.meta.url)),'..')),
+  ]);
+  const rel=relative(repoRoot,privateRoot);
+  if(rel===''||(!rel.startsWith('..')&&!isAbsolute(rel))){
+    throw Error('crm_meta_audience_private_directory_inside_checkout');
+  }
+  let inspected=0,expired=0,deleted=0;
+  const entries=await readdir(directory,{withFileTypes:true});
+  for(const entry of entries){
+    if(!FILE_RE.test(entry.name))continue;
+    inspected++;
+    // Only delete actual regular CSV files, never symlinks/directories.
+    const child=join(directory,entry.name);
+    const st=await lstat(child).catch(()=>null);
+    if(!st||!st.isFile()||st.isSymbolicLink())continue;
+    if(nowMs-st.mtimeMs<ttlMs)continue;
+    expired++;
+    if(!dryRun){
+      try{await unlink(child);deleted++;}
+      catch(err){
+        // A periodic sweep and a pre-export sweep may race safely.
+        // The other worker already removed this exact owned file.
+        if(err?.code==='ENOENT')continue;
+        if(process.platform==='win32'&&(err?.code==='EPERM'||err?.code==='EBUSY')){
+          let gone=false;
+          for(let i=0;i<5;i++){
+            const st=await lstat(child).catch(()=>null);
+            if(!st){gone=true;break;}
+            await new Promise(r=>setTimeout(r,10));
+          }
+          if(gone)continue;
+        }
+        throw err;
+      }
+    }
+  }
+  return {inspected,expired,deleted,dry_run:dryRun,contains_personal_data:false};
+}
