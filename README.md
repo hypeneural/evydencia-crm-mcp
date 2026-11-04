@@ -57,7 +57,10 @@ O conector expõe até **30 ferramentas ativas** divididas em 4 domínios funcio
 | Ferramenta | Escopo OAuth | Acesso | Descrição |
 |---|---|---|---|
 | `crm_previa_proposta_natal` | `crm.read` | Full CRM | Simulação de mensagem e cálculo de elegibilidade para proposta de Natal 2026. |
-| `crm_enviar_proposta_natal` | `crm.proposal.write` | Full CRM | Agendamento oficial de proposta no CRM. **Exige `confirmado_pelo_operador: true` e `extension:proposal-write`**. |
+| `crm_enviar_proposta_natal` | `crm.proposal.write` | Full CRM | Pedido explícito com prévia interna e agendamento único. **Exige `confirmado_pelo_operador: true` e `extension:proposal-write`**; `allow_initial_only` exige autorização específica. |
+| `crm_consultar_solicitacao_proposta_natal` | `crm.read` | Full CRM | Consulta somente leitura por `request_id`; resultado inconclusivo não autoriza repetir o envio. |
+
+Contrato e instalação do journal privado: [Propostas P0 #24](docs/PROPOSAL_SCOPE_P0_20261030.md).
 
 ### 4. Integração Oficial Z-API WhatsApp (12 ferramentas)
 | Ferramenta | Escopo OAuth | Acesso | Descrição |
