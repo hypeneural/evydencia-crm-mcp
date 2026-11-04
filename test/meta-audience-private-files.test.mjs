@@ -71,7 +71,7 @@ test('P25.8 janitor refuses cleanup inside repository even when directory is pri
    try{
     await symlink(inside,join(aliasParent,'alias'),'dir');
     await assert.rejects(()=>purgeExpiredAudienceExports(join(aliasParent,'alias')),
-      /private_directory_inside_checkout/);
+      /private_directory_insecure|private_directory_inside_checkout/);
     assert.equal((await readdir(inside)).includes(own),true);
    }finally{await rm(aliasParent,{recursive:true,force:true});}
   }

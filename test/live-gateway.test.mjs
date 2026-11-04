@@ -4,6 +4,9 @@ import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {createHash,randomBytes} from 'node:crypto';
+import {mkdtemp,rm,chmod} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client';
 import {createGateway,LIVE_TOOL_NAMES,DIRECT_CRM_TOOL_NAMES,FORENSIC_CRM_TOOL_NAMES,PROPOSAL_CRM_TOOL_NAMES,UI_CRM_TOOL_NAMES} from '../src/live-gateway.mjs';
 import {gatewayConfig,createSealer,redirectAllowed} from '../src/oauth-gateway.mjs';
@@ -20,7 +23,11 @@ const OPS={
  'fake-op7-ready-000008':{id:7,ab:[...R,'extension:proposal-read','extension:orders-ready-write']}
 };
 const INTERNAL_TOK='fake-internal-crm-read-token-000001';
-const revoked=new Set(),crmLog=[],logs=[],secrets=[...Object.keys(OPS),INTERNAL_TOK];
+const SLOW_PROPOSAL_PHONE='11999990625';
+const revoked=new Set(),crmLog=[],logs=[],secrets=[...Object.keys(OPS),INTERNAL_TOK],proposalReceipts=new Map();
+const journalFolders=[];
+async function proposalJournalFolder(){const folder=await mkdtemp(join(tmpdir(),'evy-gateway-proposals-'));await chmod(folder,0o700);journalFolders.push(folder);return folder}
+after(async()=>{for(const folder of journalFolders)await rm(folder,{recursive:true,force:true})});
 const KEY=randomBytes(32).toString('base64');
 const REDIR='https://chatgpt.com/connector_platform_oauth_redirect';
 // The SDK bearer gate also checks expiresAt against the real clock, so start from real time.
@@ -46,15 +53,23 @@ before(async()=>{
   if(req.method==='POST'&&u.pathname.startsWith('/api/v1/extension/proposals/')){
    const op=OPS[tok];
    if(!op||revoked.has(tok))return send(401,JSON.stringify({message:'Unauthenticated.'}));
-   let raw='';req.on('data',c=>raw+=c);req.on('end',()=>{
+   let raw='';req.on('data',c=>raw+=c);req.on('end',async()=>{
     const body=JSON.parse(raw||'{}');
+    if(body.phone===SLOW_PROPOSAL_PHONE)await new Promise(resolve=>setTimeout(resolve,650));
     if(u.pathname==='/api/v1/extension/proposals/preview')
-     return send(200,env1({ready:true,variant:body.name?'with_name':'without_name',recipient:{name:body.name||null,has_name:Boolean(body.name)},campaign:{id:415,type:'christmas_proposal'},message:body.name?`Olá, ${body.name}! Proposta Natal 2026`:'Olá! Proposta Natal 2026'}));
-    if(u.pathname==='/api/v1/extension/proposals/schedule')
-     return send(200,env1({scheduled:true,proposal:{id:901,uuid:'prop-uuid-901',status:'waiting',variant:body.name?'with_name':'without_name',campaign_id:415,send_after:'2026-10-25T13:20:00-03:00',cancel_until:'2026-10-25T13:20:00-03:00'},customer:{exists:true}}));
+     return send(200,env1({ready:true,delivery_scope:'full_cadence',variant:body.name?'with_name':'without_name',recipient:{name:body.name||null,has_name:Boolean(body.name)},campaign:{id:415,type:'christmas_proposal'},message:body.name?`Olá, ${body.name}! Proposta Natal 2026`:'Olá! Proposta Natal 2026'}));
+    if(u.pathname==='/api/v1/extension/proposals/schedule'){
+     const receipt={status:'scheduled',dispatch_uuid:'11111111-2222-4333-8444-555555555555',delivery_scope:'full_cadence',scheduled_at:'2026-10-25T16:20:00Z',replay:false};
+     proposalReceipts.set(tok+':'+body.request_id,{...receipt,proposal_request_id:body.request_id,resolution:'confirmed'});
+     return send(201,env1(receipt));
+    }
     send(404,'{}');
    });
    return;
+  }
+  if(req.method==='GET'&&u.pathname.startsWith('/api/v1/extension/proposals/requests/')){
+   const id=u.pathname.split('/').at(-1);
+   return send(200,env1(proposalReceipts.get(tok+':'+id)??{proposal_request_id:id,resolution:'inconclusive',delivery_scope:'unknown'}));
   }
   if(req.method==='POST'&&u.pathname==='/api/v1/extension/orders/6002/ready-for-pickup'){
    if(!OPS[tok]?.ab?.includes('extension:orders-ready-write'))return send(403,'{}');
@@ -114,12 +129,12 @@ before(async()=>{
 });
 after(()=>new Promise(r=>crm.close(r)));
 
-async function connect(g,crmToken,{exchange=true}={}){
+async function connect(g,crmToken,{exchange=true,scope='crm.read'}={}){
  const reg=await call(g,'/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({redirect_uris:[REDIR],token_endpoint_auth_method:'none',client_name:'ChatGPT'})});
  assert.equal(reg.status,201);
  const {client_id}=await reg.json();
  const verifier=randomBytes(32).toString('base64url'),challenge=createHash('sha256').update(verifier).digest('base64url');
- const q=new URLSearchParams({response_type:'code',client_id,redirect_uri:REDIR,code_challenge:challenge,code_challenge_method:'S256',state:'st-123',resource:'http://localhost/mcp',scope:'crm.read'});
+ const q=new URLSearchParams({response_type:'code',client_id,redirect_uri:REDIR,code_challenge:challenge,code_challenge_method:'S256',state:'st-123',resource:'http://localhost/mcp',...(scope?{scope}:{})});
  const pg=await call(g,'/authorize?'+q);
  assert.equal(pg.status,200);
  const txn=/name="txn" value="([^"]+)"/.exec(await pg.text())[1];
@@ -350,8 +365,27 @@ test('no write call ever reached the CRM and logs carry no secrets or PII',()=>{
  assert.ok(logs.some(l=>l.evt==='tool'&&l.ok===true&&typeof l.op==='string'));
 });
 
+test('slow proposal preview and schedule use their own deadline and submit once',async()=>{
+ const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',EVYD_PROPOSAL_JOURNAL_DIR:await proposalJournalFolder()});
+ const {tokens}=await connect(g,'fake-op7-write-00003',{scope:'crm.read crm.proposal.write'});
+ const client=await mcp(g,tokens.access_token);
+ const requestId='bbaa4455-4321-4234-8765-123456789abc';
+ try{
+  crmLog.length=0;
+  const sent=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{
+   telefone:SLOW_PROPOSAL_PHONE,confirmado_pelo_operador:true,request_id:requestId
+  }});
+  assert.equal(sent.structuredContent?.resolution,'confirmed');
+  assert.equal(sent.structuredContent?.request_id,requestId);
+  assert.equal(crmLog.filter(x=>x.path==='/api/v1/extension/proposals/preview').length,1);
+  const posts=crmLog.filter(x=>x.path==='/api/v1/extension/proposals/schedule');
+  assert.equal(posts.length,1);
+  assert.equal(posts[0].idempotencyKey,requestId);
+ }finally{await client.close()}
+});
+
 test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispatch (requiring explicit confirmation), forensic customer search, full participants and CRM URLs',async()=>{
- const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1'});
+ const g=gw({EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,EVYD_ENABLE_OPERATOR_FULL_CRM:'1',EVYD_PROPOSAL_JOURNAL_DIR:await proposalJournalFolder()});
  const hz=await call(g,'/healthz');
  assert.equal(hz.status,200);
  const hzJson=await hz.json();
@@ -398,8 +432,15 @@ test('EVYD_ENABLE_OPERATOR_FULL_CRM=1 exposes Natal 2026 proposal preview/dispat
   const sent=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:true,request_id:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'}});
   assert.equal(sent.isError,undefined);
   assert.equal(sent.structuredContent.scheduled,true);
-  assert.equal(sent.structuredContent.dispatch_uuid,'prop-uuid-901');
+  assert.equal(sent.structuredContent.dispatch_uuid,'11111111-2222-4333-8444-555555555555');
+  assert.equal(sent.structuredContent.delivery_scope,'full_cadence');
+  assert.equal(sent.structuredContent.resolution,'confirmed');
   assert.equal(crmLog.find(x=>x.path==='/api/v1/extension/proposals/schedule')?.idempotencyKey,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+  const queried=await client.callTool({name:'crm_consultar_solicitacao_proposta_natal',arguments:{request_id:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'}});
+  assert.equal(queried.structuredContent.resolution,'confirmed');
+  const replay=await client.callTool({name:'crm_enviar_proposta_natal',arguments:{telefone:'(48) 99924-4309',nome:'Luciano',confirmado_pelo_operador:true}});
+  assert.equal(replay.structuredContent.request_id,sent.structuredContent.request_id);
+  assert.equal(crmLog.filter(x=>x.path==='/api/v1/extension/proposals/schedule').length,1);
  }finally{await client.close()}
 });
 
@@ -552,7 +593,7 @@ test('PrintServer synthetic job status is readable with print scope, never needs
   assert.equal(capabilities.structuredContent.oauth_authorization.print_tool_enabled,true);
   assert.ok(capabilities.structuredContent.oauth_authorization.granted_scopes.includes('print.jobs.write'));
   assert.equal(capabilities.structuredContent.legacy_v012_tools_preserved_count,
-   capabilities.structuredContent.tools.filter(t=>t.registered&&!t.tool.startsWith('crm_renderizar_card_visual')&&!t.tool.startsWith('crm_previa_malotes_retirada')&&!t.tool.startsWith('crm_solicitar_impressao_etiqueta')&&!t.tool.startsWith('crm_consultar_impressao_etiqueta')).length);
+   capabilities.structuredContent.tools.filter(t=>t.registered&&!t.tool.startsWith('crm_renderizar_card_visual')&&!t.tool.startsWith('crm_previa_malotes_retirada')&&!t.tool.startsWith('crm_solicitar_impressao_etiqueta')&&!t.tool.startsWith('crm_consultar_impressao_etiqueta')&&t.tool!=='crm_consultar_solicitacao_proposta_natal').length);
   const r=await client.callTool({name:'crm_consultar_impressao_etiqueta',arguments:{order_id:999999,job_id:TEST_JOB}});
   assert.equal(r.isError,undefined);
   assert.equal(r.structuredContent.print_state,'spooled');
@@ -828,6 +869,138 @@ test('crm_propostas_natal_consultar_lote is registered with readOnlyHint, reject
   assert.equal(errEmpty.isError,true);
  }finally{
   await client.close();
+  await g.close();
+ }
+});
+
+test('Issue #27 P0 — incremental OAuth authorization for print.jobs.write, scope challenges and narrow refresh preservation',async()=>{
+ const printed=[],renders=[];
+ const bridgeFetch=async(url,opt)=>{
+  const read=brokerReadFixture(url);if(read)return read;
+  if(String(url)==='https://print.example.test/v1/jobs'){
+   printed.push(JSON.parse(opt.body));
+   return new Response(JSON.stringify({replay:false,job:{job_id:'d83ed2db-f4f1-4a55-b632-61e246a22b38',order_id:6001,
+    render_source:'crm_canonical',state:'queued'}}),{status:201,headers:{'Content-Type':'application/json'}});
+  }
+  return fetch(url,opt);
+ };
+ const g=createGateway(env({
+  EVYD_INTERNAL_READ_TOKEN:INTERNAL_TOK,
+  EVYD_ENABLE_OPERATOR_FULL_CRM:'1',
+  EVYD_PRINTSERVER_ENABLED:'1',
+  EVYD_PRINT_ALLOWED_OPERATOR_IDS:'7',
+  EVYD_PRINTSERVER_URL:'https://print.example.test',
+  EVYD_PRINTSERVER_MCP_TOKEN:'x'.repeat(48),
+  EVYD_CRM_LABEL_RENDER_ENABLED:'1',
+  EVYD_META_AUDIENCE_ENABLED:'1',
+  EVYD_AUDIENCE_EXPORT_ENABLED:'1',
+  EVYD_AUDIENCE_ALLOWED_OPERATOR_IDS:'7'
+ }),{
+  fetchFn:bridgeFetch,
+  labelRenderer:async options=>{
+   renders.push(options);
+   return {label_source:'crm_canonical',label_png_base64:'fake-test-only-png',label_png_sha256:'a'.repeat(64)};
+  },
+  log:e=>logs.push(e),
+  now
+ });
+
+ try{
+  // 1. Scenario 1: Operator 7 connects with crm.read + crm.audience.export (missing print.jobs.write).
+  const connNarrow=await connect(g,'fake-op7-read-000001',{scope:'crm.read crm.audience.export'});
+  assert.ok(connNarrow.tokens.scope.split(/\s+/).includes('crm.read'));
+  assert.ok(connNarrow.tokens.scope.split(/\s+/).includes('crm.audience.export'));
+  assert.ok(!connNarrow.tokens.scope.split(/\s+/).includes('print.jobs.write'),'print.jobs.write is not granted initially');
+
+  const clientNarrow=await mcp(g,connNarrow.tokens.access_token);
+  try{
+   // Verify capacities report reflects narrow grant
+   const caps=await clientNarrow.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(caps.structuredContent.oauth_authorization.print_scope_granted,false);
+   assert.equal(caps.structuredContent.oauth_authorization.print_tool_enabled,false);
+
+   // Calling print tool must trigger HTTP 403 scope challenge (MCP client throws InsufficientScopeError)
+   await assert.rejects(async()=>clientNarrow.callTool({
+    name:'crm_solicitar_impressao_etiqueta',
+    arguments:{order_id:6001,confirmado_pelo_operador:true}
+   }),err=>/403|insufficient.scope|print.jobs.write/i.test(String(err)),'must trigger OAuth scope challenge');
+
+   // Direct HTTP call must return HTTP 403 with WWW-Authenticate header
+   const rawRes=await call(g,'/mcp',{
+    method:'POST',
+    headers:{'content-type':'application/json',accept:'application/json, text/event-stream',authorization:'Bearer '+connNarrow.tokens.access_token},
+    body:JSON.stringify({jsonrpc:'2.0',id:101,method:'tools/call',params:{name:'crm_solicitar_impressao_etiqueta',arguments:{order_id:6001,confirmado_pelo_operador:true}}})
+   });
+   assert.equal(rawRes.status,403);
+   const authHdr=rawRes.headers.get('www-authenticate')||'';
+   assert.match(authHdr,/Bearer error="insufficient_scope"/);
+   assert.match(authHdr,/scope="[^"]*print\.jobs\.write[^"]*"/);
+   assert.match(authHdr,/resource_metadata=/);
+
+   // Zero calls reached broker and zero renders
+   assert.equal(printed.length,0);
+   assert.equal(renders.length,0);
+  }finally{
+   await clientNarrow.close();
+  }
+
+  // 2. Scenario 2: Operator 7 connects with crm.read + print.jobs.write (incremental authorization approved).
+  const connPrint=await connect(g,'fake-op7-read-000001',{scope:'crm.read print.jobs.write'});
+  assert.ok(connPrint.tokens.scope.split(/\s+/).includes('print.jobs.write'));
+  assert.ok(!connPrint.tokens.scope.split(/\s+/).includes('crm.orders.write'),'never grants unrequested crm.orders.write');
+
+  const clientPrint=await mcp(g,connPrint.tokens.access_token);
+  try{
+   const caps=await clientPrint.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(caps.structuredContent.oauth_authorization.print_scope_granted,true);
+   assert.equal(caps.structuredContent.oauth_authorization.print_tool_enabled,true);
+
+   // Execution succeeds cleanly with zero physical prints
+   const resPrint=await clientPrint.callTool({
+    name:'crm_solicitar_impressao_etiqueta',
+    arguments:{order_id:6001,confirmado_pelo_operador:true}
+   });
+   assert.equal(resPrint.isError,undefined,JSON.stringify(resPrint.content));
+   assert.equal(resPrint.structuredContent.render_source,'crm_canonical');
+   assert.equal(resPrint.structuredContent.print_state,'queued');
+   assert.equal(printed.length,1);
+   assert.equal(renders.length,1);
+  }finally{
+   await clientPrint.close();
+  }
+
+  // 3. Scenario 3: Operator 9 (unlisted in print allowed operators) requests print.jobs.write.
+  const connOp9=await connect(g,'fake-op9-read-000002',{scope:'crm.read print.jobs.write'});
+  assert.ok(!connOp9.tokens.scope.split(/\s+/).includes('print.jobs.write'),'unlisted operator is never granted print scope');
+
+  const clientOp9=await mcp(g,connOp9.tokens.access_token);
+  try{
+   const {tools}=await clientOp9.listTools();
+   assert.ok(!tools.some(t=>t.name==='crm_solicitar_impressao_etiqueta'),'unauthorized operator cannot see print tool');
+  }finally{
+   await clientOp9.close();
+  }
+
+  // 4. Scenario 4: Refresh token preserves explicitly granted narrow print scope without privilege escalation.
+  const refreshRes=await call(g,'/token',form({
+   grant_type:'refresh_token',
+   refresh_token:connPrint.tokens.refresh_token,
+   client_id:connPrint.client_id
+  }));
+  assert.equal(refreshRes.status,200);
+  const refreshed=await refreshRes.json();
+  assert.ok(refreshed.scope.split(/\s+/).includes('print.jobs.write'));
+  assert.ok(!refreshed.scope.split(/\s+/).includes('crm.orders.write'));
+  assert.ok(!refreshed.scope.split(/\s+/).includes('crm.audience.export'));
+
+  const clientRefreshed=await mcp(g,refreshed.access_token);
+  try{
+   const capsRefreshed=await clientRefreshed.callTool({name:'crm_capacidades',arguments:{}});
+   assert.equal(capsRefreshed.structuredContent.oauth_authorization.print_scope_granted,true);
+  }finally{
+   await clientRefreshed.close();
+  }
+ }finally{
   await g.close();
  }
 });
